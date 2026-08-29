@@ -1,0 +1,6 @@
+{
+  "name": "ct-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs", "ct-runtime": "node bin/ct-runtime.mjs" }
+}
