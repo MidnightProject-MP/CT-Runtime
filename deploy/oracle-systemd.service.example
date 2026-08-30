@@ -1,0 +1,15 @@
+[Unit]
+Description=CT-Runtime one-shot scheduler
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ctruntime
+SupplementaryGroups=docker
+EnvironmentFile=/etc/ct-runtime/runtime.env
+ExecStart=/usr/bin/docker run --rm --pull=always --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777,size=128m --env-file /etc/ct-runtime/runtime.env ghcr.io/REPOSITORY/ct-runtime@sha256:IMAGE scheduler --model MODEL --agent AGENT --task TASK
+TimeoutStartSec=3700
+Restart=no
+RemainAfterExit=no

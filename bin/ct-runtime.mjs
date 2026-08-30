@@ -1,10 +1,16 @@
 #!/usr/bin/env node
-import { Store, invoke, observePending, recover, runScheduler, validateNextWake, validateWakeReason } from '../lib/runtime.mjs';
+import { invoke, observePending, recover, runScheduler, validateNextWake, validateWakeReason } from '../lib/runtime.mjs';
+import { createStore } from '../lib/stores.mjs';
+import { loadConfig } from '../lib/config.mjs';
+import { migrate } from '../lib/migration.mjs';
+import { doctor, reconstruct } from '../lib/startup.mjs';
+import { exportObserver, observePostgres } from '../lib/production-observer.mjs';
 
 const args = process.argv.slice(2);
 const command = args[0];
 const values = (name) => args.flatMap((v, i) => v === name ? [args[i + 1]] : []).filter((v) => v !== undefined);
 const opt = (name, fallback) => values(name)[0] ?? fallback;
+const defined = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 const help = () => console.log(`CT-Runtime: filesystem-backed Celestan execution mechanics
 
 Commands:
@@ -22,7 +28,18 @@ only its validated requested_next_wake. State is retained in the selected store.
 if (!command || command === '--help') { help(); process.exit(command ? 0 : 2); }
 
 try {
-  const store = new Store(opt('--store'));
+  if (command === 'migrate') { const connectionString = opt('--database-url', process.env.CT_RUNTIME_DATABASE_URL); console.log(JSON.stringify(await migrate({ connectionString }))); process.exit(0); }
+  const configured = createStore({ root: opt('--store') });
+  const store = configured.store;
+  if (command === 'doctor') { console.log(JSON.stringify(await doctor({ store, config: configured.config }))); process.exit(0); }
+  if (command === 'reconstruct') { console.log(JSON.stringify(await reconstruct({ store, config: configured.config }))); process.exit(0); }
+  if (command === 'export-observer') { process.stdout.write(configured.observerStore ? await exportObserver(configured.observerStore) : '[]\n'); process.exit(0); }
+  if (command === 'observe-pending' && configured.observerStore) {
+    const reflectionArgs = process.env.CT_RUNTIME_OBSERVER_ARGS ? JSON.parse(process.env.CT_RUNTIME_OBSERVER_ARGS) : [];
+    const reflection = process.env.CT_RUNTIME_OBSERVER_REFLECTION === 'opencode' ? { command: process.env.CT_RUNTIME_OBSERVER_COMMAND || 'opencode', args: reflectionArgs, model: process.env.CT_RUNTIME_OBSERVER_MODEL, agent: process.env.CT_RUNTIME_OBSERVER_AGENT, timeoutMs: Number(process.env.CT_RUNTIME_OBSERVER_TIMEOUT_MS || 300000) } : undefined;
+    console.log(JSON.stringify(await observePostgres({ store, observerStore: configured.observerStore, semanticResultFile: opt('--semantic-result'), reflection })));
+    process.exit(0);
+  }
   if (command === 'run') {
     const requestedId = opt('--id');
     const existing = requestedId ? await store.manifest(requestedId).catch(() => null) : null;
@@ -31,7 +48,7 @@ try {
     if (result.created || ['requeued', 'manifested', 'retrying'].includes(result.manifest.execution.status)) { const run = await invoke({ store, executionId: result.manifest.execution.id, command: opt('--opencode', process.env.OPENCODE_BIN || 'opencode'), commandArgs: values('--opencode-arg'), model: opt('--model', result.manifest.execution.model), agent: opt('--agent', result.manifest.execution.agent), task: opt('--task', result.manifest.execution.task), cwd: opt('--cwd', result.manifest.execution.cwd), env: Object.fromEntries(values('--env').map((v) => v.split('='))), secretNames: values('--secret-name'), timeoutMs: Number(opt('--timeout', '3600000')), dryRun: args.includes('--dry-run'), resultFile: opt('--result-file'), maxRetries: Number(opt('--max-retries', '2')) }); console.log(JSON.stringify(run)); if (run.status !== 'success') process.exitCode = 1; }
   } else if (command === 'wake') { const reason = validateWakeReason(opt('--reason')); const wake = { time: new Date().toISOString(), reason, priority: opt('--priority', 'normal'), project: opt('--project') }; const scheduled = await store.schedule(wake, { command: opt('--opencode', process.env.OPENCODE_BIN || 'opencode'), model: opt('--model'), agent: opt('--agent'), task: opt('--task'), cwd: opt('--cwd'), observerPath: opt('--observer') }); console.log(JSON.stringify({ status: 'enqueued', ...scheduled }));
   } else if (command === 'schedule') { console.log(JSON.stringify(await store.schedule({ time: opt('--time'), reason: opt('--reason'), priority: opt('--priority', 'normal'), project: opt('--project') }, { command: opt('--opencode'), model: opt('--model'), agent: opt('--agent'), task: opt('--task'), cwd: opt('--cwd'), observerPath: opt('--observer') })));
-  } else if (command === 'scheduler') { const scheduler = await runScheduler({ store, invokeOptions: { command: opt('--opencode', process.env.OPENCODE_BIN || 'opencode'), model: opt('--model'), agent: opt('--agent'), task: opt('--task'), cwd: opt('--cwd'), observerPath: opt('--observer'), resultFile: opt('--result-file'), dryRun: args.includes('--dry-run'), maxRetries: Number(opt('--max-retries', '2')) } }); console.log(JSON.stringify(scheduler)); if (!scheduler.success) process.exitCode = 1;
+  } else if (command === 'scheduler') { const scheduler = await runScheduler({ store, invokeOptions: defined({ command: opt('--opencode', process.env.OPENCODE_BIN), model: opt('--model'), agent: opt('--agent'), task: opt('--task'), cwd: opt('--cwd'), observerPath: opt('--observer'), resultFile: opt('--result-file'), dryRun: args.includes('--dry-run') ? true : undefined, maxRetries: values('--max-retries').length ? Number(opt('--max-retries')) : undefined }) }); console.log(JSON.stringify(scheduler)); if (!scheduler.success) process.exitCode = 1;
   } else if (command === 'recover') console.log(JSON.stringify(await recover({ store, staleMs: Number(opt('--stale-ms', '300000')) })));
   else if (command === 'status') console.log(JSON.stringify({ manifests: await store.manifestsAll() }));
   else if (command === 'inspect') console.log(JSON.stringify(await store.manifest(opt('--id')), null, 2));

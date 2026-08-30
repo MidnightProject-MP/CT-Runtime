@@ -1,0 +1,11 @@
+**
+!package.json
+!package-lock.json
+!lib/
+!lib/**
+!bin/
+!bin/**
+!migrations/
+!migrations/**
+!container/
+!container/entrypoint.sh

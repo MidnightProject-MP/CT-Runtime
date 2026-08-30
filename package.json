@@ -2,5 +2,22 @@
   "name": "ct-runtime",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test test/*.test.mjs", "ct-runtime": "node bin/ct-runtime.mjs" }
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:contracts": "node --test test/container-contract.test.mjs",
+    "test:postgres": "node --test test/postgres.integration.test.mjs test/observer.integration.test.mjs",
+    "test:s3": "node --test test/s3.integration.test.mjs",
+    "ct-runtime": "node bin/ct-runtime.mjs",
+    "migrate": "node bin/ct-runtime.mjs migrate",
+    "doctor": "node bin/ct-runtime.mjs doctor",
+    "reconstruct": "node bin/ct-runtime.mjs reconstruct",
+    "export-observer": "node bin/ct-runtime.mjs export-observer"
+  },
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1121.0",
+    "pg": "8.16.3"
+  }
 }

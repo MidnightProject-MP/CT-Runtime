@@ -1,0 +1,235 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.14.0'
+  POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
+  MINIO_IMAGE: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  MC_IMAGE: minio/mc:RELEASE.2025-04-16T18-13-26Z
+  FOUNDRY_COMMIT: ${{ vars.FOUNDRY_COMMIT || '213143b78486ffd38f3ed01bb9b008ab4fcf97c7' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.9-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: ctruntime
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ctruntime"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Fetch pinned Foundry Observer contract for integration tests
+        run: |
+          mkdir -p ../CT-Foundry/capabilities/observer
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/MidnightProject-MP/CT-Foundry/$FOUNDRY_COMMIT/capabilities/observer/observer.mjs" --output ../CT-Foundry/capabilities/observer/observer.mjs
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/MidnightProject-MP/CT-Foundry/$FOUNDRY_COMMIT/capabilities/observer/schema.mjs" --output ../CT-Foundry/capabilities/observer/schema.mjs
+      - name: Start healthy MinIO service
+        run: |
+          docker run --detach --name minio --publish 9000:9000 \
+            --env MINIO_ROOT_USER=test --env MINIO_ROOT_PASSWORD=testtest \
+            "$MINIO_IMAGE" server /data
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 2
+          done
+          docker logs minio
+          exit 1
+      - name: Create integration bucket
+        run: docker run --rm --network host "$MC_IMAGE" sh -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
+      - name: Run all local tests
+        run: npm test
+      - name: Apply migrations explicitly
+        run: npm run migrate -- --database-url "$POSTGRES_URL"
+      - name: Run PostgreSQL integration
+        run: npm run test:postgres
+        env:
+          TEST_DATABASE_URL: ${{ env.POSTGRES_URL }}
+      - name: Run S3 integration
+        run: npm run test:s3
+        env:
+          TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          TEST_S3_REGION: us-east-1
+          TEST_S3_BUCKET: ct-runtime
+          TEST_S3_ACCESS_KEY_ID: test
+          TEST_S3_SECRET_ACCESS_KEY: testtest
+          TEST_S3_PATH_STYLE: 'true'
+      - name: Production doctor and reconstruction
+        run: |
+          npm run doctor
+          npm run reconstruct
+        env:
+          CT_RUNTIME_MODE: production
+          CT_RUNTIME_DATABASE_URL: ${{ env.POSTGRES_URL }}
+          CT_RUNTIME_S3_ENDPOINT: http://127.0.0.1:9000
+          CT_RUNTIME_S3_REGION: us-east-1
+          CT_RUNTIME_S3_BUCKET: ct-runtime
+          CT_RUNTIME_S3_PATH_STYLE: 'true'
+          CT_RUNTIME_S3_ACCESS_KEY_ID: test
+          CT_RUNTIME_S3_SECRET_ACCESS_KEY: testtest
+          CT_RUNTIME_DEPLOYMENT_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          CT_RUNTIME_PROVIDER: github-actions
+          CT_RUNTIME_CLASS: integration
+          CT_RUNTIME_REGION: local
+          CT_RUNTIME_IMAGE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          CT_RUNTIME_CONFIG_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          CT_RUNTIME_GIT_REPOSITORY: ${{ github.repository }}
+          CT_RUNTIME_GIT_COMMIT: ${{ github.sha }}
+      - run: npm audit --audit-level=high
+
+  container:
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.9-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: ctruntime
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ctruntime"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start healthy MinIO service
+        run: |
+          docker run --detach --name minio --publish 9000:9000 \
+            --env MINIO_ROOT_USER=test --env MINIO_ROOT_PASSWORD=testtest \
+            "$MINIO_IMAGE" server /data
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 2
+          done
+          docker logs minio
+          exit 1
+      - name: Create integration bucket
+        run: docker run --rm --network host "$MC_IMAGE" sh -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build amd64 image for execution
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: ct-runtime:test
+          build-args: FOUNDRY_COMMIT=${{ env.FOUNDRY_COMMIT }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,scope=amd64,mode=max
+      - name: Verify entrypoint, OpenCode, UID, layout, and immutability
+        run: |
+          docker run --rm --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m ct-runtime:test --help
+          docker run --rm --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --entrypoint opencode ct-runtime:test --version
+          test "$(docker run --rm --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --entrypoint /usr/bin/id ct-runtime:test -u)" = 10001
+          docker run --rm --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --entrypoint /bin/sh ct-runtime:test -c '
+            test -d /app/lib && test -d /app/bin && test -d /app/migrations &&
+            test -x /usr/local/bin/opencode && test ! -w /app && ! touch /app/forbidden &&
+            test -d /usr/local/lib/node_modules/opencode-linux-x64 &&
+            test ! -e /app/STATE.md && test ! -e /app/README.md && test ! -e /app/runtime-store &&
+            test ! -e /app/ct-foundry/README.md && test ! -e /app/ct-foundry/STATE.md &&
+            test ! -e /app/ct-foundry/test && test ! -e /app/ct-foundry/CELESTAN.md && test ! -e /app/ct-foundry/AGENTS.md &&
+            test "$(find /app/ct-foundry -type f | wc -l)" -eq 2'
+          test "$(docker image inspect ct-runtime:test --format '{{.Config.User}}')" = ctruntime
+          test "$(docker image inspect ct-runtime:test --format '{{json .Config.Entrypoint}}')" = '["/app/container/entrypoint.sh"]'
+          ! docker image inspect ct-runtime:test --format '{{json .Config.Env}}' | grep -E 'DATABASE_URL|ACCESS_KEY|SECRET|TOKEN|PASSWORD'
+      - name: Verify handoff under a read-only root
+        run: |
+          docker run --rm --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m ct-runtime:test \
+            run --store /tmp/ct-runtime/state --project container --model test/model --agent test --task handoff \
+            --opencode /usr/local/bin/node --opencode-arg -e \
+            --opencode-arg 'require("node:fs").writeFileSync(process.env.CT_RUNTIME_RESULT_FILE, JSON.stringify({status:"complete",summary:"ok",requested_next_wake:null}))'
+      - name: Apply migrations through the real image entrypoint
+        run: docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m ct-runtime:test migrate --database-url "$POSTGRES_URL"
+      - name: Write non-secret container integration environment
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/ct-runtime.env" <<EOF
+          CT_RUNTIME_MODE=production
+          CT_RUNTIME_DATABASE_URL=$POSTGRES_URL
+          CT_RUNTIME_S3_ENDPOINT=http://127.0.0.1:9000
+          CT_RUNTIME_S3_REGION=us-east-1
+          CT_RUNTIME_S3_BUCKET=ct-runtime
+          CT_RUNTIME_S3_PATH_STYLE=true
+          CT_RUNTIME_S3_ACCESS_KEY_ID=test
+          CT_RUNTIME_S3_SECRET_ACCESS_KEY=testtest
+          CT_RUNTIME_DEPLOYMENT_ID=container-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}
+          CT_RUNTIME_PROVIDER=github-actions
+          CT_RUNTIME_CLASS=container-integration
+          CT_RUNTIME_REGION=local
+          CT_RUNTIME_IMAGE_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+          CT_RUNTIME_CONFIG_DIGEST=sha256:1111111111111111111111111111111111111111111111111111111111111111
+          CT_RUNTIME_GIT_REPOSITORY=$GITHUB_REPOSITORY
+          CT_RUNTIME_GIT_COMMIT=$GITHUB_SHA
+          EOF
+      - name: Run container production doctor and reconstruction
+        run: |
+          docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --env-file "$RUNNER_TEMP/ct-runtime.env" ct-runtime:test doctor
+          docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --env-file "$RUNNER_TEMP/ct-runtime.env" ct-runtime:test reconstruct
+      - name: Build both target platforms without loading
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
+          outputs: type=cacheonly
+          build-args: FOUNDRY_COMMIT=${{ env.FOUNDRY_COMMIT }}
+          cache-from: type=gha,scope=multiarch
+          cache-to: type=gha,scope=multiarch,mode=max
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - test
+      - container
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Derive lowercase image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ct-runtime" >> "$GITHUB_OUTPUT"
+      - name: Publish tested multi-architecture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.image.outputs.name }}:main
+          build-args: FOUNDRY_COMMIT=${{ env.FOUNDRY_COMMIT }}
+          cache-from: type=gha,scope=multiarch
+          provenance: true
+          sbom: true

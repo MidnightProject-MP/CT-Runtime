@@ -1,6 +1,6 @@
 # CT-Runtime
 
-CT-Runtime is an experimental, single-machine V1 filesystem-backed execution mechanic for Celestan. It does not choose task meaning, models, agents, stopping decisions, reflection, or wake requests. The caller or supervisor supplies those values. State is always outside this repository in `--store`. It makes no production claim.
+CT-Runtime provides filesystem and PostgreSQL-backed execution mechanics for Celestan. It does not choose task meaning, models, agents, stopping decisions, reflection, or wake requests. Production state requires PostgreSQL and S3; image, CI, cloud, and external integration claims remain unverified until their actual gates run.
 
 ## CLI
 
@@ -17,7 +17,7 @@ node bin/ct-runtime.mjs status --store C:\temp\ct
 
 ## Result handoff
 
-Every non-dry run receives `CT_RUNTIME_RESULT_FILE` and a bootstrap prompt requiring exactly this JSON object:
+Every non-dry run receives an ephemeral OS-temporary `CT_RUNTIME_RESULT_FILE`, removed during finalization, and a bootstrap prompt requiring exactly this JSON object:
 
 ```json
 {"status":"complete","summary":"bounded factual summary","requested_next_wake":null}
@@ -27,18 +27,23 @@ The only accepted keys are `status`, `summary`, and `requested_next_wake`. The l
 
 ## Recovery and observation
 
-`recover` scans stale `manifested`, `running`, `retrying`, and `requeued` executions using the persisted lease TTL contract, fences the old lease, records the interrupted attempt as crashed, and requeues infrastructure recovery up to a bounded limit. It never reports success or fabricates a terminal recovered state. Terminal records are eligible for `observe-pending`; the manifest records pending, observed, or bounded pending failure. The runtime creates only an Observer digest and semantic task. A caller must provide a validated semantic JSON file or configure an external OpenCode reflection invocation; runtime never invents semantic content.
+`recover` scans stale `manifested`, `running`, `retrying`, and `requeued` executions using the persisted lease TTL contract, fences the old lease, records the interrupted attempt as crashed, and requeues infrastructure recovery up to a bounded limit. It never reports success or fabricates a terminal recovered state. Terminal records are eligible for `observe-pending`; the manifest records pending, observed, or bounded pending failure transactionally with Observer lifecycle state. The runtime creates an immutable digest and semantic-task artifact. A caller may provide a bounded semantic JSON file or configure the optional OpenCode reflection provider; invalid or unavailable reflection remains pending and never invents semantic content. Observer executions are excluded from recursive observation.
+
+Production model telemetry uses `PostgresObserverStore.appendModelTelemetryEnvelope()`. These authoritative sessions, invocations, failures, and transitions are distinct from `runtime_model_telemetry`, whose byte/chunk rows describe process mechanics. Production observation omits the model field when no authoritative envelopes exist. Startup, execution, and termination host samples are persisted through the separate host telemetry API and projected to Foundry independently.
+
+`export-observer` calls Foundry's validated `joinedRecords()` projection and emits stable canonical JSON. PostgreSQL stores semantic tasks, policy decisions, coverage snapshots, and immutable Chronicle artifacts; an S3-compatible artifact sink may mirror them. Chronicle Markdown remains a portable manual Git-promotion format rather than operational authority.
 
 ## Safety and retention
 
 Stdout and stderr are retained as redacted raw evidence, capped at 64 KiB per stream. Manifests record retrievable URI and SHA-256 references, byte counts, and truthful truncation flags. Events and telemetry contain bounded fields and no raw stderr. `--secret-name NAME` selects explicit secret names from the inherited/child environment for redaction; secret values are never persisted. This allowlist is not a claim that arbitrary model output is secret-free.
 
-## V1 limitations
+## Current Boundaries
 
 - An external supervisor is required for scheduling, recovery, retention, and policy.
 - An Observer semantic provider is not configured by default.
 - OpenCode fields are unavailable unless an adapter supplies them; unsupported topology, task, and orchestration fields are not projected as if they survived Foundry projection.
-- This is not a production deployment claim.
-- Observer immutable conflict detection remains external to this runtime.
+- Cloud Run, Oracle systemd, Postgres, MinIO, and multi-host integration remain external verification gates; this repository makes no deployed claim.
+- OCI/PostgreSQL/S3 portability is useful but is not a claim that deployments have no vendor lock-in.
+- The pinned Foundry commit must expose Observer 1.2.0 for production images and integration tests.
 
 Manifest, event, telemetry, schedule, and Observer files are retained until the caller removes the selected store. No automatic retention or deletion policy is hidden in the runtime.
