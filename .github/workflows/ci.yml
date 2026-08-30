@@ -54,7 +54,7 @@ jobs:
           docker logs minio
           exit 1
       - name: Create integration bucket
-        run: docker run --rm --network host "$MC_IMAGE" sh -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
+        run: docker run --rm --network host --entrypoint /bin/sh "$MC_IMAGE" -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
       - name: Run all local tests
         run: npm test
       - name: Apply migrations explicitly
@@ -125,7 +125,7 @@ jobs:
           docker logs minio
           exit 1
       - name: Create integration bucket
-        run: docker run --rm --network host "$MC_IMAGE" sh -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
+        run: docker run --rm --network host --entrypoint /bin/sh "$MC_IMAGE" -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build amd64 image for execution
