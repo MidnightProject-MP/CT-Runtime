@@ -26,6 +26,11 @@ case ",${PROVIDER_SECRET_NAMES}," in
     ;;
 esac
 
+# Runtime job uses ONLY the pooled celestan_runtime credential (least-privilege).
+# The owner/migrator direct URL (CT_RUNTIME_DATABASE_MIGRATION_URL) is NEVER set here.
+# Local ~/.config/neon/ profile stays on your workstation and is not baked into the image
+# (see .dockerignore allowlist — only lib/bin/migrations/container are copied).
+
 if gcloud run jobs describe "$JOB_NAME" --project="$PROJECT_ID" --region="$REGION" >/dev/null 2>&1; then
   operation=update
 else

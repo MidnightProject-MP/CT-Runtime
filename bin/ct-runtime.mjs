@@ -39,7 +39,11 @@ only its validated requested_next_wake. State is retained in the selected store.
 if (!command || command === '--help') { help(); process.exit(command ? 0 : 2); }
 
 try {
-  if (command === 'migrate') { const connectionString = opt('--database-url', process.env.CT_RUNTIME_DATABASE_URL); console.log(JSON.stringify(await migrate({ connectionString }))); process.exit(0); }
+  if (command === 'migrate') {
+    const connectionString = opt('--database-url', process.env.CT_RUNTIME_DATABASE_MIGRATION_URL || process.env.CT_RUNTIME_DATABASE_URL_UNPOOLED || process.env.CT_RUNTIME_DATABASE_URL);
+    if (!connectionString) throw new Error('migrate requires --database-url or CT_RUNTIME_DATABASE_MIGRATION_URL (direct, owner/migrator) — never the pooled runtime URL alone in production');
+    console.log(JSON.stringify(await migrate({ connectionString }))); process.exit(0);
+  }
   if (command === 'capabilities') { console.log(JSON.stringify(describeCapabilities({ project: opt('--project'), env: process.env }), null, 2)); process.exit(0); }
   if (command === 'adapters') { console.log(JSON.stringify(describeAdapters(opt('--capability')), null, 2)); process.exit(0); }
   if (command === 'bindings') { console.log(JSON.stringify(resolveAllBindings({ project: opt('--project'), env: process.env }), null, 2)); process.exit(0); }

@@ -16,11 +16,15 @@ Provider-neutral: Celestan calls `request('durable_state', {project})` → `Post
 * **Connections (redacted):**
   * **Runtime (pooled, app traffic):** `postgresql://celestan_runtime:***@ep-divine-wave-ayqhq978-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require`
   * **Migration/admin (direct, DDL, pg_dump, logical replication):** `postgresql://neondb_owner:***@ep-divine-wave-ayqhz978.c-5.us-east-2.aws.neon.tech/neondb?...` and `celestan_runtime` direct variant. Direct required for migrations (`neon-postgres` skill: pooled = PgBouncer transaction mode, no `SET`/`LISTEN`/`PREPARE`).
-* **Roles:** `neondb_owner` (owner, for `migrate`), `celestan_runtime` (least-privilege, created `2026-08-30T17:27:21Z` via `neon roles create`). Grants: `USAGE ON SCHEMA public`, `SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `ALTER DEFAULT PRIVILEGES`, `USAGE/SELECT ON SEQUENCES`. Verified `GRANT` succeeded; `celestan_runtime` can `SELECT/INSERT` but cannot `DROP`/`CREATE` unrestricted.
-* **Migrations:** Applied via direct owner `npm run migrate -- --database-url <direct>` → `{"status":"migrated","applied":[1,2,3,4]}` including `004_observer_production_contract`. Verified `SELECT version FROM runtime_schema_migrations` matches image `migrations/001-004` checksums.
-* **Env / secrets placement (capability-first):**
+* **Roles (separate authorities, like scheduler vs runtime):**
+  * `neondb_owner` — super-owner, local workstation only, not granted to Cloud Run.
+  * `celestan_migrator` — **deployer** (created `2026-08-30T18:26:04Z` via `neon roles create`), `GRANT USAGE,CREATE ON SCHEMA public` + `SELECT/INSERT/UPDATE/DELETE` + `USAGE,SELECT,UPDATE ON SEQUENCES`. Used only via `CT_RUNTIME_DATABASE_MIGRATION_URL` in explicit `deploy/migrate.sh` (`ct-runtime-migrate` job, SA `celestan-migrator`).
+  * `celestan_runtime` — **wake** least-privilege (created `2026-08-30T17:27:21Z`), `GRANT USAGE ON SCHEMA public`, `SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `ALTER DEFAULT PRIVILEGES`, `USAGE,SELECT ON SEQUENCES` (*no* `CREATE`). Used only via `CT_RUNTIME_DATABASE_URL` (pooled `-pooler`) in wake job (`celestan-runtime` SA). Verified `GRANT` succeeded; runtime cannot `DROP`/`CREATE`.
+* **Migrations:** Applied via direct migrator `npm run migrate -- --database-url <direct>` (`celestan_migrator` direct `npg_...`, *not* `celestan_runtime` pooled) → `{"status":"migrated","applied":[1,2,3,4]}` including `004_observer_production_contract`. Verified `SELECT version FROM runtime_schema_migrations` matches image `migrations/001-004` checksums. Normal wake never runs migrations.
+* **Env / secrets placement (capability-first, separate authorities):**
   * **Non-secret:** `CT_RUNTIME_MODE=production`, `CT_RUNTIME_S3_BUCKET`, `CT_RUNTIME_S3_ENDPOINT`, `CT_RUNTIME_REGION=us-east-2`, `CT_RUNTIME_GIT_*`, `CT_RUNTIME_IMAGE/CONFIG_DIGEST`, `CELESTAN_DURABLE_STATE=postgres` (optional; defaults to postgres in production)
-  * **Secrets:** `CT_RUNTIME_DATABASE_URL` (pooled runtime) + `CT_RUNTIME_DATABASE_URL_UNPOOLED`/`DATABASE_URL_UNPOOLED` (direct migration) → **GCP Secret Manager** `celestan-database-url` / `celestan-database-migration-url` (`secretAccessor` only `celestan-runtime` SA) → Cloud Run `--set-secrets` + Oracle env file `0600 /etc/celestan/env`. Never committed, never pasted in chat. Local dev uses `NEON_API_KEY` file `~/.config/neon/...` not `.env`.
+  * **Runtime secrets (wake):** `CT_RUNTIME_DATABASE_URL` (pooled `celestan_runtime` `…-pooler…`) → **GCP Secret Manager** `celestan-database-url` (`secretAccessor` only `celestan-runtime` SA `roles/run.invoker`) → Cloud Run **wake job** `--set-secrets` + Oracle env file `0600 /etc/celestan/env`. Never receives owner/migrator URL.
+  * **Migration secrets (deploy):** `CT_RUNTIME_DATABASE_MIGRATION_URL` (direct `celestan_migrator` `…` *not* `-pooler`, or `neondb_owner` for initial) → **separate** Secret `celestan-database-migration-url` (`secretAccessor` only `celestan-migrator` / `celestan-deployer` SA, *not* runtime) → one-off `deploy/migrate.sh` Cloud Run job `ct-runtime-migrate` (`--service-account celestan-migrator`) or local `npx neon connection-string --role-name celestan_migrator`. Never committed, never pasted in chat. Local workstation profile `~/.config/neon/` (`celestan-ct-runtime`) stays local — not baked into image (`.dockerignore` allowlist; `docker inspect` shows no `DATABASE_URL`).
 
 ## Verification performed against real Neon (no mocks)
 
@@ -39,9 +43,9 @@ Provider-neutral: Celestan calls `request('durable_state', {project})` → `Post
 
 ## What remains human-owned
 
-* **Neon account/billing** already exists — no further Neon human action unless rotating `celestan_runtime` password (`neon roles reset-password`) or changing region.
+* **Neon account/billing** already exists — no further Neon human action unless rotating `celestan_runtime`/`celestan_migrator` passwords (`neon roles reset-password`) or changing region. Local `~/.config/neon/` (`celestan-ct-runtime` profile) stays on workstation — Cloud Run image receives only `celestan_runtime` pooled secret, never `~/.config/neon` or owner URL (verified `docker inspect` + `.dockerignore` allowlist).
 * **R2 / S3 `evidence_store`** not yet provisioned — next blocking human step per Human Setup Requirements Report `C2`.
-* **Cloud Run + Scheduler** `scheduler` binding and Oracle `systemd_timer` — next human steps `C3/C4`.
+* **Cloud Run + Scheduler** `scheduler` binding and Oracle `systemd_timer` — next human steps `C3/C4` (wake job gets only `celestan_runtime` pooled, migrator job gets only `celestan_migrator` direct).
 
 ## Remaining autonomous steps (Celestan, after you hand off secrets via Secret Manager)
 
