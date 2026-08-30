@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 import { invoke, observePending, recover, runScheduler, validateNextWake, validateWakeReason } from '../lib/runtime.mjs';
-import { createStore } from '../lib/stores.mjs';
+import { createStore, createCapabilityStores } from '../lib/stores.mjs';
 import { loadConfig } from '../lib/config.mjs';
 import { migrate } from '../lib/migration.mjs';
 import { doctor, reconstruct } from '../lib/startup.mjs';
 import { exportObserver, observePostgres } from '../lib/production-observer.mjs';
+import { describeCapabilities } from '../lib/capabilities/registry.mjs';
+import { describeAdapters } from '../lib/capabilities/adapters.mjs';
+import { resolveAllBindings } from '../lib/capabilities/bindings.mjs';
 
 const args = process.argv.slice(2);
 const command = args[0];
 const values = (name) => args.flatMap((v, i) => v === name ? [args[i + 1]] : []).filter((v) => v !== undefined);
 const opt = (name, fallback) => values(name)[0] ?? fallback;
 const defined = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-const help = () => console.log(`CT-Runtime: filesystem-backed Celestan execution mechanics
+const help = () => console.log(`CT-Runtime: capability-first execution mechanics (durable_state, evidence_store, ...)
 
 Commands:
   run --store PATH --project NAME --model MODEL --agent AGENT --task TEXT [--cwd PATH] [--opencode BIN] [--opencode-arg ARG]
@@ -21,7 +24,15 @@ Commands:
   observe-pending --store PATH --observer PATH [--semantic-result FILE]
   wake --store PATH --reason REASON
   status | inspect --id ID
+  capabilities [--project NAME]        # list purpose-level capabilities and current bindings
+  adapters [--capability NAME]         # list adapters with purpose/authority/limitations
+  bindings [--project NAME]            # show resolved bindings (global + per-project)
 
+Celestan requests capabilities, not vendors:
+  durable_state:      persist canonical execution state via durable_state (not "write to Neon")
+  evidence_store:     put raw logs via evidence_store (not "write to R2")
+  knowledge_publishing: publishChronicle({...}) via knowledge_publishing (not "write to Confluence")
+Bindings (bindings.example.json / CELESTAN_BINDINGS_JSON) select the adapter; changing Neon↔Supabase or R2↔S3 changes only config, not Celestan code.
 The scheduler launches due wakes once, using only its caller-supplied launch values.
 Each run must write the exact CT_RUNTIME_RESULT_FILE JSON handoff. Runtime schedules
 only its validated requested_next_wake. State is retained in the selected store.`);
@@ -29,7 +40,10 @@ if (!command || command === '--help') { help(); process.exit(command ? 0 : 2); }
 
 try {
   if (command === 'migrate') { const connectionString = opt('--database-url', process.env.CT_RUNTIME_DATABASE_URL); console.log(JSON.stringify(await migrate({ connectionString }))); process.exit(0); }
-  const configured = createStore({ root: opt('--store') });
+  if (command === 'capabilities') { console.log(JSON.stringify(describeCapabilities({ project: opt('--project'), env: process.env }), null, 2)); process.exit(0); }
+  if (command === 'adapters') { console.log(JSON.stringify(describeAdapters(opt('--capability')), null, 2)); process.exit(0); }
+  if (command === 'bindings') { console.log(JSON.stringify(resolveAllBindings({ project: opt('--project'), env: process.env }), null, 2)); process.exit(0); }
+  const configured = createStore({ root: opt('--store'), project: opt('--project') });
   const store = configured.store;
   if (command === 'doctor') { console.log(JSON.stringify(await doctor({ store, config: configured.config }))); process.exit(0); }
   if (command === 'reconstruct') { console.log(JSON.stringify(await reconstruct({ store, config: configured.config }))); process.exit(0); }

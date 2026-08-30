@@ -1,0 +1,29 @@
+{
+  "_comment": "Celestan requests capabilities, not vendors. This file selects adapters. Replace without changing Celestan code.",
+  "global": {
+    "durable_state": "postgres",
+    "evidence_store": "s3",
+    "code_repository": "github",
+    "knowledge_publishing": "git",
+    "scheduler": "cloud_scheduler",
+    "project_system": "github_issues"
+  },
+  "projects": {
+    "BorderCrossing": {
+      "project_system": "jira"
+    },
+    "CT-Foundry": {
+      "project_system": "github_issues",
+      "knowledge_publishing": "git"
+    },
+    "CT-Runtime": {
+      "project_system": "github_issues"
+    }
+  },
+  "_notes": {
+    "durable_state": "postgres adapter is standard Postgres (works with Neon/Supabase/self-hosted). Binding stays 'postgres' if you switch provider — only connection string changes.",
+    "evidence_store": "s3 adapter is S3-compatible (R2/S3/MinIO). Switch provider by changing endpoint/region, binding stays 's3'.",
+    "knowledge_publishing": "Celestan calls: publishChronicle({ period, markdown }) via knowledge_publishing. Adapter is 'git' today, 'confluence' tomorrow — Celestan unchanged.",
+    "project_system": "Celestan calls: listWork({ project }) via project_system. Adapter varies per project; BorderCrossing uses Jira, others use GitHub Issues."
+  }
+}

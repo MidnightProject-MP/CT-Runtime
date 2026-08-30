@@ -1,6 +1,19 @@
-# CT-Runtime
+# CT-Runtime — capability-first
 
-CT-Runtime provides filesystem and PostgreSQL-backed execution mechanics for Celestan. It does not choose task meaning, models, agents, stopping decisions, reflection, or wake requests. Production state requires PostgreSQL and S3; image, CI, cloud, and external integration claims remain unverified until their actual gates run.
+CT-Runtime provides execution mechanics for Celestan behind **purpose-level capabilities**. Celestan requests `durable_state` (not Neon), `evidence_store` (not R2), `knowledge_publishing` (not Confluence), `project_system` (not Jira) — bindings select the adapter. Production bindings default to `durable_state:postgres` (standard Postgres — Neon/Supabase/pg) + `evidence_store:s3` (S3-compatible — R2/S3/MinIO); filesystem adapters remain for local/test. Celestan code is unchanged when Neon→Supabase or Jira→Linear.
+
+```js
+const durable = await request('durable_state', { project });
+await durable.createManifest(...);
+
+const work = await request('project_system', { project: 'BorderCrossing' }); // Jira there, GitHub Issues elsewhere
+await work.listWork(...);
+
+const pub = await request('knowledge_publishing', { project });
+await pub.publishChronicle({ period, markdown });
+```
+
+See `capabilities/README.md`, `docs/capabilities.md`, `bindings.example.json`, `lib/capabilities/`. Production state still requires `durable_state` + `evidence_store`; image/CI/cloud claims remain unverified until gates run.
 
 ## CLI
 
