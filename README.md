@@ -54,6 +54,16 @@ Stdout and stderr are retained as redacted raw evidence, capped at 64 KiB per st
 
 ## Current Boundaries
 
+### Execution Federation L1
+
+`execution_federation` is provider-neutral. Postgres migration 005 is its
+initial coordination adapter: one logical work order may have many physical
+executions, and every mutation requires a fenced lease. Checkpoints, handoffs,
+finalization, reconstruction, repository drift checks, and normalized Observer
+lineage are durable. Foreground mutation conflicts with active background work
+fail closed. GAS Sheets/Drive remain provider-local state, not coordination
+authority. The local OpenCode bridge exposes only semantic boundaries.
+
 - An external supervisor is required for scheduling, recovery, retention, and policy.
 - An Observer semantic provider is not configured by default.
 - OpenCode fields are unavailable unless an adapter supplies them; unsupported topology, task, and orchestration fields are not projected as if they survived Foundry projection.

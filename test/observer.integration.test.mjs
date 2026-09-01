@@ -17,6 +17,22 @@ const foundryPath = path.join(import.meta.dirname, '..', '..', 'CT-Foundry', 'ca
 const schemaPath = path.join(path.dirname(foundryPath), 'schema.mjs');
 const fixture = path.join(import.meta.dirname, 'fixture-runner.mjs');
 
+test('Postgres Observer lineage normalizes database Date timestamps', async () => {
+  const occurredAt = new Date('2026-01-02T03:04:05.000Z');
+  const createdAt = new Date('2026-01-02T03:05:06.000Z');
+  const pool = { query: async () => ({ rows: [
+    { id: 'event-1', at: occurredAt, execution_id: 'execution-1', type: 'claimed', payload: { state: 'claimed' } },
+    { id: 'execution-1', at: createdAt, execution_id: 'execution-1', type: 'physical-execution', payload: { state: 'running' } }
+  ] }) };
+
+  const lineage = await new PostgresObserverStore(pool).lineageFor('work-order-1');
+
+  assert.deepEqual(lineage, [
+    { id: 'event-1', at: occurredAt.toISOString(), executionId: 'execution-1', type: 'claimed', payload: { state: 'claimed' } },
+    { id: 'execution-1', at: createdAt.toISOString(), executionId: 'execution-1', type: 'physical-execution', payload: { state: 'running' } }
+  ]);
+});
+
 test('Postgres Observer production contract is transactional and storage-neutral', { skip: !connectionString || !existsSync(foundryPath) || !existsSync(schemaPath), timeout: 60000 }, async () => {
   const [foundry, schemaModule] = await Promise.all([import(foundryPath), import(schemaPath)]);
   assert.equal(schemaModule.OBSERVER_VERSION, '1.2.0');
