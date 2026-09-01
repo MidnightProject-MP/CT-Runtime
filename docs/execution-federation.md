@@ -83,7 +83,9 @@ background work therefore becomes discoverable without stealing an active claim
 or waiting for lease expiry. Migration `011_superseded_gas_advisory` requires
 the target execution and work-order fence to remain current, so an advisory
 cannot revive superseded GAS authority after a later foreground lease expires.
-Applied migrations 005-008 remain unchanged. The stable takeover ID uses the existing
+`012_federation_state_constraints` adds database-level checks for the declared
+work-order and physical-execution state vocabulary. Applied migrations 005-008
+remain unchanged. The stable takeover ID uses the existing
 handoff primary key and the new foreground execution uses the existing execution
 identity and per-work-order fence counter. GAS still exposes only
 pending/take/checkpoint RPCs; safety-wake and interactive takeover serialize

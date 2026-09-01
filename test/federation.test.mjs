@@ -63,14 +63,14 @@ test('handoff retries return the original target by idempotency key', async () =
     calls.push(text);
     if (text === 'BEGIN' || text === 'COMMIT') return { rows: [] };
     if (text.includes('FROM federation_work_orders')) return { rows: [{ work_order_id: 'w' }] };
-    if (text.includes('FROM federation_handoffs')) return { rows: [{ to_execution_id: 'e2' }] };
+    if (text.includes('FROM federation_handoffs')) return { rows: [{ to_execution_id: 'e2', reason: 'continuation' }] };
     if (text.includes('FROM federation_executions')) return { rows: [target] };
     throw new Error(`unexpected query: ${text}`);
   }, release() {} };
   const adapter = new PostgresFederationAdapter({ pool: { connect: async () => client } });
-  const result = await adapter.handoff('e1', { handoffId: 'h1', provider: 'gas' });
+  const result = await adapter.handoff('e1', { handoffId: 'h1', provider: 'gas', owner: 'o2' });
   assert.equal(result.id, 'e2');
-  assert.ok(calls.indexOf('SELECT * FROM federation_work_orders WHERE work_order_id=(SELECT work_order_id FROM federation_executions WHERE execution_id=$1) FOR UPDATE') < calls.indexOf('SELECT to_execution_id FROM federation_handoffs WHERE handoff_id=$1 AND from_execution_id=$2'));
+  assert.ok(calls.indexOf('SELECT * FROM federation_work_orders WHERE work_order_id=(SELECT work_order_id FROM federation_executions WHERE execution_id=$1) FOR UPDATE') < calls.indexOf('SELECT * FROM federation_handoffs WHERE handoff_id=$1 AND from_execution_id=$2'));
 });
 
 test('handoff inserts the actual target execution id', async () => {
@@ -94,6 +94,27 @@ test('handoff inserts the actual target execution id', async () => {
   assert.equal(handoffParams[0][3], 'e2');
 });
 
+test('handoff idempotency rejects changed semantic inputs', async () => {
+  const client = { query: async (text) => {
+    if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return { rows: [] };
+    if (text.includes('FROM federation_work_orders')) return { rows: [{ work_order_id: 'w' }] };
+    if (text.includes('FROM federation_handoffs')) return { rows: [{ to_execution_id: 'e2', reason: 'continuation' }] };
+    if (text.includes('FROM federation_executions')) return { rows: [{ execution_id: 'e2', provider: 'gas', mode: 'background', claim_owner: 'o2' }] };
+    throw new Error(`unexpected query: ${text}`);
+  }, release() {} };
+  const adapter = new PostgresFederationAdapter({ pool: { connect: async () => client } });
+  await assert.rejects(() => adapter.handoff('e1', { handoffId: 'h1', provider: 'opencode', owner: 'o2', reason: 'takeover' }), { category: 'conflict' });
+});
+
+test('federation rejects invalid finalization, leases, and oversized checkpoints at the boundary', async () => {
+  const adapter = new PostgresFederationAdapter({ pool: { connect: async () => { throw new Error('must not connect'); } } });
+  await assert.rejects(() => adapter.claim({ workOrderId: 'w', provider: 'gas', ttlMs: 0 }), /ttlMs/);
+  await assert.rejects(() => adapter.renew('e1', { owner: 'o', fence: '1' }, 3600001), /ttlMs/);
+  await assert.rejects(() => adapter.finalize('e1', { status: 'complete' }, { owner: 'o', fence: '1' }), /success or failed/);
+  const checkpoint = { value: 'x'.repeat(64 * 1024) };
+  await assert.rejects(() => adapter.checkpoint('e1', checkpoint, { owner: 'o', fence: '1' }), /64 KiB/);
+});
+
 test('concurrent same-handoff retries serialize before idempotency lookup', async () => {
   const target = { execution_id: 'e2', work_order_id: 'w', provider: 'gas', mode: 'background', state: 'claimed', claim_owner: 'o2', claim_fence: 2n, lease_until: new Date(Date.now() + 60000), repository: {}, lineage: {}, created_at: new Date(), updated_at: new Date() };
   let handoff;
@@ -110,7 +131,7 @@ test('concurrent same-handoff retries serialize before idempotency lookup', asyn
       lockedBy = number;
       return { rows: [{ work_order_id: 'w', next_claim_fence: 1n }] };
     }
-    if (text.includes('FROM federation_handoffs')) return { rows: handoff ? [{ to_execution_id: 'e2' }] : [] };
+    if (text.includes('FROM federation_handoffs')) return { rows: handoff ? [{ to_execution_id: 'e2', reason: 'continuation' }] : [] };
     if (text.includes('FROM federation_executions WHERE execution_id=$1')) return { rows: [target] };
     if (text.includes('state IN (')) return { rows: [] };
     if (text.startsWith('UPDATE federation_work_orders')) return { rows: [{ next_claim_fence: 2n }] };
@@ -120,9 +141,9 @@ test('concurrent same-handoff retries serialize before idempotency lookup', asyn
     throw new Error(`unexpected query: ${text}`);
   }, release() {} });
   const adapter = new PostgresFederationAdapter({ pool: { connect: async () => makeClient(++clientNumber) } });
-  const first = adapter.handoff('e1', { handoffId: 'h1', provider: 'gas' });
+  const first = adapter.handoff('e1', { handoffId: 'h1', provider: 'gas', owner: 'o2' });
   await new Promise((resolve) => setImmediate(resolve));
-  const second = adapter.handoff('e1', { handoffId: 'h1', provider: 'gas' });
+  const second = adapter.handoff('e1', { handoffId: 'h1', provider: 'gas', owner: 'o2' });
   const results = await Promise.all([first, second]);
   assert.deepEqual(results.map((value) => value.id), ['e2', 'e2']);
 });
