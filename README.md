@@ -54,7 +54,7 @@ Stdout and stderr are retained as redacted raw evidence, capped at 64 KiB per st
 
 ## Current Boundaries
 
-### Execution Federation L1
+### Execution Federation
 
 `execution_federation` is provider-neutral. Postgres migration 005 is its
 initial coordination adapter: one logical work order may have many physical
@@ -62,7 +62,13 @@ executions, and every mutation requires a fenced lease. Checkpoints, handoffs,
 finalization, reconstruction, repository drift checks, and normalized Observer
 lineage are durable. Foreground mutation conflicts with active background work
 fail closed. GAS Sheets/Drive remain provider-local state, not coordination
-authority. The local OpenCode bridge exposes only semantic boundaries.
+authority. The local OpenCode bridge exposes semantic boundaries, including a
+read-only project/work-order-scoped discovery operation and a separate explicit
+transactional foreground takeover. Takeover keeps the logical work-order ID,
+creates a fresh physical execution and fence, rejects live competing authority,
+and verifies repository state before mutation. A bounded live
+OpenCode -> GAS -> OpenCode proof, including safety-wake non-conflict, is accepted;
+see `docs/execution-federation.md`.
 
 - An external supervisor is required for scheduling, recovery, retention, and policy.
 - An Observer semantic provider is not configured by default.

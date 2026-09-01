@@ -29,8 +29,22 @@ test('Postgres Observer lineage normalizes database Date timestamps', async () =
 
   assert.deepEqual(lineage, [
     { id: 'event-1', at: occurredAt.toISOString(), executionId: 'execution-1', type: 'claimed', payload: { state: 'claimed' } },
-    { id: 'execution-1', at: createdAt.toISOString(), executionId: 'execution-1', type: 'physical-execution', payload: { state: 'running' } }
+    { id: 'execution-1', at: createdAt.toISOString(), executionId: 'execution-1', type: 'physical-execution', payload: { provider: 'unavailable', mode: 'background', state: 'running', lineage: {} } }
   ]);
+});
+
+test('Postgres Observer lineage removes identity subjects and arbitrary event payloads', async () => {
+  const pool = { query: async () => ({ rows: [{ id: 'event-1', at: new Date('2026-01-02T03:04:05.000Z'), execution_id: 'execution-1', type: 'gas-taken', payload: { subject: 'stable-google-subject', owner: 'private-owner', fence: '3', instanceId: 'gas-primary', handoffId: 'handoff-1', prompt: 'must-not-cross' } }] }) };
+  const lineage = await new PostgresObserverStore(pool).lineageFor('work-order-1');
+  assert.deepEqual(lineage[0].payload, { fence: '3', instanceId: 'gas-primary', handoffId: 'handoff-1' });
+});
+
+test('Postgres Observer physical lineage is bounded and excludes arbitrary fields', async () => {
+  const long = 'x'.repeat(600);
+  const pool = { query: async () => ({ rows: [{ id: 'execution-1', at: new Date('2026-01-02T03:04:05.000Z'), execution_id: 'execution-1', type: 'physical-execution', payload: { provider: 'gas', mode: 'background', state: 'running', lineage: { workOrderId: 'work-1', continuationId: 'cont-1', prompt: 'must-not-cross', nextOperation: long, gas: { physicalExecutionId: 'physical-1', continuationId: 'cont-1', checkpointDigest: 'a'.repeat(64), transcript: 'must-not-cross', evidence: Array.from({ length: 25 }, (_, index) => ({ drive_file_id: `file-${index}`, sha256: 'b'.repeat(64), secret: 'must-not-cross' })) } } } }] }) };
+  const lineage = await new PostgresObserverStore(pool).lineageFor('work-order-1');
+  assert.equal(lineage[0].payload.lineage.prompt, undefined); assert.equal(lineage[0].payload.lineage.nextOperation, undefined);
+  assert.equal(lineage[0].payload.lineage.gas.transcript, undefined); assert.equal(lineage[0].payload.lineage.gas.evidence.length, 20); assert.equal(lineage[0].payload.lineage.gas.evidence[0].secret, undefined);
 });
 
 test('Postgres Observer production contract is transactional and storage-neutral', { skip: !connectionString || !existsSync(foundryPath) || !existsSync(schemaPath), timeout: 60000 }, async () => {

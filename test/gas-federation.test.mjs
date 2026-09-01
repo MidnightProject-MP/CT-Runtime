@@ -77,8 +77,8 @@ test('pre-persisted matching duplicate remains pending and notification can retr
   const client = { query: async (sql, params) => {
     calls.push([sql, params]);
     if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [] };
-    if (sql.startsWith('SELECT h.*')) return { rows: [{ to_execution_id: 'exec-2', source_checkpoint: { step: 1 } }] };
-    if (sql.startsWith('SELECT * FROM federation_executions')) return { rows: [{ claim_fence: 2, claim_owner: 'gas-instance' }] };
+    if (sql.startsWith('SELECT h.*')) return { rows: [{ to_execution_id: 'exec-2', source_checkpoint: { step: 1 }, next_claim_fence: 2 }] };
+    if (sql.startsWith('SELECT * FROM federation_executions')) return { rows: [{ claim_fence: 2, claim_owner: 'gas-instance', state: 'claimed' }] };
     if (sql.startsWith('INSERT')) return { rowCount: 0, rows: [] };
      if (sql.startsWith('SELECT body_digest')) return { rows: [{ body_digest: calls.find(([text]) => text.startsWith('INSERT'))[1][3], state: 'pending' }] };
     throw new Error(`unexpected query: ${sql}`);
@@ -88,6 +88,32 @@ test('pre-persisted matching duplicate remains pending and notification can retr
   assert.equal(result.duplicate, true);
   assert.equal(calls[0][0], 'BEGIN'); assert.equal(calls.at(-1)[0], 'COMMIT');
   assert.ok(calls.some(([sql]) => sql.startsWith('SELECT body_digest')));
+});
+
+test('advisory persistence rejects a target superseded by a newer work-order fence', async () => {
+  const client = { query: async (sql) => {
+    if (sql === 'BEGIN' || sql === 'ROLLBACK') return { rows: [] };
+    if (sql.startsWith('INSERT')) return { rowCount: 1, rows: [{ advisory_id: advisory.nonce }] };
+    if (sql.startsWith('SELECT h.*')) return { rows: [{ to_execution_id: 'exec-2', source_checkpoint: { step: 1 }, next_claim_fence: 3 }] };
+    if (sql.startsWith('SELECT * FROM federation_executions')) return { rows: [{ claim_fence: 2, claim_owner: 'gas-instance', state: 'handoff' }] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, release() {} };
+  await assert.rejects(() => new PostgresGasAdvisoryAdapter({ connect: async () => client }).persist(advisory), /stale/);
+});
+
+test('consumed advisory retry remains idempotent after its target is superseded', async () => {
+  const calls = [];
+  let digest;
+  const client = { query: async (sql, params) => {
+    calls.push(sql);
+    if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
+    if (sql.startsWith('INSERT')) { digest = params[3]; return { rowCount: 0, rows: [] }; }
+    if (sql.startsWith('SELECT body_digest')) return { rows: [{ body_digest: digest, state: 'consumed' }] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, release() {} };
+  const result = await new PostgresGasAdvisoryAdapter({ connect: async () => client }).persist(advisory);
+  assert.deepEqual(result, { advisoryId: advisory.nonce, state: 'consumed', duplicate: true });
+  assert.equal(calls.some((sql) => sql.startsWith('SELECT h.*')), false);
 });
 
 test('SQL contract authenticates notifications separately and checkpoints the returned fence', async () => {
@@ -137,4 +163,27 @@ test('signature verification contract covers missing auth, bad auth, tamper, and
   assert.match(gas, /lifecycle:'deferred'/);
   assert.match(gas, /federationRejectionReason/);
   assert.match(gas, /return 'internal-error'/);
+});
+
+test('interactive takeover safety migration treats null GAS leases as expired and omits JWT subjects', async () => {
+  const sql = await readFile(new URL('../migrations/009_interactive_takeover_safety.sql', import.meta.url), 'utf8');
+  assert.match(sql, /coalesce\(e\.lease_until,'-infinity'::timestamptz\)<=pg_catalog\.clock_timestamp\(\)/);
+  assert.match(sql, /other\.lease_until>pg_catalog\.clock_timestamp\(\)/);
+  assert.match(sql, /RETURN pg_catalog\.jsonb_build_object\('status','competing-authority'\)/);
+  assert.match(sql, /'canonicalCheckpointDigest',canonical_digest/);
+  assert.doesNotMatch(sql, /'subject',sub/);
+});
+
+test('successful GAS checkpoint atomically releases canonical mutation authority', async () => {
+  const sql = await readFile(new URL('../migrations/010_gas_checkpoint_release.sql', import.meta.url), 'utf8');
+  assert.match(sql, /state='deferred',lease_until=NULL/);
+  assert.match(sql, /'state','deferred'/);
+  assert.match(sql, /canonicalCheckpointDigest/);
+});
+
+test('superseded GAS advisories cannot revive an older fence after foreground expiry', async () => {
+  const sql = await readFile(new URL('../migrations/011_superseded_gas_advisory.sql', import.meta.url), 'utf8');
+  assert.match(sql, /w\.next_claim_fence<>a\.target_fence/);
+  assert.match(sql, /e\.state NOT IN \('claimed','running'\)/);
+  assert.match(sql, /RETURN pg_catalog\.jsonb_build_object\('status','stale-target'\)/);
 });
