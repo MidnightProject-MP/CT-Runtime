@@ -1,6 +1,6 @@
 /* GAS-native pure helpers. This file intentionally has no Node or module globals. */
 var CT_GAS = (typeof CT_GAS === 'object' && CT_GAS) || {};
-CT_GAS.SHEETS = ['executions','work_orders','wakes','continuations','observer_ledger','memory','lessons','identity_signals','foundry_signals','model_telemetry','evidence','chronicle','schema'];
+CT_GAS.SHEETS = ['executions','work_orders','wakes','continuations','observer_ledger','memory','lessons','identity_signals','foundry_signals','model_telemetry','evidence','chronicle','schema','observer_processing'];
 CT_GAS.MIN_BUDGET_MS = 30000;
 CT_GAS.MAX_BUDGET_MS = 300000;
 CT_GAS.BUDGET_MS = 240000;
@@ -10,6 +10,7 @@ CT_GAS.OPERATION_BUDGETS = {stateRead:1000,stateWrite:1500,trigger:1500,model:30
 CT_GAS.MAX_INVALID_WAKE_EVENTS = 20;
 CT_GAS.CLOCK_BANDS = {normal:30000,checkpoint:10000,stop:0};
 CT_GAS.MAX_PAYLOAD = 16000;
+CT_GAS.MAX_EVIDENCE_BYTES = 64000;
 CT_GAS.MAX_MESSAGES = 12;
 CT_GAS.MAX_MESSAGE = 4000;
 CT_GAS.WAKE_REASONS = ['requested','maintenance','recovery','model-deferred','checkpoint','ci','worker','api','model-quota','scheduled','human'];
@@ -17,6 +18,7 @@ CT_GAS.WAIT_CONDITIONS = ['ci','worker','api','model-quota','scheduled','human']
 CT_GAS.CAPABILITY_REASONS = ['missing-container-executor','missing-shell-executor','missing-required-provider'];
 CT_GAS.json = function (v) { if (v === undefined) return 'null'; if (Array.isArray(v)) return '[' + v.map(CT_GAS.json).join(',') + ']'; if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ':' + CT_GAS.json(v[k]); }).join(',') + '}'; return JSON.stringify(v); };
 CT_GAS.id = function (kind, value) { var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, CT_GAS.json(value)); return kind + '_' + bytes.map(function (b) { return ('0' + (b < 0 ? b + 256 : b).toString(16)).slice(-2); }).join('').slice(0, 32); };
+CT_GAS.sha256 = function (value) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8).map(function (b) { return ('0' + (b < 0 ? b + 256 : b).toString(16)).slice(-2); }).join(''); };
 CT_GAS.bound = function (v, n) { return String(v == null ? '' : v).slice(0, n || 64000); };
 CT_GAS.redact = function (v, secrets) { return (secrets || []).filter(Boolean).reduce(function (s, x) { return s.split(String(x)).join('[REDACTED]'); }, CT_GAS.bound(v)); };
 CT_GAS.canonicalModel = function (m) { m=String(m || ''); var remainder=m.indexOf('openrouter/')===0 ? m.slice(11) : m; return remainder.indexOf('/')>=0 ? remainder : m; };

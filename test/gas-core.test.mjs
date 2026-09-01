@@ -4,11 +4,11 @@ import { GAS_SHEETS, deterministicId, validateFreeModel, proveAcrossWakes, redac
 import { readFile } from 'node:fs/promises';
 
 test('GAS source has no Node globals or module imports', async () => {
-  const files = ['gas_core.js','gas_state.js','gas_trigger.js','gas_v8.js','gas_observer.js','gas_evidence.js','gas_agent_executor.js','gas_github.js','gas_actions.js'];
+  const files = ['gas_core.js','gas_state.js','gas_trigger.js','gas_federation.js','gas_v8.js','gas_observer.js','gas_evidence.js','gas_agent_executor.js','gas_github.js','gas_actions.js'];
   for (const file of files) { const source = await readFile(new URL(`../gas/${file}`, import.meta.url), 'utf8'); assert.doesNotMatch(source, /\b(require|process|Buffer|import\s|export\s)\b/); }
 });
 test('schema, IDs, free-only model and bounded proof are deterministic', () => {
-  assert.equal(GAS_SHEETS.length, 13); assert.equal(deterministicId('x', { b: 2, a: 1 }), deterministicId('x', { a: 1, b: 2 }));
+  assert.equal(GAS_SHEETS.length, 14); assert.equal(deterministicId('x', { b: 2, a: 1 }), deterministicId('x', { a: 1, b: 2 }));
   assert.throws(() => validateFreeModel('openrouter/foo/bar')); assert.equal(validateFreeModel('openrouter/foo/bar:free'), 'openrouter/foo/bar:free');
   assert.equal(proveAcrossWakes([], 1).step, 'A'); assert.equal(proveAcrossWakes([{ key: 'proof', state: 'checkpointed' }], 1).step, 'B');
   assert.equal(redact('token=abc', ['abc']), 'token=[REDACTED]');
@@ -24,5 +24,19 @@ test('semantic continuation validates and reconstructs without transcript fields
 });
 test('GAS contracts document immutable Drive identity, retry deferral, Actions boundary and checkpoint budget', async () => {
   const readme = await readFile(new URL('../gas/README.md', import.meta.url), 'utf8');
-  assert.match(readme, /Drive file ID/); assert.match(readme, /same model/); assert.match(readme, /never a scheduler/); assert.match(readme, /general_compute/);
+  assert.match(readme, /Drive file ID/); assert.match(readme, /same model/); assert.match(readme, /never a scheduler/); assert.match(readme, /general_compute/); assert.match(readme, /quota_exhausted/); assert.match(readme, /not a default or standing fallback/);
+});
+test('execution bodies persist evidence without invoking semantic Observer', async () => {
+  const execution = await readFile(new URL('../gas/gas_v8.js', import.meta.url), 'utf8');
+  const federation = await readFile(new URL('../gas/gas_federation.js', import.meta.url), 'utf8');
+  const trigger = await readFile(new URL('../gas/gas_trigger.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(execution, /CT_GAS_OBSERVER\.(pass|consume)/);
+  assert.doesNotMatch(federation, /CT_GAS_OBSERVER\.(pass|consume)/);
+  assert.match(execution, /storeEvidence\(/);
+  assert.match(trigger, /observePendingEvidence\(/);
+});
+test('legacy inline observations are not re-enqueued by the inbox Observer', async () => {
+  const observer = await readFile(new URL('../gas/gas_observer.js', import.meta.url), 'utf8');
+  assert.match(observer, /folders\(\)\[1\]/);
+  assert.doesNotMatch(observer, /observer_ledger.*inbox|inbox.*observer_ledger/);
 });

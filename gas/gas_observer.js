@@ -1,4 +1,25 @@
 var CT_GAS_OBSERVER = (function () {
+  function consume(d) {
+    d=d||{}; if (!d.clock) throw new Error('active clock is required for observer');
+    var inbox=CT_GAS_EVIDENCE.folders()[1], files=inbox.getFiles(), count=0, results=[];
+    while (files.hasNext() && count<Number(d.limit||3) && d.clock.canStart(CT_GAS.OPERATION_BUDGETS.observer)) {
+      var file=files.next(), text=CT_GAS.bound(file.getBlob().getDataAsString(),CT_GAS.MAX_EVIDENCE_BYTES), value;
+      try { value=JSON.parse(text); validate(value,text); } catch (error) { quarantine(file,error); results.push({status:'quarantined',file_id:file.getId()}); count++; continue; }
+      var identity=value.evidenceId+'|'+value.contentHash, id=CT_GAS.id('observer-processing',identity), prior=CT_GAS_STATE.get('observer_processing',id);
+      if (prior && prior.payload && prior.payload.state==='observed') { results.push({status:'duplicate',evidenceId:value.evidenceId}); count++; continue; }
+      if (!prior) CT_GAS_STATE.create('observer_processing',{id:id,kind:'processing',payload:{identity:identity,evidence_id:value.evidenceId,physical_execution_id:value.physicalExecutionId,state:'claimed'}});
+      try { if (typeof d.analyzer!=='function') throw new Error('semantic inference provider unavailable'); var semantic=d.analyzer(value); var observation=appendObservation(value,semantic); CT_GAS_STATE.update('observer_processing',id,{payload:{identity:identity,evidence_id:value.evidenceId,physical_execution_id:value.physicalExecutionId,state:'observed',observation_id:observation.observation_id}}); results.push({status:'observed',evidenceId:value.evidenceId,observation_id:observation.observation_id}); }
+      catch (error) { CT_GAS_STATE.update('observer_processing',id,{payload:{identity:identity,state:'deferred',reason:CT_GAS.bound(error.message||error,240)}}); results.push({status:'deferred',evidenceId:value.evidenceId}); }
+      count++;
+    }
+    return {status:'complete',processed:count,backlog:countFiles(inbox),results:results};
+  }
+  function validate(value,text) { if (!value||value.schema!=='celestan-execution-evidence-v1'||value.version!==1||!value.evidenceId||!value.physicalExecutionId||!value.contentHash) throw new Error('unsupported evidence schema'); var copy={}; Object.keys(value).forEach(function(k){if(k!=='contentHash')copy[k]=value[k];}); if (digest(CT_GAS.json(copy))!==value.contentHash) throw new Error('evidence hash mismatch'); if (text.length>CT_GAS.MAX_EVIDENCE_BYTES) throw new Error('evidence exceeds bound'); }
+  function appendObservation(value,semantic) { var folder=CT_GAS_EVIDENCE.folders()[2], name='observation-'+value.evidenceId, old=folder.getFilesByName(name); if(old.hasNext())return {observation_id:old.next().getId()}; var file=folder.createFile(name,CT_GAS.bound(CT_GAS.json({schema:'celestan-semantic-observation-v1',evidenceId:value.evidenceId,physicalExecutionId:value.physicalExecutionId,observation:semantic,provenance:{evidenceId:value.evidenceId,hash:value.contentHash}}),CT_GAS.MAX_EVIDENCE_BYTES),MimeType.PLAIN_TEXT); return {observation_id:file.getId()}; }
+  function quarantine(file,error) { var folder=CT_GAS_EVIDENCE.folders()[3]; file.moveTo(folder); CT_GAS_STATE.create('observer_processing',{id:CT_GAS.id('quarantine',file.getId()),kind:'processing',payload:{file_id:file.getId(),state:'quarantined',reason:CT_GAS.bound(error.message||error,240)}}); }
+  function countFiles(folder) { var n=0,it=folder.getFiles(); while(it.hasNext()){it.next();n++;} return n; }
+  function digest(text) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,text,Utilities.Charset.UTF_8).map(function(b){return ('0'+(b<0?b+256:b).toString(16)).slice(-2);}).join(''); }
   function pass(d) { d=d||{}; if (d.observer_active) return {status:'skipped',reason:'observer-recursion'}; var started=Date.now(), clock=d.clock; if (!clock) throw new Error('active clock is required for observer'); return CT_GAS.runGuard(clock,'observer-pass',CT_GAS.OPERATION_BUDGETS.observer,function () { var digest=CT_GAS.id('observer-digest',{execution_id:d.execution_id,work_order_id:d.work_order_id,wake_id:d.wake_id,continuation_id:d.continuation_id,evidence:d.evidence}); if (CT_GAS_STATE.observerObserved(d.execution_id,d.work_order_id,d.continuation_id,digest)) return {status:'observed',digest:digest,duplicate:true}; CT_GAS_STATE.event('observer_pending',{execution_id:d.execution_id,physical_execution_id:d.physical_execution_id,work_order_id:d.work_order_id,wake_id:d.wake_id,continuation_id:d.continuation_id,operation:'observer',digest:digest,lifecycle:'pending'}); if (!clock.canStart(CT_GAS.OPERATION_BUDGETS.observer)) return {status:'preempted',reason:'observer-checkpoint'}; CT_GAS_STATE.event('observer_observed',{execution_id:d.execution_id,physical_execution_id:d.physical_execution_id,work_order_id:d.work_order_id,wake_id:d.wake_id,continuation_id:d.continuation_id,operation:'observer',digest:digest,lifecycle:'observed'}); if (!clock.canStart(0)) return {status:'preempted',reason:'observer-post-operation'}; return {status:'observed',digest:digest,latency_ms:Date.now()-started}; }); }
-  return {pass:pass};
+  return {pass:pass,consume:consume};
 }());
+function observePendingEvidence(clock) { return CT_GAS_OBSERVER.consume({clock:clock,limit:3}); }

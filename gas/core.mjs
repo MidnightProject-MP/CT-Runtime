@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const GAS_SHEETS = Object.freeze(['executions', 'work_orders', 'wakes', 'continuations', 'observer_ledger', 'memory', 'lessons', 'identity_signals', 'foundry_signals', 'model_telemetry', 'evidence', 'chronicle', 'schema']);
+export const GAS_SHEETS = Object.freeze(['executions', 'work_orders', 'wakes', 'continuations', 'observer_ledger', 'memory', 'lessons', 'identity_signals', 'foundry_signals', 'model_telemetry', 'evidence', 'chronicle', 'schema', 'observer_processing']);
 export const GAS_BUDGET_MS = 240000;
 export const GAS_MIN_BUDGET_MS = 30000;
 export const GAS_MAX_BUDGET_MS = 300000;
