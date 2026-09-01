@@ -7,12 +7,12 @@ set -euo pipefail
 : "${IMAGE:?set IMAGE to an immutable image digest}"
 : "${RUNTIME_SERVICE_ACCOUNT:?set RUNTIME_SERVICE_ACCOUNT}"
 : "${SCHEDULER_SERVICE_ACCOUNT:?set SCHEDULER_SERVICE_ACCOUNT}"
-: "${MODEL:?set MODEL}"
+: "${MODEL:=openrouter/nvidia/nemotron-3-ultra-550b-a55b:free}"
 : "${AGENT:?set AGENT}"
 : "${TASK:?set TASK without commas}"
 : "${NONSECRET_ENV:?set NONSECRET_ENV to the comma-separated values from cloud-run-job.env.example}"
-: "${PROVIDER_SECRET_NAMES:=OPENAI_API_KEY}"
-: "${PROVIDER_SECRET_BINDINGS:=OPENAI_API_KEY=ct-runtime-openai-api-key:latest}"
+: "${PROVIDER_SECRET_NAMES:=OPENROUTER_API_KEY}"
+: "${PROVIDER_SECRET_BINDINGS:=OPENROUTER_API_KEY=ct-runtime-openrouter-api-key:latest}"
 
 if [[ ! "$IMAGE" =~ @sha256:[a-f0-9]{64}$ ]]; then
   echo "IMAGE must use an immutable sha256 digest" >&2

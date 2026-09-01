@@ -21,12 +21,21 @@ test('production configuration fails closed and filesystem mode stays explicit',
 
 test('S3 evidence is capped, content addressed, and verifies protected object fields', async () => {
   const calls = [];
-  const client = { send: async (command) => { calls.push(command.input); const put = calls.find((item) => item.Body); return command.constructor.name === 'HeadObjectCommand' ? { ContentLength: 4, ContentType: put.ContentType, Metadata: put.Metadata, ChecksumSHA256: put.ChecksumSHA256 } : {}; } };
+  let put;
+  const client = { send: async (command) => {
+    calls.push(command.input);
+    if (command.constructor.name === 'GetObjectCommand') {
+      if (!put) { const error = new Error('missing'); error.name = 'NoSuchKey'; throw error; }
+      return { Body: put.Body, ContentLength: put.Body.length, ContentType: put.ContentType, Metadata: put.Metadata };
+    }
+    put = command.input;
+    return {};
+  } };
   const evidence = new S3EvidenceStore({ bucket: 'bucket', client });
-  const result = await evidence.put({ project: 'p', executionId: 'e', attempt: 1, label: 'stdout', content: 'test' });
-  assert.equal(result.bytes, 4); assert.equal(result.truncated, false); assert.match(result.objectKey, /stdout-/); assert.equal(calls.length, 2);
-  assert.equal(calls[0].IfNoneMatch, '*');
-  assert.equal(calls[0].Metadata['retention-policy-version'], '1');
+  const result = await evidence.put({ project: 'p', executionId: 'e', attempt: 1, label: 'stdout', content: Buffer.alloc(64 * 1024 + 1, 'x') });
+  assert.equal(result.bytes, 64 * 1024); assert.equal(result.truncated, true); assert.match(result.objectKey, /stdout-/); assert.equal(calls.length, 2);
+  assert.equal(put.IfNoneMatch, '*');
+  assert.equal(put.Metadata['retention-policy-version'], '1');
   await assert.rejects(() => evidence.put({ project: 'p', executionId: 'e', attempt: 1, label: 'stdout', content: 'test', metadata: { task: 'secret-bearing text' } }), /metadata is not accepted/);
 });
 

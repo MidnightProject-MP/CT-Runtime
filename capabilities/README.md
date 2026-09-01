@@ -21,13 +21,20 @@ Change binding → no change to Celestan logic.
 | Capability | Purpose | Authority | Replaceable adapters |
 |---|---|---|---|
 | `durable_state` | canonical transactional continuity | canonical | `postgres` (Neon/Supabase/pg), `filesystem` (local/test) |
-| `evidence_store` | raw/bulky logs/artifacts/provenance | referenced | `s3` (R2/S3/MinIO), `filesystem` |
+| `evidence_store` | raw/bulky logs/artifacts/provenance | referenced | `s3` (AWS S3/Backblaze B2/R2/MinIO), `filesystem` |
 | `project_system` | goals, work items, priorities, blockers | human-authoritative | `jira`, `linear`, `github_issues` |
 | `knowledge_publishing` | Chronicle, decisions, lessons | curated | `git` (Markdown), `confluence`, `obsidian` |
 | `code_repository` | source, commits, releases | source | `github`, `gitlab` |
-| `scheduler` | mechanical wake triggering | mechanical | `cloud_scheduler`, `systemd_timer`, `cron` |
+| `disposable_compute` | bounded ephemeral execution | mechanical | `northflank_sandbox`, `filesystem` |
+| `scheduler` | mechanical wake triggering | mechanical | `northflank`, `cloud_scheduler`, `systemd_timer`, `cron` |
+| `agent_executor` | bounded model turn execution | mechanical | `gas` |
+| `workspace` | bounded repository API access | source | `gas` |
+| `test_executor` | bounded CI dispatch and observation | mechanical | `gas` |
+| `model_provider` | model transport | mechanical | `gas` |
 
 Provider-specific details (endpoints, rate limits, free-tier quotas, IAM) remain inside the adapter.
+
+The GAS adapters are selected only by explicit `CT_RUNTIME_MODE=gas` or a project/explicit override. Production defaults remain unchanged. GAS deliberately has no `general_compute` implementation.
 Celestan code never says “write to Neon” — it says:
 
 ```js
@@ -67,13 +74,15 @@ await health('durable_state');
 
 ## Where persistence fits
 
-- **Disposable container** → `CT-Runtime` image only
+- **Disposable container** → `CT-Runtime` image only, with Northflank as the current prototype provider
+
+- **Model provider** → OpenRouter, strict free-only (`$0` spend limit), using `OPENROUTER_API_KEY`; first unattended model `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`. Provider/rate-limit failures are durably deferred as bounded `retry` wakes with the same requested model.
 - **`durable_state`** → `PostgresStore` adapter (standard `pg`, not Neon SDK)
 - **`evidence_store`** → `S3EvidenceStore` adapter (standard S3, not R2 SDK)
 - **`code_repository` + `knowledge_publishing`** → `GitHub` / `Git`
 
 Changing Neon to Supabase changes `CT_RUNTIME_DATABASE_URL`, not Celestan code.
-Changing R2 to S3 changes `CT_RUNTIME_S3_ENDPOINT`, not Celestan code.
+Changing the S3-compatible provider changes `CT_RUNTIME_S3_*`, not Celestan code or the `s3` adapter binding.
 
 ## Foundry / Observer
 

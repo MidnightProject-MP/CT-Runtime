@@ -8,7 +8,7 @@ Celestan reasons over **purposes and contracts**, not vendors.
 
 **Capability** — what Celestan needs. Defined by purpose, operations, guarantees, authority, constraints. Example: `durable_state` = canonical transactional continuity; operations `createManifest`, `lease`, `finalizeExecution`, etc.; guarantees `fenced-leases`, `idempotent-manifests`; authority `canonical`.
 
-**Adapter** — concrete implementation for a vendor. Example: `durable_state:postgres` (standard `pg`, works with Neon/Supabase/self-hosted), `durable_state:filesystem` (local), `evidence_store:s3` (standard S3, works with R2/S3/MinIO).
+**Adapter** — concrete implementation for a vendor. Example: `durable_state:postgres` (standard `pg`, works with Neon/Supabase/self-hosted), `durable_state:filesystem` (local), `evidence_store:s3` (standard S3-compatible API, works with AWS S3/Backblaze B2/R2/MinIO).
 
 **Binding** — currently selected adapter, global + per-project. Example:
 ```json
@@ -39,7 +39,10 @@ Provider details (endpoints, quotas, IAM) remain inside the adapter.
 | `project_system` | goals/work items/blockers | `jira`, `linear`, `github_issues` |
 | `knowledge_publishing` | Chronicle/decisions/lessons | `git` (Markdown), `confluence`, `obsidian` |
 | `code_repository` | source/commits/releases | `github`, `gitlab` |
-| `scheduler` | mechanical wake triggering | `cloud_scheduler`, `systemd_timer`, `cron` |
+| `disposable_compute` | bounded ephemeral execution | `northflank_sandbox`, `filesystem` |
+| `scheduler` | mechanical wake triggering | `northflank`, `cloud_scheduler`, `systemd_timer`, `cron` |
+
+The Northflank prototype uses OpenRouter with exact secret `OPENROUTER_API_KEY`, `CT_RUNTIME_FREE_ONLY=true`, and a `$0` spend limit. Its first unattended requested model is `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`; unavailable or rate-limited free execution is deferred with a durable bounded `retry` wake, never a paid fallback.
 
 See `lib/capabilities/definitions.mjs` (contracts), `lib/capabilities/adapters.mjs` (catalog), `lib/capabilities/bindings.mjs` (resolver), `bindings.example.json` (sample).
 
@@ -78,7 +81,7 @@ $env:CELESTAN_BINDINGS_JSON='{"global":{"durable_state":"postgres","evidence_sto
 node bin/ct-runtime.mjs run --project BorderCrossing ...
 ```
 
-Standard Postgres and S3 interfaces keep bindings replaceable (Neon→Supabase changes only `CT_RUNTIME_DATABASE_URL`, R2→S3 changes only `CT_RUNTIME_S3_ENDPOINT`).
+Standard Postgres and S3 interfaces keep bindings replaceable (Neon→Supabase changes only `CT_RUNTIME_DATABASE_URL`; changing the S3-compatible provider changes only the `CT_RUNTIME_S3_*` configuration).
 
 ## Files
 
@@ -86,3 +89,6 @@ Standard Postgres and S3 interfaces keep bindings replaceable (Neon→Supabase c
 - `bindings.example.json` — global + per-project sample
 - `lib/capabilities/definitions.mjs`, `adapters.mjs`, `bindings.mjs`, `registry.mjs`
 - `lib/stores.mjs:createCapabilityStores()` — capability-first production wiring (legacy `createStore` preserved for tests)
+## GAS binding
+
+`gas/` is an optional provider binding for `durable_state`, `evidence_store`, `scheduler`, `agent_executor`, `workspace`, `test_executor`, and `model_provider`. Its continuation mapping is Sheets `continuations` plus `work_orders` and `executions`; its scheduler mapping is one locked recurring safety trigger plus idempotent identity-bearing wake records. `CT_GAS.runGuard()` provides cooperative preemption, with a reserved non-recursive emergency checkpoint; duration limits never request `general_compute`, which requires an exact non-duration capability reason. Observer proof is a deterministic correlated pending/observed ledger lifecycle, not a semantic pass claim. It is not selected by production defaults. See `gas/README.md` for human-only setup and its explicit lack of `general_compute`.

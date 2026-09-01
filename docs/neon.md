@@ -44,9 +44,9 @@ Provider-neutral: Celestan calls `request('durable_state', {project})` → `Post
 ## What remains human-owned
 
 * **Neon account/billing** already exists — no further Neon human action unless rotating `celestan_runtime`/`celestan_migrator` passwords (`neon roles reset-password`) or changing region. Local `~/.config/neon/` (`celestan-ct-runtime` profile) stays on workstation — Cloud Run image receives only `celestan_runtime` pooled secret, never `~/.config/neon` or owner URL (verified `docker inspect` + `.dockerignore` allowlist).
-* **R2 / S3 `evidence_store`** not yet provisioned — next blocking human step per Human Setup Requirements Report `C2`.
+* **`evidence_store`** uses the provider-neutral `s3` adapter. Backblaze B2 is the active accepted binding; its acceptance status and configuration are recorded in `docs/backblaze-b2.md`.
 * **Cloud Run + Scheduler** `scheduler` binding and Oracle `systemd_timer` — next human steps `C3/C4` (wake job gets only `celestan_runtime` pooled, migrator job gets only `celestan_migrator` direct).
 
 ## Remaining autonomous steps (Celestan, after you hand off secrets via Secret Manager)
 
-* No code change for Neon; standard adapter stands. Celestan will, without further input, use `celestan_runtime` pooled URL for runtime, direct for one-off `migrate`, run `doctor`/`reconstruct` on every fresh container, and execute the `Cloud Run → Oracle → fresh Cloud Run` continuity experiment once R2 + compute hosts are available.
+* No code change for Neon; standard adapter stands. Celestan will, without further input, use `celestan_runtime` pooled URL for runtime, direct for one-off `migrate`, run `doctor`/`reconstruct` on every fresh container, and execute the `Cloud Run → Oracle → fresh Cloud Run` continuity experiment once the external evidence-store gates and compute hosts are available.

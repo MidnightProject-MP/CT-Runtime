@@ -6,6 +6,7 @@ import { mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { Store, classifyFailure, invoke, observePending, recover, redact, resolveExecutable, runProcess, runScheduler, validateCelestanResult, validateNextWake, validateTopology } from '../lib/runtime.mjs';
+import { loadConfig, validateModelPolicy } from '../lib/config.mjs';
 
 const fixture = path.join(process.cwd(), 'test', 'fixture-runner.mjs');
 const base = (store, extra = {}) => store.createManifest({ executionId: extra.executionId || 'run-1', project: 'demo', task: 'test task', model: 'provider/model', agent: 'build', ...extra });
@@ -34,6 +35,42 @@ test('wake contract and failure classes are bounded', () => {
   assert.throws(() => validateNextWake({ ...wake, extra: true }), /unexpected/);
   assert.deepEqual(classifyFailure({ code: 'ETIMEDOUT' }), { category: 'timeout', retryable: true });
   assert.deepEqual(classifyFailure(new Error('cancelled')), { category: 'cancellation', retryable: false });
+});
+
+test('production strict-free policy accepts only bounded OpenRouter free models', () => {
+  const model = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';
+  assert.equal(validateModelPolicy(model, { mode: 'production', freeOnly: true }), model);
+  for (const invalid of ['openai/gpt-4o:free', 'openrouter/example/model', 'openrouter/example/model:paid']) assert.throws(() => validateModelPolicy(invalid, { mode: 'production', freeOnly: true }), /OpenRouter/);
+});
+
+test('runtime configuration defaults to the OpenRouter secret name', () => {
+  assert.deepEqual(loadConfig({}).providerSecretNames, ['OPENROUTER_API_KEY']);
+});
+
+test('first unattended scheduler launch carries the exact caller model and preserves telemetry', async () => {
+  const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-')), { mode: 'production', freeOnly: true });
+  const model = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';
+  await store.schedule({ ...wake, time: new Date(Date.now() - 1000).toISOString() }, { model, agent: 'a', task: 'bootstrap', command: process.execPath, commandArgs: [fixture] });
+  const result = await runScheduler({ store, invokeOptions: { model, agent: 'a', task: 'bootstrap', command: process.execPath, commandArgs: [fixture], maxRetries: 0 } });
+  assert.equal(result.launched[0].status, 'success');
+  const manifest = (await store.manifestsAll())[0];
+  assert.equal(manifest.execution.model, model);
+  assert.deepEqual(manifest.modelRuntimeTelemetry, { availability: 'available', aggregate: { stdout: 0, stderr: 0, chunks: 0 } });
+});
+
+test('provider stderr durably defers the same model without a paid fallback', async () => {
+  const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-')));
+  const model = 'openrouter/example/model:free';
+  const script = "process.stderr.write('429 rate limit from provider'); process.exitCode=1; require('fs').writeFileSync(process.env.CT_RUNTIME_RESULT_FILE, JSON.stringify({status:'complete',summary:'deferred',requested_next_wake:null}))";
+  await store.schedule({ ...wake, time: new Date(Date.now() - 1000).toISOString() }, { model, agent: 'a', task: 'bootstrap', command: process.execPath, commandArgs: ['-e', script] });
+  const result = await runScheduler({ store, invokeOptions: { model, agent: 'a', task: 'bootstrap', command: process.execPath, commandArgs: ['-e', script], maxRetries: 0 } });
+  assert.equal(result.launched[0].status, 'failed');
+  const schedules = await Promise.all((await readdir(path.join(store.root, 'schedules'))).map((name) => readFile(path.join(store.root, 'schedules', name), 'utf8').then(JSON.parse)));
+  const deferred = schedules.find((item) => item.wake.reason === 'retry');
+  assert.equal(deferred.launch.model, model);
+  assert.equal(deferred.launch.model.includes(':paid'), false);
+  const original = schedules.find((item) => item.wake.reason === 'self_scheduled');
+  assert.equal((await store.manifest(original.executionId)).modelRuntimeTelemetry.availability, 'available');
 });
 
 test('actual timeout retries exactly the configured bounded count and persists attribution', async () => {

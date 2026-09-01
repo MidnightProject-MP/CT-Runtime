@@ -5,8 +5,20 @@
     "evidence_store": "s3",
     "code_repository": "github",
     "knowledge_publishing": "git",
-    "scheduler": "cloud_scheduler",
+    "disposable_compute": "northflank_sandbox",
+    "scheduler": "northflank",
     "project_system": "github_issues"
+  },
+  "modes": {
+    "gas": {
+      "durable_state": "gas",
+      "evidence_store": "gas",
+      "scheduler": "gas",
+      "agent_executor": "gas",
+      "workspace": "gas",
+      "test_executor": "gas",
+      "model_provider": "gas"
+    }
   },
   "projects": {
     "BorderCrossing": {
@@ -21,8 +33,9 @@
     }
   },
   "_notes": {
+    "model_provider": "OpenRouter only for the prototype; bind exact runtime secret OPENROUTER_API_KEY, set CT_RUNTIME_FREE_ONLY=true and a $0 spend limit. First unattended model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free. Provider/rate-limit failures defer the same launch with a bounded retry wake; no paid fallback.",
     "durable_state": "postgres adapter is standard Postgres (works with Neon/Supabase/self-hosted). Binding stays 'postgres' if you switch provider — only connection string changes.",
-    "evidence_store": "s3 adapter is S3-compatible (R2/S3/MinIO). Switch provider by changing endpoint/region, binding stays 's3'.",
+    "evidence_store": "s3 adapter is S3-compatible (AWS S3/Backblaze B2/R2/MinIO). Switch provider by changing endpoint/region, binding stays 's3'.",
     "knowledge_publishing": "Celestan calls: publishChronicle({ period, markdown }) via knowledge_publishing. Adapter is 'git' today, 'confluence' tomorrow — Celestan unchanged.",
     "project_system": "Celestan calls: listWork({ project }) via project_system. Adapter varies per project; BorderCrossing uses Jira, others use GitHub Issues."
   }

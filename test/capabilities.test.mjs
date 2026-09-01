@@ -33,13 +33,14 @@ test('adapters expose purpose-level metadata, not just provider', () => {
   assert.ok(getAdapter('durable_state', 'filesystem').meta.provider.includes('filesystem'));
   assert.ok(getAdapter('evidence_store', 's3').meta.provider.includes('S3-compatible'));
   // provider specifics remain inside adapter
-  assert.ok(getAdapter('evidence_store', 's3').meta.configRequirements.includes('CT_RUNTIME_S3_BUCKET'));
+  assert.deepEqual(getAdapter('evidence_store', 's3').meta.configRequirements, ['CT_RUNTIME_S3_BUCKET']);
 });
 
 test('binding is replaceable without changing Celestan code', () => {
   // global default: filesystem mode → filesystem
   assert.equal(resolveBinding('durable_state', { env: { CT_RUNTIME_MODE: 'filesystem' } }), 'filesystem');
   assert.equal(resolveBinding('durable_state', { env: { CT_RUNTIME_MODE: 'production' } }), 'postgres');
+  assert.equal(resolveBinding('evidence_store', { env: { CT_RUNTIME_MODE: 'production' } }), 's3');
 
   // per-project override via CELESTAN_BINDINGS_JSON
   const env = {
