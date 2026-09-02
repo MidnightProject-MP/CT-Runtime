@@ -67,3 +67,18 @@ test('GAS admits sanitized historical structure only with a runtime-valid envelo
   assert.equal(context.CT_GAS_OBSERVER.semanticEligibility({ ...sanitized, evidenceFidelity: { ...sanitized.evidenceFidelity, mode: 'rich', sourceView: 'ephemeral-unsanitized-rich-extraction', derivedTextPersisted: true } }).reason, 'rich extraction is recovery-only');
   assert.equal(context.CT_GAS_OBSERVER.validSemanticEnvelope({ ...envelope, sources: [{ ...envelope.sources[0], sourceClass: 'self-verified' }] }), false);
 });
+
+test('GAS Observer chunks a bounded semantic envelope within message limits', async () => {
+  let request;
+  const context = vm.createContext({ console, JSON, Date, isFinite, PropertiesService: { getScriptProperties: () => ({ getProperty: () => 'minimax/minimax-m3:free' }) }, CT_GAS_STATE: {}, CT_GAS_EVIDENCE: {}, CT_GAS_AGENT: { execute(value) { request = value; return { status: 'complete', output: '{"schema":"celestan-semantic-observation-v1"}' }; } }, MimeType: {}, Utilities: { DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' }, computeDigest(_algorithm, text) { return [...crypto.createHash('sha256').update(String(text)).digest()].map((byte) => byte > 127 ? byte - 256 : byte); } } });
+  vm.runInContext(await readFile(new URL('../gas/gas_core.js', import.meta.url), 'utf8'), context);
+  vm.runInContext(await readFile(new URL('../gas/gas_observer.js', import.meta.url), 'utf8'), context);
+  const sources = [{ sourceId: 'source-1', sourceClass: 'mechanically-verified', reference: 'test://source', sha256: 'a'.repeat(64), sourceExecutionId: 'execution-1' }];
+  const claims = Array.from({ length: 6 }, (_, index) => ({ claimId: `claim-${index}`, claimType: 'verification', statement: 'x'.repeat(700), supportSourceIds: ['source-1'] }));
+  const semanticEvidenceEnvelope = createSemanticEvidenceEnvelope({ lineage: { physicalExecutionId: 'physical-1', workOrderId: 'work-1' }, sources, claims });
+  const result = context.CT_GAS_OBSERVER.infer({ evidenceId: 'evidence-1', semanticEvidenceEnvelope }, { canStart: () => true });
+  assert.equal(result.schema, 'celestan-semantic-observation-v1');
+  assert.equal(request.maxTokens, 2048);
+  assert.ok(request.messages.length > 2);
+  assert.ok(request.messages.every((message) => message.content.length <= context.CT_GAS.MAX_MESSAGE));
+});
