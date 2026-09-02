@@ -24,6 +24,13 @@ function configureGasPrototype() {
   return { model: props.getProperty('CT_GAS_PROOF_MODEL'), budgetMs: Number(props.getProperty('CT_GAS_BUDGET_MS')) };
 }
 
+function configureGasObserverModel(model) {
+  model=CT_GAS.canonicalModel(model);
+  CT_GAS.freeModel(model);
+  PropertiesService.getScriptProperties().setProperty('CT_GAS_OBSERVER_MODEL',model);
+  return {model:model};
+}
+
 function startGasProof() {
   var props = PropertiesService.getScriptProperties(), model = props.getProperty('CT_GAS_PROOF_MODEL');
   CT_GAS.freeModel(model);
@@ -43,6 +50,33 @@ function inspectGasProofState(workOrderId) {
   var rows = CT_GAS_STATE.list('wakes').filter(function (row) { return !workOrderId || (row.payload && row.payload.work_order_id === workOrderId); });
   return { work_orders: CT_GAS_STATE.list('work_orders').filter(function (row) { return !workOrderId || row.id === workOrderId; }).map(function (row) { return { id: row.id, lifecycle: row.lifecycle, payload: row.payload && { step: row.payload.step, model: row.payload.model, next_operation: row.payload.next_operation, physical_execution_count: row.payload.physical_execution_count } }; }), wakes: rows.map(function (row) { return { id: row.id, lifecycle: row.lifecycle, owner: row.owner || '', fence: row.fence ? String(row.fence) : '', payload: row.payload && { work_order_id: row.payload.work_order_id, continuation_id: row.payload.continuation_id, reason: row.payload.reason } }; }) };
 }
+
+function inspectObserverEvidence(evidenceId) {
+  var evidence=CT_GAS_STATE.list('evidence').filter(function (row) { return !evidenceId || row.payload && row.payload.evidence_id===evidenceId; }).map(function (row) { return { id:row.id, payload:row.payload && { evidence_id:row.payload.evidence_id, execution_id:row.payload.execution_id, physical_execution_id:row.payload.physical_execution_id, drive_file_id:row.payload.drive_file_id, sha256:row.payload.sha256, schema:row.payload.schema } }; });
+  var processing=CT_GAS_STATE.list('observer_processing').filter(function (row) { return !evidenceId || row.payload && row.payload.evidence_id===evidenceId; }).map(function (row) { return { id:row.id, payload:row.payload }; });
+  var observer=CT_GAS_STATE.list('observer_ledger').filter(function (row) { return !evidenceId || row.payload && row.payload.evidence_id===evidenceId || row.payload && row.payload.execution_id===evidenceId; }).slice(-20).map(function (row) { return { id:row.id, kind:row.kind, payload:row.payload }; });
+  return { evidence:evidence, processing:processing, observer:observer, inbox_files:countFolderFiles(CT_GAS_EVIDENCE.folders()[1]), processed_files:countFolderFiles(CT_GAS_EVIDENCE.folders()[2]) };
+}
+function inspectObserverModelTelemetry(evidenceId) {
+  var executionId='observer-'+String(evidenceId||'');
+  return CT_GAS_STATE.list('model_telemetry').filter(function(row){return row.payload&&row.payload.execution_id===executionId;}).slice(-10).map(function(row){return {id:row.id,payload:row.payload};});
+}
+function inspectObserverObservation(evidenceId) {
+  var rows=CT_GAS_STATE.list('observer_processing').filter(function(row){return row.payload&&row.payload.evidence_id===evidenceId&&row.payload.state==='observed'&&row.payload.observation_id;});
+  if(!rows.length)return null;
+  var id=rows[rows.length-1].payload.observation_id,value=JSON.parse(CT_GAS.bound(DriveApp.getFileById(id).getBlob().getDataAsString(),CT_GAS.MAX_EVIDENCE_BYTES));
+  return {observation_id:id,schema:value.schema,evidenceId:value.evidenceId,physicalExecutionId:value.physicalExecutionId,observation:value.observation,provenance:value.provenance};
+}
+function repairObservedObserverState(evidenceId) {
+  var rows=CT_GAS_STATE.list('observer_processing').filter(function(row){return row.payload&&row.payload.evidence_id===evidenceId&&row.payload.state==='observed'&&row.payload.observation_id;});
+  if(!rows.length)return {status:'unchanged',reason:'observed-state-unavailable'};
+  var row=rows[rows.length-1]; CT_GAS_STATE.update('observer_processing',row.id,{payload:{reason:null}});
+  return {status:'repaired',evidenceId:evidenceId,observation_id:row.payload.observation_id};
+}
+function runObserverEvidenceBatch() {
+  return observePendingEvidence(CT_GAS.clock(Date.now(),PropertiesService.getScriptProperties().getProperty('CT_GAS_BUDGET_MS')));
+}
+function countFolderFiles(folder) { var n=0, files=folder.getFiles(); while(files.hasNext()){files.next();n++;} return n; }
 
 function auditGitHubAccess() {
   var clock = CT_GAS.clock(Date.now(), 30000);
@@ -115,6 +149,19 @@ function smokeFreeGasCandidates() {
     if (ok) selected = candidate.id;
   });
   return { status: selected ? 'complete' : 'failed', selected_model: selected, tested: results };
+}
+
+function smokeFreeGasModel(model) {
+  model=CT_GAS.canonicalModel(model); CT_GAS.freeModel(model);
+  var key=PropertiesService.getScriptProperties().getProperty('OPENROUTER_API_KEY');
+  if(!key)return {status:'blocked',classification:'missing-key',model:model};
+  var catalog=discoverFreeGasModels();
+  if(catalog.status!=='complete'||!catalog.candidates.some(function(candidate){return candidate.id===model&&candidate.prompt_price==='0'&&candidate.completion_price==='0';}))return {status:'blocked',classification:'price-not-verified',model:model};
+  var started=Date.now(),response;
+  try{response=UrlFetchApp.fetch('https://openrouter.ai/api/v1/chat/completions',{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+key},payload:JSON.stringify({model:model,messages:[{role:'user',content:'Return exactly the word ACK.'}],max_tokens:256}),muteHttpExceptions:true});}catch(_){return {status:'failed',classification:'gas-urlfetch-error',model:model,retryable:true,elapsed_ms:Date.now()-started};}
+  var code=response.getResponseCode(),parsed=null; try{parsed=JSON.parse(CT_GAS.bound(response.getContentText(),12000));}catch(_){}
+  var output=parsed&&parsed.choices&&parsed.choices[0]&&parsed.choices[0].message&&parsed.choices[0].message.content,ok=code>=200&&code<300&&typeof output==='string'&&output.length>0;
+  return {status:ok?'complete':'failed',classification:ok?'success':code===429?'free-model-quota-or-rate-limit':code>=500?'upstream-provider-unavailable-or-congested':code===400||code===422?'bad-request-or-model-contract':'provider-http-error',model:model,http_code:code,retryable:code===408||code===409||code===425||code===429||code>=500,elapsed_ms:Date.now()-started,provider_model:parsed&&(parsed.model||parsed.id)||null,semantic_output:ok?CT_GAS.bound(output,80):null};
 }
 
 function activateGasFreeFallback() {

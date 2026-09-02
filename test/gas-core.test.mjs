@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GAS_SHEETS, deterministicId, validateFreeModel, proveAcrossWakes, redact, boundedBudget, createClock, buildContinuation, validateContinuation } from '../gas/core.mjs';
 import { readFile } from 'node:fs/promises';
+import crypto from 'node:crypto';
+import vm from 'node:vm';
+import { createSemanticEvidenceEnvelope } from '../lib/semantic-evidence.mjs';
+import { canonicalJson } from '../lib/config.mjs';
 
 test('GAS source has no Node globals or module imports', async () => {
   const files = ['gas_core.js','gas_state.js','gas_trigger.js','gas_federation.js','gas_v8.js','gas_observer.js','gas_evidence.js','gas_agent_executor.js','gas_github.js','gas_actions.js'];
@@ -39,4 +43,27 @@ test('legacy inline observations are not re-enqueued by the inbox Observer', asy
   const observer = await readFile(new URL('../gas/gas_observer.js', import.meta.url), 'utf8');
   assert.match(observer, /folders\(\)\[1\]/);
   assert.doesNotMatch(observer, /observer_ledger.*inbox|inbox.*observer_ledger/);
+});
+test('historical OpenCode eligibility separates sanitized structure from rich recovery provenance', async () => {
+  const observer = await readFile(new URL('../gas/gas_observer.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(observer, /value\.substrate==='opencode-local-historical' \|\| !validSemanticEnvelope/);
+  assert.match(observer, /f\.mode==='sanitized'/);
+  assert.match(observer, /f\.sourceView==='sanitized-structural'/);
+  assert.match(observer, /rich extraction is recovery-only/);
+  assert.match(observer, /validated claim envelope is unavailable/);
+  assert.match(observer, /celestan-legacy-artifact-classification-v1/);
+  assert.match(observer, /semanticEligibility:'ineligible'/);
+});
+
+test('GAS admits sanitized historical structure only with a runtime-valid envelope', async () => {
+  const context = vm.createContext({ console, JSON, Date, isFinite, PropertiesService: {}, CT_GAS_STATE: {}, CT_GAS_EVIDENCE: {}, CT_GAS_AGENT: {}, MimeType: {}, Utilities: { DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' }, computeDigest(_algorithm, text) { return [...crypto.createHash('sha256').update(String(text)).digest()].map((byte) => byte > 127 ? byte - 256 : byte); } } });
+  vm.runInContext(await readFile(new URL('../gas/gas_core.js', import.meta.url), 'utf8'), context);
+  vm.runInContext(await readFile(new URL('../gas/gas_observer.js', import.meta.url), 'utf8'), context);
+  const envelope = createSemanticEvidenceEnvelope({ lineage: { physicalExecutionId: 'historical-observer-1', workOrderId: 'work-1' }, sources: [{ sourceId: 'source-1', sourceClass: 'operator-supplied', reference: 'operator://claim-1', sha256: null, sourceExecutionId: null }], claims: [{ claimId: 'claim-1', claimType: 'objective', statement: 'Evaluate the historical execution.', supportSourceIds: ['source-1'] }] });
+  const sanitized = { substrate: 'opencode-local-historical', evidenceFidelity: { mode: 'sanitized', sourceView: 'sanitized-structural', semanticEligibility: 'structural-only', rawSourceDocumentPersisted: false, derivedTextPersisted: false }, semanticEvidenceEnvelope: envelope };
+  assert.equal(context.CT_GAS_OBSERVER.semanticEligibility(sanitized).eligible, true);
+  assert.equal(context.CT_GAS_OBSERVER.semanticEligibility(JSON.parse(canonicalJson(sanitized))).eligible, true);
+  assert.equal(context.CT_GAS_OBSERVER.semanticEligibility({ ...sanitized, semanticEvidenceEnvelope: undefined }).reason, 'validated claim envelope is unavailable');
+  assert.equal(context.CT_GAS_OBSERVER.semanticEligibility({ ...sanitized, evidenceFidelity: { ...sanitized.evidenceFidelity, mode: 'rich', sourceView: 'ephemeral-unsanitized-rich-extraction', derivedTextPersisted: true } }).reason, 'rich extraction is recovery-only');
+  assert.equal(context.CT_GAS_OBSERVER.validSemanticEnvelope({ ...envelope, sources: [{ ...envelope.sources[0], sourceClass: 'self-verified' }] }), false);
 });

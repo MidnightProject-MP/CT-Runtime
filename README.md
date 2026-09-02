@@ -25,6 +25,9 @@ node bin/ct-runtime.mjs schedule --store C:\temp\ct --time 2030-01-01T00:00:00Z 
 node bin/ct-runtime.mjs scheduler --store C:\temp\ct --model provider/model --agent build --task "inspect" --cwd C:\work --observer C:\Celestan\projects\CT-Foundry\capabilities\observer\observer.mjs --opencode opencode
 node bin/ct-runtime.mjs recover --store C:\temp\ct
 node bin/ct-runtime.mjs observe-pending --store C:\temp\ct --observer C:\Celestan\projects\CT-Foundry\capabilities\observer\observer.mjs --semantic-result C:\temp\semantic.json
+node bin/ct-runtime.mjs evidence export run-example --store C:\temp\ct
+node bin/ct-runtime.mjs evidence export ses_01ABC --store C:\temp\ct --opencode opencode
+node bin/ct-runtime.mjs evidence backfill --store C:\temp\ct
 node bin/ct-runtime.mjs status --store C:\temp\ct
 ```
 
@@ -40,13 +43,21 @@ Every non-dry run receives an ephemeral OS-temporary `CT_RUNTIME_RESULT_FILE`, r
 
 The only accepted keys are `status`, `summary`, and `requested_next_wake`. The latter is either `null` or exactly `{time,reason,priority,project}`. Invalid or missing handoff is a bounded validation failure and never causes a guessed wake. A valid request is persisted and scheduled by digest idempotency.
 
+`complete` and the resulting runtime `success` describe only a bounded execution and valid handoff. They do not establish that the work-order claim, project objective, deployment, or user outcome succeeded; that judgment remains caller-owned and requires evidence appropriate to the claim.
+
+## Claim-level semantic evidence
+
+Envelopes use `celestan-semantic-evidence-envelope-v1`. The core rule is that every claim is bounded, source-linked, and classified; execution success never upgrades a claim into objective or outcome truth. Sources are explicitly classified as operator-supplied, execution-reported, mechanically-verified, independently-reviewed, runtime-observed, or provider-reported. Drafts contain only `sources` and `claims`; transcripts and reasoning are never accepted or persisted. Observer binds the structural digest and envelope in an immutable `celestan-observer-evidence-join-v1`; no semantic task or result is admitted without that join and cited claim IDs.
+
 ## Recovery and observation
 
-`recover` scans stale `manifested`, `running`, `retrying`, and `requeued` executions using the persisted lease TTL contract, fences the old lease, records the interrupted attempt as crashed, and requeues infrastructure recovery up to a bounded limit. It never reports success or fabricates a terminal recovered state. Terminal records are eligible for `observe-pending`; the manifest records pending, observed, or bounded pending failure transactionally with Observer lifecycle state. The runtime creates an immutable digest and semantic-task artifact. A caller may provide a bounded semantic JSON file or configure the optional OpenCode reflection provider; invalid or unavailable reflection remains pending and never invents semantic content. Observer executions are excluded from recursive observation.
+`recover` scans stale `manifested`, `running`, `retrying`, and `requeued` executions using the persisted lease TTL contract, fences the old lease, records the interrupted attempt as crashed, and requeues infrastructure recovery up to a bounded limit. It never reports success or fabricates a terminal recovered state. Terminal records are eligible for `observe-pending`; the manifest records pending, observed, or semantic-evidence-insufficient transactionally with Observer lifecycle state. The runtime creates a semantic task only after sealing an eligible evidence join. A caller may provide bounded semantic JSON or configure the optional OpenCode reflection provider; invalid or unavailable reflection remains pending and never invents semantic content. Observer executions are excluded from recursive observation.
 
 Production model telemetry uses `PostgresObserverStore.appendModelTelemetryEnvelope()`. These authoritative sessions, invocations, failures, and transitions are distinct from `runtime_model_telemetry`, whose byte/chunk rows describe process mechanics. Production observation omits the model field when no authoritative envelopes exist. Startup, execution, and termination host samples are persisted through the separate host telemetry API and projected to Foundry independently.
 
 `export-observer` calls Foundry's validated `joinedRecords()` projection and emits stable canonical JSON. PostgreSQL stores semantic tasks, policy decisions, coverage snapshots, and immutable Chronicle artifacts; an S3-compatible artifact sink may mirror them. Chronicle Markdown remains a portable manual Git-promotion format rather than operational authority.
+
+`evidence export EXECUTION` packages local runtime executions as before. For `ses_...`, the default invokes `opencode export SESSION --sanitize` and records structural-only fidelity. `--rich` (or `--source rich`) invokes the supported export without sanitizing; stdout is ephemeral process memory, bounded to 64 MiB, redacted again, and never persisted. Both modes use allowlisted factual fields and retain the source session ID without claiming a physical execution ID. Per-assistant route metadata is separate from the session default route, with bounded aggregates and contiguous segments. Canonical local inbox packages are immutable: identical exports are duplicates, while changed extraction is an explicit revision linked to its predecessor. Backfill remains sanitized-only. Missing historical sessions are reported unavailable rather than guessed.
 
 ## Safety and retention
 

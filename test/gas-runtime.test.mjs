@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-const files = ['gas_core.js', 'gas_state.js', 'gas_trigger.js', 'gas_evidence.js', 'gas_observer.js', 'gas_agent_executor.js', 'gas_v8.js'];
+const files = ['gas_core.js', 'gas_state.js', 'gas_trigger.js', 'gas_federation.js', 'gas_evidence.js', 'gas_observer.js', 'gas_agent_executor.js', 'gas_v8.js'];
 async function source() { return (await Promise.all(files.map(f => readFile(new URL(`../gas/${f}`, import.meta.url), 'utf8')))).join('\n'); }
 function harness({ now = 100000, budget = 30000, fetch = () => { throw new Error('network'); } } = {}) {
   const props = new Map([['CT_GAS_SPREADSHEET_ID', 'sheet'], ['CT_GAS_DRIVE_ROOT_ID', 'root'], ['OPENROUTER_API_KEY', 'secret'], ['CT_GAS_PROOF_MODEL', 'openrouter/test:free'], ['CT_GAS_BUDGET_MS', String(budget)]]);
@@ -110,6 +110,56 @@ test('rate-limit deferral resumes the same logical work order with durable attem
   const c1 = h.context.CT_GAS_STATE.latestContinuation('order-rate'); assert.ok(c1, JSON.stringify(h.rows.get('continuations'))); assert.equal(c1.attempt, 1); assert.equal(c1.work_order_id, 'order-rate');
   const second = h.context.runWake(wake('wake-rate-b', c1.continuation_id, c1.execution_id, new Date(0).toISOString(), 'order-rate')); assert.equal(second.status, 'checkpointed');
   assert.equal(h.context.CT_GAS_STATE.physicalExecutionCount('order-rate'), 2); assert.equal(modelCalls, 2);
+});
+
+test('normalized inference telemetry distinguishes quota exhaustion from an ambiguous 429', async () => {
+  let body = { error: { message: 'Free model daily quota exhausted', metadata: { reason: 'free_tier_daily_limit', provider_name: 'upstream-a' } } };
+  const h = await boot({ budget: 300000, fetch: () => ({ getResponseCode: () => 429, getAllHeaders: () => ({ 'X-RateLimit-Remaining': '0' }), getContentText: () => JSON.stringify(body) }) });
+  const request = { execution_id: 'logical-exec', physical_execution_id: 'physical-exec', work_order_id: 'order-telemetry', wake_id: 'wake-telemetry', continuation_id: 'cont-telemetry', model: 'openrouter/test:free', verify_price: true, maxTurns: 1, messages: [{ role: 'user', content: 'bounded' }], clock: h.context.CT_GAS.clock(100000, 300000), role: 'implementation-worker', task_purpose: 'scarcity-proof' };
+  const exhausted = h.context.executeAgent(request);
+  assert.equal(exhausted.status, 'blocked'); assert.equal(exhausted.failure_category, 'quota_exhausted');
+  let telemetry = JSON.parse(h.rows.get('model_telemetry').at(-1)[7]);
+  assert.equal(telemetry.work_order_id, 'order-telemetry'); assert.equal(telemetry.physical_execution_id, 'physical-exec');
+  assert.equal(telemetry.requested_provider, 'openrouter'); assert.equal(telemetry.canonical_provider, 'openrouter'); assert.equal(telemetry.actual_provider, 'upstream-a');
+  assert.equal(telemetry.failure_category, 'quota_exhausted'); assert.equal(telemetry.impossible_until_state_change, true); assert.equal(telemetry.retryable, false); assert.equal(telemetry.quota_remaining, '0');
+  assert.equal('response' in telemetry, false); assert.equal(JSON.stringify(telemetry).includes('secret'), false);
+  body = { error: { message: 'Too many requests' } };
+  const limited = h.context.executeAgent({ ...request, physical_execution_id: 'physical-exec-2' });
+  assert.equal(limited.status, 'deferred'); assert.equal(limited.failure_category, 'rate_limited');
+});
+
+test('free quota exhaustion transitions to an eligible model across physical executions with logical continuity', async () => {
+  let calls = 0;
+  const firstVm = await boot({ budget: 300000, fetch: () => calls++ === 0
+    ? ({ getResponseCode: () => 429, getAllHeaders: () => ({ 'x-ratelimit-remaining': '0' }), getContentText: () => JSON.stringify({ error: { message: 'Free tier quota exhausted', metadata: { reason: 'daily_quota' } } }) })
+    : ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ model: 'test/provider:free', choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9, cost: 0 } }) }) });
+  const launch = { model: 'openrouter/test:free', role: 'implementation-worker', task_purpose: 'continuity-under-scarcity', allow_free_fallback: true, eligible_models: ['test/provider:free'] };
+  firstVm.context.CT_GAS_STATE.create('work_orders', { id: 'order-scarcity', lifecycle: 'requested', payload: { goal: 'g', step: 'A', model: launch.model, launch_context: launch, resume_context: { proof: 'scarcity' } } });
+  const first = firstVm.context.runWake({ ...wake('wake-scarcity-a', 'cont-scarcity-a', 'seed-scarcity', new Date(0).toISOString(), 'order-scarcity'), launch });
+  assert.equal(first.status, 'checkpointed', JSON.stringify(first)); assert.equal(first.reason, 'model-fallback');
+  const continuation = firstVm.context.CT_GAS_STATE.latestContinuation('order-scarcity');
+  assert.equal(continuation.work_order_id, 'order-scarcity'); assert.equal(continuation.launch_context.model, 'test/provider:free'); assert.match(continuation.decisions[0], /free-model-fallback/);
+
+  const secondVm = await boot({ budget: 300000, fetch: () => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ model: 'test/provider:free', choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9, cost: 0 } }) }) });
+  for (const [k, v] of firstVm.rows) secondVm.rows.set(k, v.map(row => [...row]));
+  const second = secondVm.context.runWake(wake('wake-scarcity-b', continuation.continuation_id, continuation.execution_id, new Date(0).toISOString(), 'order-scarcity'));
+  assert.equal(second.status, 'checkpointed', JSON.stringify(second)); assert.equal(second.step, 'A');
+  assert.equal(secondVm.context.CT_GAS_STATE.latestContinuation('order-scarcity').work_order_id, 'order-scarcity');
+  assert.equal(secondVm.context.CT_GAS_STATE.physicalExecutionCount('order-scarcity'), 2);
+  const attempts = (secondVm.rows.get('model_telemetry') || []).slice(1).map(row => JSON.parse(row[7])).filter(row => row.operation === 'inference');
+  assert.equal(attempts.length, 2); assert.equal(attempts[0].failure_category, 'quota_exhausted'); assert.equal(attempts[1].requested_provider, 'openrouter'); assert.equal(attempts[1].actual_model, 'test/provider:free'); assert.equal(attempts[1].fallback_path, 'openrouter/test:free->test/provider:free'); assert.equal(attempts[1].cost, 0);
+});
+
+test('quota exhaustion without fallback policy suspends without a futile automatic wake', async () => {
+  const exhausted = () => ({ getResponseCode: () => 429, getContentText: () => JSON.stringify({ error: { message: 'Free quota exhausted', metadata: { reason: 'daily_quota' } } }) });
+  const h = await boot({ budget: 300000, fetch: exhausted });
+  h.context.CT_GAS_STATE.create('work_orders', { id: 'order-suspend', lifecycle: 'requested', payload: { goal: 'g', step: 'A', model: 'openrouter/test:free', launch_context: { model: 'openrouter/test:free' }, resume_context: {} } });
+  const result = h.context.runWake(wake('wake-suspend', 'cont-suspend', 'seed-suspend', new Date(0).toISOString(), 'order-suspend'));
+  assert.equal(result.status, 'checkpointed'); assert.equal(result.reason, 'model-suspended');
+  assert.equal(h.context.CT_GAS_STATE.get('work_orders', 'order-suspend').lifecycle, 'waiting');
+  const continuation = h.context.CT_GAS_STATE.latestContinuation('order-suspend'); assert.equal(continuation.wait_condition, 'model-quota');
+  const pending = (h.rows.get('wakes') || []).slice(1).map(row => JSON.parse(row[7])).filter(row => row.continuation_id === continuation.continuation_id);
+  assert.equal(pending.length, 0);
 });
 
 test('malformed due wake is invalidated and cannot starve a valid wake', async () => {

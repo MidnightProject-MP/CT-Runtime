@@ -5,8 +5,10 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Store, classifyFailure, invoke, observePending, recover, redact, resolveExecutable, runProcess, runScheduler, validateCelestanResult, validateNextWake, validateTopology } from '../lib/runtime.mjs';
 import { loadConfig, validateModelPolicy } from '../lib/config.mjs';
+import { createInferenceRecord } from '../lib/inference-management.mjs';
 
 const fixture = path.join(process.cwd(), 'test', 'fixture-runner.mjs');
 const base = (store, extra = {}) => store.createManifest({ executionId: extra.executionId || 'run-1', project: 'demo', task: 'test task', model: 'provider/model', agent: 'build', ...extra });
@@ -55,7 +57,8 @@ test('first unattended scheduler launch carries the exact caller model and prese
   assert.equal(result.launched[0].status, 'success');
   const manifest = (await store.manifestsAll())[0];
   assert.equal(manifest.execution.model, model);
-  assert.deepEqual(manifest.modelRuntimeTelemetry, { availability: 'available', aggregate: { stdout: 0, stderr: 0, chunks: 0 } });
+  assert.equal(manifest.modelRuntimeTelemetry.availability, 'available');
+  assert.equal(manifest.modelRuntimeTelemetry.invocations.length, 1);
 });
 
 test('provider stderr durably defers the same model without a paid fallback', async () => {
@@ -109,11 +112,22 @@ test('due scheduler launches configured bootstrap and duplicate scheduler call i
 });
 
 test('Observer completion, pending invalid semantic, and duplicate observation are idempotent', async () => {
-  const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(store); await store.updateManifest('run-1', { execution: { status: 'success', finishedAt: new Date().toISOString() } });
-  assert.equal((await observePending({ store, observerPath }))[0].status, 'processed'); assert.equal((await store.manifest('run-1')).observer.state, 'pending');
+  const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(store); await invoke({ store, executionId: 'run-1', command: process.execPath, commandArgs: [fixture], model: 'm', agent: 'a', task: 'observer fixture', maxRetries: 0 });
+  assert.equal((await observePending({ store, observerPath }))[0].status, 'semantic-analysis-pending'); assert.equal((await store.manifest('run-1')).observer.state, 'pending');
   const semanticFile = path.join(store.root, 'semantic.json'); await writeFile(semanticFile, JSON.stringify({ schema: 'celestan-semantic-observation-v1', executionId: 'run-1', status: 'complete', summary: 'Observed fixture', confidence: 0.9, signals: [] }));
   const complete = await observePending({ store, observerPath, semanticResultFile: semanticFile }); assert.equal(complete[0].status, 'observed'); assert.equal((await store.manifest('run-1')).observer.state, 'observed');
-  const bad = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(bad); await bad.updateManifest('run-1', { execution: { status: 'failed', finishedAt: new Date().toISOString() } }); const badFile = path.join(bad.root, 'bad.json'); await writeFile(badFile, JSON.stringify({ nope: true })); const pending = await observePending({ store: bad, observerPath, semanticResultFile: badFile }); assert.equal(pending[0].status, 'semantic-analysis-pending'); assert.equal((await bad.manifest('run-1')).observer.state, 'pending');
+  const bad = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(bad); await bad.updateManifest('run-1', { execution: { status: 'failed', finishedAt: new Date().toISOString() } }); const badFile = path.join(bad.root, 'bad.json'); await writeFile(badFile, JSON.stringify({ nope: true })); const pending = await observePending({ store: bad, observerPath, semanticResultFile: badFile }); assert.equal(pending[0].status, 'semantic-evidence-insufficient'); assert.equal((await bad.manifest('run-1')).observer.state, 'not-eligible');
+});
+
+test('Observer receives normalized inference attempts from durable runtime telemetry', async () => {
+  const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(store); await store.updateManifest('run-1', { execution: { status: 'success', finishedAt: new Date().toISOString() } });
+  const startedAt = new Date(Date.now() - 10).toISOString();
+  await store.inferenceRecord(createInferenceRecord({ workOrder: 'work-1', executionId: 'run-1', agent: 'build', taskPurpose: 'implementation', modelReference: 'provider/model', attempt: 1, startedAt, finishedAt: new Date().toISOString() }));
+  assert.equal((await observePending({ store, observerPath }))[0].status, 'semantic-evidence-insufficient');
+  const observerStore = new (await import(pathToFileURL(observerPath))).ObserverStore(path.join(store.root, 'observer'));
+  const digest = JSON.parse(await readFile(observerStore.recordPath('run-1'), 'utf8'));
+  assert.equal(digest.modelRuntimeTelemetry.invocations.length, 1);
+  assert.equal(digest.modelRuntimeTelemetry.invocations[0].provider, 'provider');
 });
 
 test('telemetry is append-only and process termination is distinct', async () => {
@@ -158,7 +172,7 @@ test('heartbeat fence loss aborts the child and does not write stale terminal st
 
 test('bounded single-handle reads reject oversized result and semantic files', async () => {
   const resultStore = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(resultStore); const result = await invoke({ store: resultStore, executionId: 'run-1', command: process.execPath, commandArgs: [fixture], model: 'm', agent: 'a', task: 't', env: { RESULT_SIZE: 'large' }, maxRetries: 0 }); assert.equal(result.status, 'failed'); assert.equal((await resultStore.manifest('run-1')).failure.category, 'validation');
-  const semanticStore = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(semanticStore); await semanticStore.updateManifest('run-1', { execution: { status: 'success', finishedAt: nowForTest() } }); const semantic = path.join(semanticStore.root, 'semantic.json'); await writeFile(semantic, JSON.stringify({ schema: 'celestan-semantic-observation-v1', executionId: 'run-1', status: 'complete', summary: 'x'.repeat(70000), confidence: 0.9, signals: [] })); const pending = await observePending({ store: semanticStore, observerPath, semanticResultFile: semantic }); assert.equal(pending[0].status, 'semantic-analysis-pending');
+  const semanticStore = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(semanticStore); await invoke({ store: semanticStore, executionId: 'run-1', command: process.execPath, commandArgs: [fixture], model: 'm', agent: 'a', task: 'oversized semantic fixture', maxRetries: 0 }); const semantic = path.join(semanticStore.root, 'semantic.json'); await writeFile(semantic, JSON.stringify({ schema: 'celestan-semantic-observation-v1', executionId: 'run-1', status: 'complete', summary: 'x'.repeat(70000), confidence: 0.9, signals: [] })); const pending = await observePending({ store: semanticStore, observerPath, semanticResultFile: semantic }); assert.equal(pending[0].status, 'semantic-analysis-pending');
 });
 
 test('recover rebuilds authoritative parent links and rejects supplied childIds', async () => {

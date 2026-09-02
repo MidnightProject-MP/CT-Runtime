@@ -6,12 +6,14 @@ import { Pool } from 'pg';
 import { migrate } from '../lib/migration.mjs';
 import { PostgresStore } from '../lib/postgres-store.mjs';
 import { invoke, recover } from '../lib/runtime.mjs';
+import { createSemanticEvidenceEnvelope } from '../lib/semantic-evidence.mjs';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const fixture = path.join(import.meta.dirname, 'fixture-runner.mjs');
 const dueWake = (project = 'pg-demo') => ({ time: new Date(Date.now() - 1000).toISOString(), reason: 'scheduled', priority: 'normal', project });
 const futureWake = (project = 'pg-demo', year = 2030) => ({ time: `${year}-01-01T00:00:00.000Z`, reason: 'self_scheduled', priority: 'low', project });
 const launch = { command: process.execPath, commandArgs: [fixture], model: 'provider/model', agent: 'build', task: 'fixture task' };
+const semanticEnvelope = (executionId, statement = 'persisted claim') => createSemanticEvidenceEnvelope({ lineage: { physicalExecutionId: executionId, workOrderId: `${executionId}-work` }, sources: [{ sourceId: 'source-1', sourceClass: 'execution-reported', reference: `ct-runtime-result:${executionId}`, sha256: null, sourceExecutionId: executionId }], claims: [{ claimId: 'claim-1', claimType: 'execution-summary', statement, supportSourceIds: ['source-1'] }] });
 
 test('Postgres runtime lifecycle is canonical, fenced, and atomic', { skip: !connectionString, timeout: 60000 }, async (t) => {
   const schema = `ct_runtime_test_${crypto.randomBytes(8).toString('hex')}`;
@@ -128,6 +130,20 @@ test('Postgres runtime lifecycle is canonical, fenced, and atomic', { skip: !con
       const attempt = (await poolB.query("SELECT status,process_result FROM runtime_attempts WHERE execution_id='invoked' AND attempt=1")).rows[0];
       assert.equal(attempt.status, 'success');
       assert.equal(attempt.process_result.code, 0);
+    });
+
+    await t.test('semantic evidence is validated, immutable, fenced, and bounded', async () => {
+      await storeA.createManifest({ executionId: 'semantic-pg', project: 'pg-demo', task: 'task', model: 'model', agent: 'agent' });
+      const lease = await storeA.lease('semantic-pg', 'semantic-owner', 30000);
+      const envelope = semanticEnvelope('semantic-pg');
+      const reference = await storeA.persistSemanticEvidence('semantic-pg', envelope, lease);
+      assert.deepEqual(reference, { envelopeId: envelope.envelopeId, executionId: 'semantic-pg', sha256: envelope.contentHash, bytes: Buffer.byteLength(JSON.stringify(envelope)) });
+      assert.deepEqual(await storeB.semanticEvidenceFor('semantic-pg'), [envelope]);
+      assert.deepEqual(await storeA.persistSemanticEvidence('semantic-pg', envelope, lease), reference);
+      await assert.rejects(() => storeA.persistSemanticEvidence('semantic-pg', { ...envelope, lineage: { physicalExecutionId: 'other' } }, lease), /contentHash|execution/);
+      await storeA.release('semantic-pg', lease);
+      await assert.rejects(() => storeA.persistSemanticEvidence('semantic-pg', envelope, lease), /fencing/);
+      await assert.rejects(() => storeB.semanticEvidenceFor('semantic-pg', { limit: 101 }), /limit/);
     });
 
     await t.test('generic recovery delegates to the atomic Postgres path', async () => {

@@ -8,6 +8,9 @@ import { exportObserver, observePostgres } from '../lib/production-observer.mjs'
 import { describeCapabilities } from '../lib/capabilities/registry.mjs';
 import { describeAdapters } from '../lib/capabilities/adapters.mjs';
 import { resolveAllBindings } from '../lib/capabilities/bindings.mjs';
+import { exportExecution, backfillEvidence, exportOpenCodeSession, backfillOpenCodeEvidence } from '../lib/evidence-pipeline.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -22,6 +25,8 @@ Commands:
   scheduler --store PATH --model MODEL --agent AGENT --task TEXT [--cwd PATH] [--observer PATH] [--opencode BIN]
   recover --store PATH [--stale-ms N]
   observe-pending --store PATH --observer PATH [--semantic-result FILE]
+  evidence export EXECUTION|ses_... --store PATH [--project NAME] [--rich|--source rich]
+  evidence backfill --store PATH [--project NAME]  # includes supported sanitized OpenCode sessions
   wake --store PATH --reason REASON
   status | inspect --id ID
   capabilities [--project NAME]        # list purpose-level capabilities and current bindings
@@ -47,11 +52,29 @@ try {
   if (command === 'capabilities') { console.log(JSON.stringify(describeCapabilities({ project: opt('--project'), env: process.env }), null, 2)); process.exit(0); }
   if (command === 'adapters') { console.log(JSON.stringify(describeAdapters(opt('--capability')), null, 2)); process.exit(0); }
   if (command === 'bindings') { console.log(JSON.stringify(resolveAllBindings({ project: opt('--project'), env: process.env }), null, 2)); process.exit(0); }
-  const configured = createStore({ root: opt('--store'), project: opt('--project') });
+  const canonicalLocalStore = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'runtime-store');
+  const storeRoot = opt('--store', command === 'evidence' ? canonicalLocalStore : undefined);
+  const configured = createStore({ root: storeRoot, project: opt('--project') });
   const store = configured.store;
   if (command === 'doctor') { console.log(JSON.stringify(await doctor({ store, config: configured.config }))); process.exit(0); }
   if (command === 'reconstruct') { console.log(JSON.stringify(await reconstruct({ store, config: configured.config }))); process.exit(0); }
   if (command === 'export-observer') { process.stdout.write(configured.observerStore ? await exportObserver(configured.observerStore) : '[]\n'); process.exit(0); }
+  if (command === 'evidence') {
+    const subcommand = args[1];
+    if (subcommand === 'export') {
+      const executionId = args[2];
+      if (!executionId || executionId.startsWith('--')) throw new Error('evidence export requires an execution ID');
+      console.log(JSON.stringify(executionId.startsWith('ses_')
+        ? await exportOpenCodeSession({ sessionId: executionId, store, evidenceStore: configured.evidenceStore, project: opt('--project'), command: opt('--opencode', process.env.OPENCODE_BIN), extractionMode: args.includes('--rich') || opt('--source') === 'rich' ? 'rich' : 'sanitized' })
+        : await exportExecution({ store, evidenceStore: configured.evidenceStore, executionId })));
+    } else if (subcommand === 'backfill') {
+      const local = await backfillEvidence({ store, evidenceStore: configured.evidenceStore });
+       const opencode = await backfillOpenCodeEvidence({ store, evidenceStore: configured.evidenceStore, project: opt('--project'), command: opt('--opencode', process.env.OPENCODE_BIN) });
+      console.log(JSON.stringify({ ...opencode, local }));
+    }
+    else { help(); process.exitCode = 2; }
+    process.exit(0);
+  }
   if (command === 'observe-pending' && configured.observerStore) {
     const reflectionArgs = process.env.CT_RUNTIME_OBSERVER_ARGS ? JSON.parse(process.env.CT_RUNTIME_OBSERVER_ARGS) : [];
     const reflection = process.env.CT_RUNTIME_OBSERVER_REFLECTION === 'opencode' ? { command: process.env.CT_RUNTIME_OBSERVER_COMMAND || 'opencode', args: reflectionArgs, model: process.env.CT_RUNTIME_OBSERVER_MODEL, agent: process.env.CT_RUNTIME_OBSERVER_AGENT, timeoutMs: Number(process.env.CT_RUNTIME_OBSERVER_TIMEOUT_MS || 300000) } : undefined;

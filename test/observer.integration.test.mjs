@@ -75,7 +75,8 @@ test('Postgres Observer production contract is transactional and storage-neutral
     assert.deepEqual((await observerStore.getDigest('observer-e2e')).modelRuntimeTelemetry.transitions.map((item) => item.id), ['transition-1']);
     assert.deepEqual((await observerStore.getDigest('observer-e2e')).hostRuntimeTelemetry.records.map((item) => item.sampleType), ['startup', 'execution', 'termination']);
 
-    const semantic = { schema: schemaModule.SEMANTIC_SCHEMA, executionId: 'observer-e2e', status: 'complete', summary: 'Observer integration completed with cited runtime evidence.', confidence: 0.9, signals: [] };
+    const join = await observerStore.getJoin('observer-e2e');
+    const semantic = { schema: schemaModule.SEMANTIC_SCHEMA, executionId: 'observer-e2e', status: 'complete', summary: 'Observer integration completed with cited runtime evidence.', confidence: 0.9, signals: [], evidenceBasis: { bindingHash: join.bindingHash, claimReferences: join.claimReferences } };
     const semanticFile = path.join(temporary, 'semantic.json');
     await writeFile(semanticFile, JSON.stringify(semantic));
     const observed = await observePostgres({ store, observerStore, semanticResultFile: semanticFile });

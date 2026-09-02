@@ -1,6 +1,6 @@
 {
   "scriptId": "1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri",
-  "projectId": "celestan-gas-runtime",
+  "projectId": "ct-runtime",
   "rootDir": "gas",
   "scriptExtensions": [
     ".js",
