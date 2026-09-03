@@ -6,12 +6,13 @@
 
 ## Artifact Binding
 
-- **CT-Runtime commit:** `acb33db5f7af9a5dd14e68b7519d762b158105d5` (branch `main`, exact commit under test)
-- **Isolated Neon branch:** `proof-convergence-acb33db-20260903` (`br-delicate-field-ayfq86vw`) — child of production `br-curly-waterfall-ay7qszj8`, region `us-east-2`, Postgres `18.6`, role `celestan_migrator` (direct)
+- **CT-Runtime commit:** `52bc36f31b490ff58b9f13ec04d3d465e2b16299` (`52bc36f`, branch `main`, exact commit under test — supersedes `acb33db5` after precedence fix)
+- **Previous packet:** `proofs/convergence-acb33db5.json` bound to `acb33db5` (indeterminate incorrectly dominated fail); superseded by `proofs/convergence-52bc36f3.json` after fix.
+- **Isolated Neon branch:** `proof-convergence-52bc36f-20260903` (`br-cold-bird-ay20qr8h`) — child of production `br-curly-waterfall-ay7qszj8`, region `us-east-2`, Postgres `18.6`, role `celestan_migrator` (direct); previous `br-delicate-field-ayfq86vw` deleted after capture
 - **Migrations applied transactionally via `lib/migration.mjs`:**
   - `016_work_unit_convergence.sql` — `9b364aee6eafad0fd03d46b78930457601c0bbcc2b1ad34b352327f8eff716e7`
   - `017_work_unit_convergence_immutability.sql` — `620c20aef037797fb5c8892f00a5e39f62b5f40014644c33b3f99f191b081886`
-  - `runtime_schema_migrations` rows `1..17` verified with checksums (see `proofs/convergence-acb33db5.json`)
+  - `runtime_schema_migrations` rows `1..17` verified with checksums (see `proofs/convergence-52bc36f3.json`)
 - **Production Neon untouched** — no `production` branch mutation, no `celestan_runtime` pooled writes, no deployment claim.
 - **Continuation wiring absent** — proof exercises persistence and `lib/convergence.mjs` / `lib/convergence-store.mjs` only; no scheduler, GAS, or `ready→merge→next Work Unit` automation.
 
@@ -19,7 +20,7 @@
 
 - **Harness:** `test/convergence.neon-proof.test.mjs` — gated on `TEST_DATABASE_URL`; otherwise `SKIP`. Uses `PostgresConvergenceAdapter` (`lib/convergence-store.mjs`) and `reconcileConvergence` (`lib/convergence.mjs`) against real Postgres.
 - **Execution:** `TEST_DATABASE_URL=<branch-direct> node --test test/convergence.neon-proof.test.mjs` — 13 tests (1 top-level + 12 subtests) against the isolated branch.
-- **Evidence capture:** After each assertion, exact SQL state is queried (`SELECT count(*)`, `SELECT result`, `SELECT evidence`, `SELECT source_head_sha`) and recorded in `proofs/convergence-acb33db5.json` (`finalCounts`, `migrationRows`, `migrationChecksums`).
+- **Evidence capture:** After each assertion, exact SQL state is queried (`SELECT count(*)`, `SELECT result`, `SELECT evidence`, `SELECT source_head_sha`) and recorded in `proofs/convergence-52bc36f3.json` (`finalCounts`, `migrationRows`, `migrationChecksums`); previous packet `acb33db5` retained.
 
 ## Properties Proven (11 + concurrent race)
 
@@ -35,7 +36,7 @@
 
 6. **Required-pass-without-evidence cannot become `ready`** — `evidenceRequirements=['tests']` with `checks=[]` → `reconcile` returns `indeterminate` with `missing=['tests']`; `evidenceRequirements=[]` with `checks=[]` → `ready`.
 
-7. **Authoritative fail dominates, indeterminate dominates all** — `tests:pass + lint:fail` → `not ready`; `tests:pass + lint:indeterminate` → `indeterminate`; `tests:fail + lint:indeterminate` → `indeterminate` (verified via `reconcileConvergence`).
+7. **Authoritative fail dominates indeterminate and missing** — `tests:pass + lint:fail` → `not ready`; `tests:pass + lint:indeterminate` → `indeterminate`; `tests:fail + lint:indeterminate` → `not ready` (authoritative `fail` takes precedence; verified via `reconcileConvergence` after `lib/convergence.mjs:94` fix).
 
 8. **Optional checks never influence readiness** — `evidenceRequirements=['tests']` with `tests:pass + coverage:fail` (optional) → `ready`; `tests:pass + coverage:indeterminate` → `ready` — proven after fix to `lib/convergence.mjs` to filter `requiredChecks`.
 
@@ -49,20 +50,20 @@
 
 ## Verification
 
-- **Isolated branch:** `npx neon branches list` shows `proof-convergence-acb33db-20260903` `ready` separate from `production`; `runtime_schema_migrations` on branch contains `016`/`017` with exact checksums, while production remains at `015` until promoted.
-- **No production mutation:** All `INSERT`s target branch direct URL (`ep-damp-band-...`), not pooled production; `TRUNCATE ... CASCADE` and `DROP` affect only branch.
+- **Isolated branch:** `npx neon branches list` shows `proof-convergence-52bc36f-20260903` (`br-cold-bird-ay20qr8h`) `ready` separate from `production`; `runtime_schema_migrations` on branch contains `016`/`017` with exact checksums, while production remains at `015` until promoted. Previous branch `br-delicate-field-ayfq86vw` deleted after evidence capture.
+- **No production mutation:** All `INSERT`s target branch direct URL (`ep-delicate-resonance-...`), not pooled production; `TRUNCATE ... CASCADE` affects only branch; production verified at `15` migrations via `SELECT version FROM runtime_schema_migrations`.
 - **No continuation wiring:** `lib/convergence-store.mjs` and `test/convergence.neon-proof.test.mjs` contain no scheduler/GAS/merge→next-Work-Unit code; `migrate` does not schedule.
-- **Full suite:** `npm test` without `TEST_DATABASE_URL` → `184 passed, 3 skipped` (Neon proof `SKIP`); with `TEST_DATABASE_URL` → `197 passed` (including 13 Neon proof tests).
+- **Full suite:** `npm test` without `TEST_DATABASE_URL` → `194 passed, 4 skipped` (Neon proof `SKIP`); with `TEST_DATABASE_URL` → `197 passed` (including 13 Neon proof tests). `403` on `origin/main` push resolved by switching to `MidnightProject-MP` account (write access to org repo).
 
 ## Independent Review
 
 Reviewer needs only:
 
-1. The branch name and direct URL (or `npx neon connection-string <branch> --role-name celestan_migrator`).
-2. The commit `acb33db5` and files `lib/convergence.mjs`, `lib/convergence-store.mjs`, `migrations/016_*.sql`, `migrations/017_*.sql`, `test/convergence.neon-proof.test.mjs`.
-3. The proof packet `proofs/convergence-acb33db5.json` (commit, `migrationRows`, `migrationChecksums`, `finalCounts`, `timestamp`).
+1. The branch name and direct URL (or `npx neon connection-string <branch> --role-name celestan_migrator`) — recreate fresh child of `br-curly-waterfall-ay7qszj8` via `npx neon branches create --project-id falling-bird-38424127 --parent br-curly-waterfall-ay7qszj8 --name proof-convergence-<short>-<date>`.
+2. The commit `52bc36f` (tree `52bc36f31...`) and files `lib/convergence.mjs` (`fail` first), `lib/convergence-store.mjs`, `migrations/016_*.sql`, `migrations/017_*.sql`, `test/convergence.neon-proof.test.mjs`.
+3. The proof packet `proofs/convergence-52bc36f3.json` (commit `52bc36f31...`, `migrationRows`, `migrationChecksums`, `finalCounts`, `timestamp`); previous `convergence-acb33db5.json` retained for history but superseded.
 
-Rerun: `TEST_DATABASE_URL=$(npx neon connection-string br-delicate-field-ayfq86vw --project-id falling-bird-38424127 --role-name celestan_migrator) node --test test/convergence.neon-proof.test.mjs` — all 13 should pass; any `FAIL` keeps the gate closed.
+Rerun (fresh branch, exact commit): `TEST_DATABASE_URL=$(npx neon connection-string <new-branch> --project-id falling-bird-38424127 --role-name celestan_migrator) node --test test/convergence.neon-proof.test.mjs` — all 13 should pass; any `FAIL` keeps the gate closed. Branch is ephemeral and should be deleted after capture (`npx neon branches delete <id> --project-id falling-bird-38424127`).
 
 ## Gate Status
 

@@ -1,0 +1,106 @@
+{
+  "gitCommit": "52bc36f31b490ff58b9f13ec04d3d465e2b16299",
+  "gitStatus": "M README.md\n M bin/ct-runtime.mjs\n M docs/shared-observer-evidence.md\n M lib/config.mjs\n M lib/evidence-export.mjs\n M lib/evidence-pipeline.mjs\n M lib/execution-evidence.mjs\n M lib/opencode-evidence.mjs\n M test/opencode-evidence.test.mjs\n?? lib/semantic-recovery.mjs\n?? test/semantic-recovery.test.mjs",
+  "migrationsApplied": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+  ],
+  "migrationRows": [
+    {
+      "version": "1",
+      "checksum": "6a639e881996e687e84c304bbb3f8e5e02956ccfc5af3b66ea634f5a007b3b14"
+    },
+    {
+      "version": "2",
+      "checksum": "99b407364b23981d0686e9792aac6fdb3d8ea2e5b0e2cc90f8ace19fb171fe5f"
+    },
+    {
+      "version": "3",
+      "checksum": "01aa367c77f738966225adfd8113f51c995181c4d1828b15db6dedf3de041b5a"
+    },
+    {
+      "version": "4",
+      "checksum": "761d6cf5a3a7b7d2f030f987cb0d21efc99a44c8eb5bdeef6a2736e6b9f14a10"
+    },
+    {
+      "version": "5",
+      "checksum": "e3a479d82d79d621ee4c7cc71c50e52e95d5ae7c35d50bf557294265fef4e2a8"
+    },
+    {
+      "version": "6",
+      "checksum": "457a9f0c789869eebcd8093caa814ee56bb76ce4e3aac610601ea1b637d56ba7"
+    },
+    {
+      "version": "7",
+      "checksum": "b6af219ae9668543ed0134a0843cb4ab186dced353bc96a119fab1cb8d60d6e7"
+    },
+    {
+      "version": "8",
+      "checksum": "98ee80d0627b44b5cca8dc54cb62a16306377a8c5d70b194127edd23286151ec"
+    },
+    {
+      "version": "9",
+      "checksum": "cf948041e7fe7158d7f77f1ffb64941b2c5049fbec1d27b2fefc54b125ae7370"
+    },
+    {
+      "version": "10",
+      "checksum": "35649bf084206399e424274b7c628abdba335f47da6ab9bd2170d18aebf743a3"
+    },
+    {
+      "version": "11",
+      "checksum": "8dc06623f6066168de54056d596afe026b91c7a482ed66e0b9d64331cf8658bd"
+    },
+    {
+      "version": "12",
+      "checksum": "118678508df7e10015c1d009714415a50b9e88f2bb92ae7b426d1728dcf158c6"
+    },
+    {
+      "version": "13",
+      "checksum": "dbd30a4a181ed9c9c2d8b219c51c80a45ed25ae14bf36bdf3c047b467ca00bbf"
+    },
+    {
+      "version": "14",
+      "checksum": "20a410a02ba6c0ac8262a00da00a4bae816bb8276487657297d7dd5105fba628"
+    },
+    {
+      "version": "15",
+      "checksum": "16dd4b64c7f72758e93f4c9a545851418758af8e1f32c8bc80436ef775dc1683"
+    },
+    {
+      "version": "16",
+      "checksum": "9b364aee6eafad0fd03d46b78930457601c0bbcc2b1ad34b352327f8eff716e7"
+    },
+    {
+      "version": "17",
+      "checksum": "620c20aef037797fb5c8892f00a5e39f62b5f40014644c33b3f99f191b081886"
+    }
+  ],
+  "migrationChecksums": {
+    "016_work_unit_convergence.sql": "9b364aee6eafad0fd03d46b78930457601c0bbcc2b1ad34b352327f8eff716e7",
+    "017_work_unit_convergence_immutability.sql": "620c20aef037797fb5c8892f00a5e39f62b5f40014644c33b3f99f191b081886"
+  },
+  "timestamp": "2026-09-03T19:35:28.958Z",
+  "finalCounts": {
+    "wu": "14",
+    "subj": "15",
+    "checks": "15",
+    "merges": "3"
+  },
+  "proofQuestion": "Can real Postgres, under retries, reordering, contradiction, and concurrency, represent exactly one valid convergence truth for a Work Unit?",
+  "answer": "YES - proven via 11 properties + concurrent race on isolated branch with transactional immutability, idempotent duplicates, reordered convergence, contradiction rejection, rollback atomicity, and merge isolation."
+}
