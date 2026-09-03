@@ -169,6 +169,38 @@ test('malformed due wake is invalidated and cannot starve a valid wake', async (
   const result = h.context.gasSafetyWake(); assert.equal(h.context.CT_GAS_STATE.get('wakes', 'wake-invalid').lifecycle, 'invalid'); assert.ok(result.length >= 1);
 });
 
+test('safety recovery retires wakes for completed work without creating an execution', async () => {
+  const h = await boot();
+  h.context.CT_GAS_STATE.create('work_orders', { id: 'order-completed', lifecycle: 'completed', payload: { goal: 'done' } });
+  h.context.CT_GAS_STATE.create('wakes', { id: 'wake-completed', lifecycle: 'pending', payload: wake('wake-completed', 'cont-completed', 'exec-completed', new Date(0).toISOString(), 'order-completed') });
+  const result = h.context.gasSafetyWake();
+  assert.equal(result[0].reason, 'work-order-completed', JSON.stringify(result));
+  assert.equal(h.context.CT_GAS_STATE.get('wakes', 'wake-completed').lifecycle, 'invalid');
+  assert.equal((h.rows.get('executions') || []).length, 0);
+});
+
+test('missing-model recovery is retired and moves resumable work to waiting', async () => {
+  const h = await boot();
+  h.context.CT_GAS_STATE.create('work_orders', { id: 'order-unconfigured', lifecycle: 'deferred', payload: { goal: 'blocked' } });
+  h.context.CT_GAS_STATE.create('wakes', { id: 'wake-unconfigured', lifecycle: 'pending', payload: { ...wake('wake-unconfigured', 'cont-unconfigured', 'exec-unconfigured', new Date(0).toISOString(), 'order-unconfigured'), launch: '{}' } });
+  const result = h.context.gasSafetyWake();
+  assert.equal(result[0].reason, 'selected-model-missing', JSON.stringify(result));
+  assert.equal(h.context.CT_GAS_STATE.get('work_orders', 'order-unconfigured').lifecycle, 'waiting');
+  assert.equal(h.context.CT_GAS_STATE.get('wakes', 'wake-unconfigured').lifecycle, 'invalid');
+  assert.equal(h.context.gasSafetyWake().length, 0);
+});
+
+test('safety recovery retires a wake superseded by a newer continuation', async () => {
+  const h = await boot();
+  h.context.CT_GAS_STATE.create('work_orders', { id: 'order-stale', lifecycle: 'checkpointed', payload: { goal: 'resume', model: 'openrouter/test:free' } });
+  h.context.CT_GAS_STATE.continuation({ goal: 'resume', completed: [], decisions: [], evidence: [], provenance: [], outstanding: ['A'], next_operation: 'model', reason: 'newer', resumed_from: 'exec-new', physical_execution_count: 1, work_order_id: 'order-stale', execution_id: 'exec-new', wake_id: 'wake-new', continuation_id: 'cont-new', launch_context: { model: 'openrouter/test:free' }, resume_context: {} });
+  h.context.CT_GAS_STATE.create('wakes', { id: 'wake-stale', lifecycle: 'pending', payload: wake('wake-stale', 'cont-old', 'exec-old', new Date(0).toISOString(), 'order-stale') });
+  const result = h.context.gasSafetyWake();
+  assert.equal(result[0].reason, 'stale-continuation', JSON.stringify(result));
+  assert.equal(h.context.CT_GAS_STATE.get('wakes', 'wake-stale').lifecycle, 'invalid');
+  assert.equal((h.rows.get('executions') || []).length, 0);
+});
+
 test('general compute telemetry requires an exact capability reason', async () => {
   const h = await boot();
   assert.throws(() => h.context.CT_GAS_STATE.telemetry({ general_compute_requested: true }), /exact capability reason/);
