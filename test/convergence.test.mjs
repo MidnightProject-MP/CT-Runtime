@@ -36,3 +36,16 @@ test('commit subjects require full hexadecimal SHAs', () => {
   assert.throws(() => normalizeConvergenceSubject({ ...subject, pullRequestId: undefined }), /pullRequestId/);
   assert.throws(() => normalizeCheckResult({ checkName: 'tests', implementationVersion: 'v1', result: 'pass', headSha: base }, unit, subject), /commit binding/);
 });
+
+test('supplied PR and check identities cannot be silently redirected', () => {
+  const check = normalizeCheckResult({ checkName: 'tests', implementationVersion: 'v1', result: 'pass' }, unit, subject);
+  assert.throws(() => normalizeCheckResult({ ...check, pullRequestId: 'other' }, unit, subject), /pull request binding/);
+  assert.throws(() => normalizeCheckResult({ ...check, checkId: '0'.repeat(64) }, unit, subject), /check identity/);
+});
+
+test('reconciliation rejects non-deterministic duplicate check identities', () => {
+  assert.throws(() => reconcileConvergence({ workUnit: unit, subject, checks: [
+    { checkName: 'tests', implementationVersion: 'v1', result: 'pass' },
+    { checkName: 'tests', implementationVersion: 'v1', result: 'fail' }
+  ] }), { category: 'conflict' });
+});
