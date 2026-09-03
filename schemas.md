@@ -4,6 +4,7 @@
 - `celestan-runtime-event-v1`: append-only lifecycle facts with bounded safe fields; raw stdout/stderr is never included.
 - `celestan-runtime-telemetry-v1`: append-only process facts with bounded per-attempt and cumulative stdout/stderr/chunk counters. Raw stream content is never included.
 - `celestan-runtime-schedule-v1`: digest-idempotent `{time, reason, priority, project}` wake plus caller launch configuration and durable `pending|claimed|completed` state.
+- `celestan-work-unit-convergence-v1`: optional Work Unit branch, PR head-SHA subject, intent/check implementation binding, deterministic check identity, three-state reconciliation, and merged-commit recording; immutability and attempt semantics remain a hardening gate.
 - `gas-runtime-revision-v2`: fixed-sheet append-only revisions with deterministic latest-valid reconstruction, bounded payloads, and fenced wake claims.
 
 The strict Celestan handoff has exactly `{status, summary, requested_next_wake}`. Status is `complete`, `continue`, or `failed`; summary is bounded; `requested_next_wake` is `null` or exactly `{time, reason, priority, project}`. Unknown keys and supplied secret values are rejected.

@@ -47,6 +47,20 @@ The external provider configuration uses Google JWKS and exact audience
 
 Live L1 acceptance on 2026-09-01 used web deployment `AKfycbwyFPC55MvhCfPUmBlfm7eRp-uHr5tpZ2H9suobETGXod_hLLVDQtC9DelC7ee_WSNawg` and work order `work-gas-proof-420d7ae6-b3dc-420d-b78e-85ef20fc13aa`. OpenCode checkpointed and handed off; GAS took fence 3, created physical execution `physical-execution_dc87814074e550a473c099fae1db37c0`, persisted Drive evidence `1Y7IYDAZbdecUvQkMU9aGL4jwaRYeTYTJ` with SHA-256 `6d56f293f690a48c8fd59a0c26eb80d5cb17a0936ee71cfcfe0a2e6e0a0482fc`, recorded an observed local Observer result, and committed canonical checkpoint digest `2d47e6e1ad478362d8426dad91417dd20e7cc7939f0f17115aff835aa08ceaba`. Unified lineage returned two physical executions plus `claimed`, `checkpointed`, `gas-taken`, and `gas-checkpointed` events. Duplicate delivery returned `already-consumed`; tamper and stale timestamp were HMAC-rejected; a deliberately advanced target fence returned `stale-target` and durably rejected its advisory. Work order `work-gas-proof-e5fb7d7b-7d8f-4529-bc53-0f463daa7492` was persisted with a simulated notification failure and later consumed without a POST by `gasSafetyWake`, with a real GAS checkpoint and one evidence reference.
 
+## Work Unit Convergence
+
+The minimum convergence contract is provider-neutral and begins after
+Execution Federation. A Work Unit may claim a dedicated branch, but the branch
+is a strong default rather than an invariant. A pull request head SHA is the
+exact convergence subject. Check results carry a deterministic identity and bind
+the Work Unit intent digest, subject SHA, and check implementation version;
+attempt/revision semantics remain part of the hardening gate.
+
+Reconciliation exposes only `ready`, `not ready`, or `indeterminate`.
+Canonicalization records the actual merged commit rather than promoting any
+stale branch artifact. Runtime and deployment claims remain separate evidence
+concerns, and Project Cognition is deliberately outside this first contract.
+
 ## Interactive takeover
 
 The next milestone adds reverse GAS-to-OpenCode continuity without making GAS a
@@ -84,7 +98,11 @@ or waiting for lease expiry. Migration `011_superseded_gas_advisory` requires
 the target execution and work-order fence to remain current, so an advisory
 cannot revive superseded GAS authority after a later foreground lease expires.
 `012_federation_state_constraints` adds database-level checks for the declared
-work-order and physical-execution state vocabulary. Applied migrations 005-008
+work-order and physical-execution state vocabulary. Migration
+`015_federation_authority_invariants` serializes canonical mutations against
+the current logical fence, closes terminal work orders, binds claims to
+repository identity, constrains handoff endpoints to one work order, and
+applies the same fence check to GAS checkpoints. Applied migrations 005-008
 remain unchanged. The stable takeover ID uses the existing
 handoff primary key and the new foreground execution uses the existing execution
 identity and per-work-order fence counter. GAS still exposes only

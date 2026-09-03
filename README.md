@@ -81,6 +81,18 @@ and verifies repository state before mutation. A bounded live
 OpenCode -> GAS -> OpenCode proof, including safety-wake non-conflict, is accepted;
 see `docs/execution-federation.md`.
 
+### Work Unit Convergence
+
+The minimum provider-neutral contract is defined by migration 016 and
+`lib/convergence.mjs`: a Work Unit may claim a dedicated branch, a PR head SHA
+is the exact convergence subject, and check results bind to Work Unit intent and
+implementation version. Reconciliation exposes only `ready`, `not ready`, or
+`indeterminate`; merge recording uses the actual merged commit and does not
+inherit validation claims from a different head. The contract is defined but
+not established for production until immutability hardening and an isolated
+Neon proof pass. Project Cognition and provider-specific PR orchestration remain
+outside this slice.
+
 - An external supervisor is required for scheduling, recovery, retention, and policy.
 - An Observer semantic provider is not configured by default.
 - OpenCode fields are unavailable unless an adapter supplies them; unsupported topology, task, and orchestration fields are not projected as if they survived Foundry projection.

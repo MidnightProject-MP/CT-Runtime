@@ -81,11 +81,13 @@ test('handoff inserts the actual target execution id', async () => {
     if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return { rows: [] };
     if (text.includes('FROM federation_handoffs')) return { rows: [] };
     if (text.includes('claim_owner=$2')) return { rows: [current] };
+    if (text.includes('FROM federation_executions WHERE execution_id=$1')) return { rows: [current] };
     if (text.includes("state IN ('claimed','running')")) return { rows: [] };
     if (text.startsWith('UPDATE federation_work_orders')) return { rows: [{ next_claim_fence: 2n }] };
     if (text.startsWith('INSERT INTO federation_executions')) return { rows: [target] };
     if (text.startsWith('INSERT INTO federation_handoffs')) { handoffParams.push(params); return { rows: [] }; }
     if (text.includes('FROM federation_work_orders')) return { rows: [{ work_order_id: 'w', next_claim_fence: 1n }] };
+    if (text.includes('JOIN federation_work_orders')) return { rows: [target] };
     if (text.startsWith('UPDATE federation_executions')) return { rows: [] };
     throw new Error(`unexpected query: ${text}`);
   }, release() {} };
@@ -133,6 +135,7 @@ test('concurrent same-handoff retries serialize before idempotency lookup', asyn
     }
     if (text.includes('FROM federation_handoffs')) return { rows: handoff ? [{ to_execution_id: 'e2', reason: 'continuation' }] : [] };
     if (text.includes('FROM federation_executions WHERE execution_id=$1')) return { rows: [target] };
+    if (text.includes('JOIN federation_work_orders')) return { rows: [target] };
     if (text.includes('state IN (')) return { rows: [] };
     if (text.startsWith('UPDATE federation_work_orders')) return { rows: [{ next_claim_fence: 2n }] };
     if (text.startsWith('INSERT INTO federation_executions')) { handoff = true; return { rows: [target] }; }
