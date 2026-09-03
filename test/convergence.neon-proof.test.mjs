@@ -219,8 +219,8 @@ test('isolated Neon convergence proof - one valid truth under retries, reorderin
     assert.equal(r.result, 'ready');
   });
 
-  // 7. authoritative fail dominates indeterminate
-  await t.test('7 - fail dominates read, indeterminate dominates all', async () => {
+  // 7. authoritative fail dominates indeterminate and missing
+  await t.test('7 - fail dominates read, authoritative fail over indeterminate', async () => {
     const wo = orderIdBase + '-7';
     await createWorkOrder(wo);
     const wu = { workUnitId: `wu-dom-${Date.now()}`, workOrderId: wo, project: 'proj-proof', intendedOutcome: { outcome:'ship' }, invariants:[], evidenceRequirements:['tests','lint'] };
@@ -239,12 +239,12 @@ test('isolated Neon convergence proof - one valid truth under retries, reorderin
       { checkName:'lint', implementationVersion:'v1', result:'indeterminate' },
     ]});
     assert.equal(r.result, 'indeterminate');
-    // fail + indeterminate => indeterminate (indeterminate dominates)
+    // fail + indeterminate => not ready (authoritative fail dominates)
     r = reconcileConvergence({ workUnit: wu, subject: subj, checks: [
       { checkName:'tests', implementationVersion:'v1', result:'fail' },
       { checkName:'lint', implementationVersion:'v1', result:'indeterminate' },
     ]});
-    assert.equal(r.result, 'indeterminate');
+    assert.equal(r.result, 'not ready');
   });
 
   // 8. optional checks never influence readiness
