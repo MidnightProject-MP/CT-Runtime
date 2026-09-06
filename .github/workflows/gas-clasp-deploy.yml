@@ -1,0 +1,79 @@
+name: GAS clasp deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_id:
+        description: 'Existing Apps Script deployment ID; leave blank to create a new deployment'
+        required: false
+        type: string
+      description:
+        description: 'Deployment description'
+        required: false
+        default: 'CT-Runtime GAS deployment'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gas-clasp-deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22.14.0'
+  CLASP_VERSION: '3.3.0'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: gas-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate Apps Script manifest
+        working-directory: gas
+        run: node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync('appsscript.json','utf8')); if(m.runtimeVersion!=='V8') throw new Error('Expected V8 runtime'); if(!m.oauthScopes?.length) throw new Error('No OAuth scopes configured');"
+
+      - name: Install clasp
+        run: npm install --global @google/clasp@${CLASP_VERSION}
+
+      - name: Configure clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          test -n "$CLASPRC_JSON"
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+
+      - name: Configure Apps Script project
+        working-directory: gas
+        env:
+          SCRIPT_ID: ${{ vars.CT_GAS_SCRIPT_ID }}
+        run: |
+          test -n "$SCRIPT_ID"
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+
+      - name: Show clasp file status
+        working-directory: gas
+        run: clasp show-file-status --json
+
+      - name: Push source
+        working-directory: gas
+        run: clasp push --force
+
+      - name: Deploy
+        working-directory: gas
+        env:
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_DESCRIPTION: ${{ inputs.description }}
+        run: |
+          if [ -n "$DEPLOYMENT_ID" ]; then
+            clasp create-deployment --deploymentId "$DEPLOYMENT_ID" --description "$DEPLOYMENT_DESCRIPTION"
+          else
+            clasp create-deployment --description "$DEPLOYMENT_DESCRIPTION"
+          fi
