@@ -1,6 +1,9 @@
 name: GAS clasp deploy
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       deployment_id:
@@ -19,6 +22,10 @@ permissions:
 concurrency:
   group: gas-clasp-deploy
   cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22.14.0'
+  CLASP_VERSION: '3.3.0'
 
 env:
   NODE_VERSION: '22.14.0'
@@ -70,7 +77,7 @@ jobs:
         working-directory: gas
         env:
           DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-          DEPLOYMENT_DESCRIPTION: ${{ inputs.description }}
+          DEPLOYMENT_DESCRIPTION: ${{ inputs.description || 'CT-Runtime GAS deployment' }}
         run: |
           if [ -n "$DEPLOYMENT_ID" ]; then
             clasp create-deployment --deploymentId "$DEPLOYMENT_ID" --description "$DEPLOYMENT_DESCRIPTION"
