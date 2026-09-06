@@ -3,10 +3,10 @@ var CT_GAS_FEEDBACK = (function () {
   var headers = ['created_at','thread_id','message_id','revision','project','message','reply_to','status','work_order_id','ack_at','updated_at','response','error'];
 
   function props() { return PropertiesService.getScriptProperties(); }
-  function spreadsheetId() { return props().getProperty('CT_GAS_FEEDBACK_SPREADSHEET_ID') || props().getProperty('CT_GAS_SPREADSHEET_ID'); }
-  function sheetName() { return props().getProperty('CT_GAS_FEEDBACK_SHEET_NAME') || 'feedback'; }
-  function book() { var id=spreadsheetId(); if (!id) throw new Error('CT_GAS_SPREADSHEET_ID is required'); return SpreadsheetApp.openById(id); }
-  function sheet() { var s=book().getSheetByName(sheetName()) || book().insertSheet(sheetName()); if (s.getLastRow()===0) { s.appendRow(headers); s.setFrozenRows(1); } return s; }
+  function spreadsheetId() { return props().getProperty('CT_GAS_FEEDBACK_SPREADSHEET_ID'); }
+  function sheetName() { return props().getProperty('CT_GAS_FEEDBACK_SHEET_NAME') || 'Feedback'; }
+  function book() { var id=spreadsheetId(); if (!id) throw new Error('CT_GAS_FEEDBACK_SPREADSHEET_ID is required'); return SpreadsheetApp.openById(id); }
+  function sheet() { var s=book().getSheetByName(sheetName()); if (!s) throw new Error('Configured feedback sheet not found: '+sheetName()); if (s.getLastRow()===0) { s.appendRow(headers); s.setFrozenRows(1); } return s; }
   function values() { var s=sheet(), n=s.getLastRow(); if (n<2) return []; return s.getRange(2,1,n-1,headers.length).getValues().map(function(r,i){ var x={row:i+2}; headers.forEach(function(h,j){x[h]=r[j];}); return x; }); }
   function text(v,n) { return String(v==null?'':v).trim().slice(0,n||4000); }
   function write(row,patch) { var s=sheet(); Object.keys(patch).forEach(function(k){ var col=headers.indexOf(k)+1; if(col>0) s.getRange(row,col).setValue(patch[k]); }); }
@@ -100,8 +100,18 @@ var CT_GAS_FEEDBACK = (function () {
   }
   function reconcile(clock) { var c=clock||CT_GAS.clock(Date.now(),CT_GAS.BUDGET_MS), initialized=ensureSheet(), all=values(), admitted=poll(c,all), synced=sync(c,values()); return {sheet:initialized,admitted:admitted,synced:synced}; }
   function ensureSheet() { var s=sheet(); return {spreadsheet_id:spreadsheetId(),sheet_name:sheetName(),headers:headers,row_count:Math.max(0,s.getLastRow()-1)}; }
+  function configure(spreadsheetIdValue,sheetNameValue) {
+    var id=text(spreadsheetIdValue,200), name=text(sheetNameValue,200)||'Feedback';
+    if(!id) throw new Error('Feedback spreadsheet ID is required');
+    var book=SpreadsheetApp.openById(id), target=book.getSheetByName(name);
+    if(!target) throw new Error('Feedback sheet not found: '+name);
+    props().setProperty('CT_GAS_FEEDBACK_SPREADSHEET_ID',id);
+    props().setProperty('CT_GAS_FEEDBACK_SHEET_NAME',name);
+    return {spreadsheet_id:id,sheet_name:name,headers:headers,row_count:Math.max(0,target.getLastRow()-1)};
+  }
   function setup() { var result=ensureSheet(); props().setProperty('CT_GAS_FEEDBACK_READY','true'); return result; }
-  return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet};
+  return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet,configure:configure};
 }());
 function setupFeedbackSheet() { return CT_GAS_FEEDBACK.setup(); }
+function configureFeedbackInbox(spreadsheetId,sheetName) { return CT_GAS_FEEDBACK.configure(spreadsheetId,sheetName); }
 function reconcileFeedbackSheet(clock) { return CT_GAS_FEEDBACK.reconcile(clock); }
