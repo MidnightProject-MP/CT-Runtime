@@ -217,8 +217,8 @@ jobs:
           EOF
       - name: Run container production doctor and reconstruction
         run: |
-          docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --env-file "$RUNNER_TEMP/ct-runtime.env" ct-runtime:test doctor
-          docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --env-file "$RUNNER_TEMP/ct-runtime.env" ct-runtime:test reconstruct
+          docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --env-file "$RUNNER_TEMP/ct-runtime.env" --env OPENROUTER_API_KEY=ci-placeholder ct-runtime:test doctor
+          docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --env-file "$RUNNER_TEMP/ct-runtime.env" --env OPENROUTER_API_KEY=ci-placeholder ct-runtime:test reconstruct
       - name: Build both target platforms without loading
         uses: docker/build-push-action@v6
         with:
