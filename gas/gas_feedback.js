@@ -100,7 +100,7 @@ var CT_GAS_FEEDBACK = (function () {
   }
   function reconcile(clock) { var c=clock||CT_GAS.clock(Date.now(),CT_GAS.BUDGET_MS), initialized=ensureSheet(), all=values(), admitted=poll(c,all), synced=sync(c,values()); return {sheet:initialized,admitted:admitted,synced:synced}; }
   function ensureSheet() { var s=sheet(); return {spreadsheet_id:spreadsheetId(),sheet_name:sheetName(),headers:headers,row_count:Math.max(0,s.getLastRow()-1)}; }
-  function setup() { var result=ensureSheet(); props().setProperty('CT_GAS_FEEDBACK_READY','true'); return result; }
+  function setup() { var result=ensureSheet(); props().setProperty('CT_GAS_FEEDBACK_READY','true'); setupGasTrigger(); return result; }
   return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet};
 }());
 function setupFeedbackSheet() { return CT_GAS_FEEDBACK.setup(); }
