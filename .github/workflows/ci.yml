@@ -91,7 +91,7 @@ jobs:
           TEST_S3_PATH_STYLE: 'true'
       - name: Production doctor and reconstruction
         run: |
-          npm run doctor
+          OPENROUTER_API_KEY=ci-placeholder npm run doctor
           npm run reconstruct
         env:
           CT_RUNTIME_MODE: production
