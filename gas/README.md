@@ -19,6 +19,14 @@ This directory is a copyable Apps Script provider binding. It uses global V8 Jav
 7. Run `inspectFederationIdentity()` once in the Apps Script editor and authorize its OpenID scopes. The setup-only function deliberately raises a visible `FEDERATION_IDENTITY` error containing the non-secret `aud` and `sub` claims, not the token. Configure Neon's external provider with `https://www.googleapis.com/oauth2/v3/certs` and that exact `aud`; register the `sub` to the stable `CT_GAS_FEDERATION_INSTANCE_ID` in `federation_gas_instances`.
 8. Deploy the script as a web app owned by the deployment account. Grant the authenticated role only the pending/take/checkpoint functions. Google identity tokens have no `role` claim; if the Data API uses its fallback role for such tokens, configure that fallback as `authenticated`. Missing-bearer requests must remain rejected, authenticated must have no direct federation-table grants, and the private JWT-sub registry remains mandatory. State must be persisted in Neon before notification. A failed POST is recoverable because `gasSafetyWake` polls pending advisories for the JWT subject every 15 minutes.
 
+## Feedback sheet
+
+The human interface is a normal Google Sheet tab named `feedback` by default. Set `CT_GAS_FEEDBACK_SPREADSHEET_ID` to point at an existing human-facing spreadsheet; otherwise the runtime uses `CT_GAS_SPREADSHEET_ID`. `CT_GAS_FEEDBACK_SHEET_NAME` may override the tab name. Run `setupFeedbackSheet()` once after deployment to create the header row.
+
+Humans write a message in the `message` column and may optionally supply `project` and `reply_to`. Runtime-owned columns are `created_at`, `thread_id`, `message_id`, `revision`, `status`, `work_order_id`, `ack_at`, `updated_at`, `response`, and `error`. Admission creates a durable work-order binding before writing `Accepted`; the recurring `gasSafetyWake` then dispatches due work and reconciles status/results back to the same row. The interface never requires a human to manage a work-order ID.
+
+The sheet is polled/reconciled rather than relying on a user edit trigger. This preserves recovery when a notification or trigger is missed; Apps Script trigger executions also cannot stop to ask for authorization, so the deployment identity must authorize the required services before unattended operation. 
+
 ## GitHub Actions / clasp
 
 The repository now contains a manual deployment path at `.github/workflows/gas-clasp-deploy.yml`. It keeps Apps Script credentials out of Git, generates the local `.clasp.json` from a GitHub Actions repository variable, validates the manifest, shows the clasp file set, pushes the complete GAS project, and creates or updates a deployment. `gas/.clasp.json.example` documents the local shape and is intentionally not a live project configuration.
