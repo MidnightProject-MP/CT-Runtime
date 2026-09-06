@@ -55,6 +55,20 @@ jobs:
           exit 1
       - name: Create integration bucket
         run: docker run --rm --network host --entrypoint /bin/sh "$MC_IMAGE" -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
+      - name: Provision database roles required by migrations
+        run: |
+          PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anonymous') THEN
+              CREATE ROLE anonymous NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
       - name: Run all local tests
         run: npm test
       - name: Apply migrations explicitly
