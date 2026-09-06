@@ -178,6 +178,20 @@ jobs:
             run --store /tmp/ct-runtime/state --project container --model test/model --agent test --task handoff \
             --opencode /usr/local/bin/node --opencode-arg -e \
             --opencode-arg 'require("node:fs").writeFileSync(process.env.CT_RUNTIME_RESULT_FILE, JSON.stringify({status:"complete",summary:"ok",requested_next_wake:null}))'
+      - name: Provision database roles for container migration
+        run: |
+          PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anonymous') THEN
+              CREATE ROLE anonymous NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
       - name: Apply migrations through the real image entrypoint
         run: docker run --rm --network host --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m ct-runtime:test migrate --database-url "$POSTGRES_URL"
       - name: Write non-secret container integration environment
