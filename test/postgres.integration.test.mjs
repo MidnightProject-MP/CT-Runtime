@@ -16,11 +16,8 @@ const launch = { command: process.execPath, commandArgs: [fixture], model: 'prov
 const semanticEnvelope = (executionId, statement = 'persisted claim') => createSemanticEvidenceEnvelope({ lineage: { physicalExecutionId: executionId, workOrderId: `${executionId}-work` }, sources: [{ sourceId: 'source-1', sourceClass: 'execution-reported', reference: `ct-runtime-result:${executionId}`, sha256: null, sourceExecutionId: executionId }], claims: [{ claimId: 'claim-1', claimType: 'execution-summary', statement, supportSourceIds: ['source-1'] }] });
 
 test('Postgres runtime lifecycle is canonical, fenced, and atomic', { skip: !connectionString, timeout: 60000 }, async (t) => {
-  const schema = `ct_runtime_test_${crypto.randomBytes(8).toString('hex')}`;
-  const admin = new Pool({ connectionString, max: 2 });
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const poolA = new Pool({ connectionString, max: 5, options: `-c search_path=${schema}` });
-  const poolB = new Pool({ connectionString, max: 5, options: `-c search_path=${schema}` });
+  const poolA = new Pool({ connectionString, max: 5 });
+  const poolB = new Pool({ connectionString, max: 5 });
   const evidenceStore = new FakeEvidenceStore();
   const storeA = new PostgresStore({ pool: poolA, config: { runtimeVersion: 'test' }, evidenceStore });
   const storeB = new PostgresStore({ pool: poolB, config: { runtimeVersion: 'test' }, evidenceStore });
@@ -155,8 +152,6 @@ test('Postgres runtime lifecycle is canonical, fenced, and atomic', { skip: !con
     });
   } finally {
     await Promise.allSettled([poolA.end(), poolB.end()]);
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
   }
 });
 

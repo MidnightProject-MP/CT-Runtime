@@ -19,6 +19,18 @@ This directory is a copyable Apps Script provider binding. It uses global V8 Jav
 7. Run `inspectFederationIdentity()` once in the Apps Script editor and authorize its OpenID scopes. The setup-only function deliberately raises a visible `FEDERATION_IDENTITY` error containing the non-secret `aud` and `sub` claims, not the token. Configure Neon's external provider with `https://www.googleapis.com/oauth2/v3/certs` and that exact `aud`; register the `sub` to the stable `CT_GAS_FEDERATION_INSTANCE_ID` in `federation_gas_instances`.
 8. Deploy the script as a web app owned by the deployment account. Grant the authenticated role only the pending/take/checkpoint functions. Google identity tokens have no `role` claim; if the Data API uses its fallback role for such tokens, configure that fallback as `authenticated`. Missing-bearer requests must remain rejected, authenticated must have no direct federation-table grants, and the private JWT-sub registry remains mandatory. State must be persisted in Neon before notification. A failed POST is recoverable because `gasSafetyWake` polls pending advisories for the JWT subject every 15 minutes.
 
+## GitHub Actions / clasp
+
+The repository now contains a manual deployment path at `.github/workflows/gas-clasp-deploy.yml`. It keeps Apps Script credentials out of Git, generates the local `.clasp.json` from a GitHub Actions repository variable, validates the manifest, shows the clasp file set, pushes the complete GAS project, and creates or updates a deployment. `gas/.clasp.json.example` documents the local shape and is intentionally not a live project configuration.
+
+Before using the workflow, configure:
+
+- repository variable `CT_GAS_SCRIPT_ID` — the Apps Script project ID;
+- repository secret `CLASPRC_JSON` — the complete authenticated `.clasprc.json` content for the deployment identity;
+- GitHub environment `gas-production` — the workflow targets this environment so its approval/protection rules can remain the release gate.
+
+The deployment workflow is deliberately `workflow_dispatch` only. GitHub Actions is a deployment mechanism here, not the GAS scheduler or runtime authority. Existing deployment IDs can be supplied at dispatch time; otherwise clasp creates a new deployment. Never commit `.clasprc.json`, access tokens, Script Properties, or other credentials.
+
 ## Operation
 
 `runWake()` creates a conservative clock before reconstruction. `CT_GAS_BUDGET_MS` is clamped to 30,000..300,000 ms and defaults to 240,000 ms; explicit per-operation budgets and a 10-second reserve are retained for persistence, release, and scheduling. Every state, trigger, model, Drive, Observer, and GitHub operation has an admission and post-operation checkpoint boundary. Checkpoints use a separate measured emergency budget and never report success if durable continuation and retry scheduling cannot complete. A semantic `continuations` record carries bounded goal, decisions, evidence/provenance, outstanding work, next operation, reason, logical work-order ID, and physical execution count. Evidence progress is written immediately after Drive succeeds, before Observer or later guards, and the next continuation carries the exact Drive reference and hash. The proof work order records step A on one wake and reconstructs evidence for step B on a later wake. Model/network/rate exhaustion first persists `deferred` state, then creates a durable retry wake for the same logical work order, execution, continuation, selected model, and launch/resume context. The recurring safety trigger repairs a persisted continuation that lost its wake during a scheduling failure. GitHub Actions dispatch/inspection is a test executor and is never a scheduler.

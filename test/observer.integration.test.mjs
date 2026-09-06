@@ -50,10 +50,7 @@ test('Postgres Observer physical lineage is bounded and excludes arbitrary field
 test('Postgres Observer production contract is transactional and storage-neutral', { skip: !connectionString || !existsSync(foundryPath) || !existsSync(schemaPath), timeout: 60000 }, async () => {
   const [foundry, schemaModule] = await Promise.all([import(foundryPath), import(schemaPath)]);
   assert.equal(schemaModule.OBSERVER_VERSION, '1.2.0');
-  const schema = `ct_observer_test_${crypto.randomBytes(8).toString('hex')}`;
-  const admin = new Pool({ connectionString, max: 2 });
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const pool = new Pool({ connectionString, max: 5, options: `-c search_path=${schema}` });
+  const pool = new Pool({ connectionString, max: 5 });
   const artifactSink = new ArtifactSink();
   const evidenceStore = new EvidenceStore();
   const store = new PostgresStore({ pool, config: { runtimeVersion: 'test' }, evidenceStore });
@@ -107,8 +104,6 @@ test('Postgres Observer production contract is transactional and storage-neutral
   } finally {
     await rm(temporary, { recursive: true, force: true });
     await pool.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
   }
 });
 
