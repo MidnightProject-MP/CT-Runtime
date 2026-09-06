@@ -27,10 +27,6 @@ env:
   NODE_VERSION: '22.14.0'
   CLASP_VERSION: '3.3.0'
 
-env:
-  NODE_VERSION: '22.14.0'
-  CLASP_VERSION: '3.3.0'
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
