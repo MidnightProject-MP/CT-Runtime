@@ -10,7 +10,6 @@ permissions:
 env:
   NODE_VERSION: '22.14.0'
   POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
-  TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime_tests
   MINIO_IMAGE: minio/minio:RELEASE.2025-04-22T22-12-26Z
   MC_IMAGE: minio/mc:RELEASE.2025-04-16T18-13-26Z
   FOUNDRY_COMMIT: ${{ vars.FOUNDRY_COMMIT || '5bb45fca93394800f533e75150599a54e6aaf96b' }}
@@ -70,16 +69,16 @@ jobs:
           END
           $$;
           SQL
-      - name: Create isolated integration database
-        run: PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE ctruntime_tests'
       - name: Run all local tests
         run: npm test
       - name: Apply migrations explicitly
         run: npm run migrate -- --database-url "$POSTGRES_URL"
-      - name: Run PostgreSQL integration
-        run: npm run test:postgres
-        env:
-          TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+      - name: Run PostgreSQL integration suites in isolated databases
+        run: |
+          PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE ctruntime_postgres_tests'
+          PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE ctruntime_observer_tests'
+          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/postgres.integration.test.mjs
+          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_observer_tests node --test test/observer.integration.test.mjs
       - name: Run S3 integration
         run: npm run test:s3
         env:
