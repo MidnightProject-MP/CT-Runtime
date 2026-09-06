@@ -73,6 +73,7 @@ jobs:
         run: npm test
       - name: Apply migrations explicitly
         run: npm run migrate -- --database-url "$POSTGRES_URL"
+      # test:postgres — integration coverage is split into isolated databases below.
       - name: Run PostgreSQL integration suites in isolated databases
         run: |
           PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE ctruntime_postgres_tests'
