@@ -19,10 +19,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: gas-clasp-deploy
-  cancel-in-progress: false
-
 env:
   NODE_VERSION: '22.14.0'
   CLASP_VERSION: '3.3.0'
@@ -80,3 +76,8 @@ jobs:
           else
             clasp create-deployment --description "$DEPLOYMENT_DESCRIPTION"
           fi
+
+      - name: Bootstrap feedback sheet
+        working-directory: gas
+        run: |
+          clasp run setupFeedbackSheet
