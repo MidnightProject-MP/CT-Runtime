@@ -9,7 +9,18 @@ var CT_GAS_TRIGGER = (function () {
 }());
 function gasSafetyWake() { var now=Date.now(), budget=CT_GAS.budgetMs(PropertiesService.getScriptProperties().getProperty('CT_GAS_BUDGET_MS')), clock=CT_GAS.clock(now,budget), out=[]; var ensured=CT_GAS.runGuard(clock,'trigger-ensure',CT_GAS.OPERATION_BUDGETS.trigger,CT_GAS_TRIGGER.ensure); if (ensured.status==='preempted') return [{status:'interrupted',reason:'insufficient-budget-for-trigger'}];
    /* The human feedback sheet is polled before runtime wakes so accepted messages become durable work. */
-     try { if (typeof reconcileFeedbackSheet === 'function' && clock.canStart(CT_GAS.OPERATION_BUDGETS.stateRead)) out.push({feedback:reconcileFeedbackSheet(clock)}); } catch (e) { out.push({feedback:{status:'deferred',error:String(e.message||e)}}); }
+     try {
+       if (typeof reconcileFeedbackSheet === 'function' && clock.canStart(CT_GAS.OPERATION_BUDGETS.stateRead)) {
+         var feedbackProps=PropertiesService.getScriptProperties(), feedbackSpreadsheetId=feedbackProps.getProperty('CT_GAS_FEEDBACK_SPREADSHEET_ID'), feedbackSheetName=feedbackProps.getProperty('CT_GAS_FEEDBACK_SHEET_NAME')||'Feedback';
+         try { CT_GAS_STATE.event('feedback_poll_started',{operation:'feedback-poll',script_id:ScriptApp.getScriptId(),feedback_spreadsheet_configured:Boolean(feedbackSpreadsheetId),feedback_sheet_name:feedbackSheetName,trigger_handlers:CT_GAS_TRIGGER.registry().filter(function(x){return x.handler===safety;}).length,general_compute_requested:false}); } catch (_) {}
+         var feedbackResult=reconcileFeedbackSheet(clock);
+         out.push({feedback:feedbackResult});
+         try { CT_GAS_STATE.event('feedback_poll_result',{operation:'feedback-poll',script_id:ScriptApp.getScriptId(),feedback_spreadsheet_configured:Boolean(feedbackSpreadsheetId),feedback_sheet_name:feedbackSheetName,admitted_count:feedbackResult&&feedbackResult.admitted?feedbackResult.admitted.length:0,admitted_rows:feedbackResult&&feedbackResult.admitted?feedbackResult.admitted.map(function(x){return x.row;}):[],failed_count:feedbackResult&&feedbackResult.admitted?feedbackResult.admitted.filter(function(x){return x.status==='failed';}).length:0,synced_count:feedbackResult&&feedbackResult.synced?feedbackResult.synced.length:0,general_compute_requested:false}); } catch (_) {}
+       }
+     } catch (e) {
+       try { CT_GAS_STATE.event('feedback_poll_error',{operation:'feedback-poll',script_id:ScriptApp.getScriptId(),error:CT_GAS.bound(e.message||e,400),general_compute_requested:false}); } catch (_) {}
+       out.push({feedback:{status:'deferred',error:String(e.message||e)}});
+     }
      try { if (clock.canStart(CT_GAS.OPERATION_BUDGETS.observer)) observePendingEvidence(clock); } catch (_) {}
      try { if (PropertiesService.getScriptProperties().getProperty('CT_GAS_FEDERATION_DATA_API_URL') && clock.canStart(CT_GAS.OPERATION_BUDGETS.trigger)) dispatchPendingFederationAdvisories(clock); } catch (_) {}
     try { var orders=CT_GAS_STATE.list('work_orders'); for (var oi=0;oi<orders.length;oi++) { var order=orders[oi], cp=CT_GAS_STATE.latestContinuation(order.id); if ((order.lifecycle==='checkpointed'||order.lifecycle==='deferred') && cp && clock.canStart(CT_GAS.OPERATION_BUDGETS.trigger)) { var wakes=CT_GAS_STATE.list('wakes').filter(function (w) { return w.payload && w.payload.work_order_id===order.id && w.payload.continuation_id===cp.continuation_id && w.lifecycle!=='completed'; }); if (!wakes.length) { try { CT_GAS_TRIGGER.schedule({time:new Date(now+1000).toISOString(),reason:order.lifecycle==='deferred'?'model-deferred':'recovery',work_order_id:order.id,execution_id:cp.execution_id,continuation_id:cp.continuation_id,launch:cp.launch_context,resume:cp.resume_context},clock); } catch (_) {} } } } } catch (_) {}
