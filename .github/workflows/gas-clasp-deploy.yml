@@ -22,6 +22,7 @@ permissions:
 env:
   NODE_VERSION: '22.14.0'
   CLASP_VERSION: '3.3.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
   CT_GAS_FEEDBACK_SPREADSHEET_ID: '1i0cHzahVDUtODDWRL7b-qVW5mEz2b-DHuUDI8PbO7W8'
   CT_GAS_FEEDBACK_SHEET_NAME: 'Feedback'
 
@@ -53,11 +54,10 @@ jobs:
 
       - name: Configure Apps Script project
         working-directory: gas
-        env:
-          SCRIPT_ID: ${{ vars.CT_GAS_SCRIPT_ID }}
         run: |
-          test -n "$SCRIPT_ID"
-          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+          test -n "$CT_GAS_SCRIPT_ID"
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+          test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
 
       - name: Show clasp file status
         working-directory: gas
