@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-// Contract-level guard for the durable feedback-poll observability fields.
-// Keep this provider-neutral: GAS execution itself is covered by the live adapter.
 test('feedback poll events expose boundary-safe diagnostics', () => {
   const started = {
     operation: 'feedback-poll',
