@@ -22,6 +22,7 @@ permissions:
 env:
   NODE_VERSION: '22.14.0'
   CLASP_VERSION: '3.3.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
   CT_GAS_FEEDBACK_SPREADSHEET_ID: '1i0cHzahVDUtODDWRL7b-qVW5mEz2b-DHuUDI8PbO7W8'
   CT_GAS_FEEDBACK_SHEET_NAME: 'Feedback'
 
@@ -51,13 +52,30 @@ jobs:
           umask 077
           printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
 
+      - name: Inspect clasp OAuth identity metadata
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const config = JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8'));
+          const settings = config.oauth2ClientSettings || {};
+          const tokens = Object.values(config.tokens || {});
+          const scopes = [...new Set(tokens.flatMap((token) => String(token.scope || '').split(/\s+/).filter(Boolean)))].sort();
+          const serviceAccountLike = config.type === 'service_account' || Boolean(config.client_email || config.private_key);
+          console.log(JSON.stringify({
+            top_level_keys: Object.keys(config).sort(),
+            credential_shape: serviceAccountLike ? 'service-account-like' : 'user-oauth-like',
+            oauth2_client_id: settings.clientId || settings.client_id || null,
+            oauth2_project_id: settings.projectId || settings.project_id || null,
+            token_scopes: scopes
+          }, null, 2));
+          NODE
+
       - name: Configure Apps Script project
         working-directory: gas
-        env:
-          SCRIPT_ID: ${{ vars.CT_GAS_SCRIPT_ID }}
         run: |
-          test -n "$SCRIPT_ID"
-          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+          test -n "$CT_GAS_SCRIPT_ID"
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+          test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
 
       - name: Show clasp file status
         working-directory: gas
@@ -82,9 +100,74 @@ jobs:
       - name: Configure dedicated feedback inbox
         working-directory: gas
         run: |
-          clasp run configureFeedbackInbox --params "[\"$CT_GAS_FEEDBACK_SPREADSHEET_ID\",\"$CT_GAS_FEEDBACK_SHEET_NAME\"]"
+          set +e
+          clasp run configureFeedbackInbox --params "[\"$CT_GAS_FEEDBACK_SPREADSHEET_ID\",\"$CT_GAS_FEEDBACK_SHEET_NAME\"]" 2>&1 | tee "$RUNNER_TEMP/configure-feedback.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "clasp run configureFeedbackInbox exited with status $status" >&2
+            exit "$status"
+          fi
+          if grep -Fq 'Unable to run script function. Please make sure you have permission to run the script function.' "$RUNNER_TEMP/configure-feedback.log"; then
+            echo 'clasp run configureFeedbackInbox reported an Execution API permission failure despite a successful process exit.' >&2
+            exit 1
+          fi
+          grep -Fq 'spreadsheet_id' "$RUNNER_TEMP/configure-feedback.log" || { echo 'configureFeedbackInbox did not return the expected result payload.' >&2; exit 1; }
+          grep -Fq "$CT_GAS_FEEDBACK_SPREADSHEET_ID" "$RUNNER_TEMP/configure-feedback.log" || { echo 'configureFeedbackInbox returned the wrong or missing spreadsheet ID.' >&2; exit 1; }
+          grep -Fq 'sheet_name' "$RUNNER_TEMP/configure-feedback.log" || { echo 'configureFeedbackInbox did not return the expected sheet name.' >&2; exit 1; }
+
+      - name: Diagnose feedback inbox after configure
+        working-directory: gas
+        run: |
+          set +e
+          clasp run diagnoseFeedbackInbox 2>&1 | tee "$RUNNER_TEMP/diagnose-after-configure.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "clasp run diagnoseFeedbackInbox exited with status $status" >&2
+            exit "$status"
+          fi
+          if grep -Fq 'Unable to run script function. Please make sure you have permission to run the script function.' "$RUNNER_TEMP/diagnose-after-configure.log"; then
+            echo 'diagnoseFeedbackInbox reported an Execution API permission failure despite a successful process exit.' >&2
+            exit 1
+          fi
+          grep -Fq 'script_id' "$RUNNER_TEMP/diagnose-after-configure.log" || { echo 'diagnoseFeedbackInbox did not return script identity.' >&2; exit 1; }
+          grep -Fq "$CT_GAS_SCRIPT_ID" "$RUNNER_TEMP/diagnose-after-configure.log" || { echo 'diagnoseFeedbackInbox returned an unexpected Apps Script ID.' >&2; exit 1; }
+          grep -Fq "$CT_GAS_FEEDBACK_SPREADSHEET_ID" "$RUNNER_TEMP/diagnose-after-configure.log" || { echo 'diagnoseFeedbackInbox did not observe the dedicated feedback spreadsheet property.' >&2; exit 1; }
 
       - name: Bootstrap feedback sheet
         working-directory: gas
         run: |
-          clasp run setupFeedbackSheet
+          set +e
+          clasp run setupFeedbackSheet 2>&1 | tee "$RUNNER_TEMP/setup-feedback.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "clasp run setupFeedbackSheet exited with status $status" >&2
+            exit "$status"
+          fi
+          if grep -Fq 'Unable to run script function. Please make sure you have permission to run the script function.' "$RUNNER_TEMP/setup-feedback.log"; then
+            echo 'clasp run setupFeedbackSheet reported an Execution API permission failure despite a successful process exit.' >&2
+            exit 1
+          fi
+          grep -Fq 'spreadsheet_id' "$RUNNER_TEMP/setup-feedback.log" || { echo 'setupFeedbackSheet did not return the expected result payload.' >&2; exit 1; }
+          grep -Fq "$CT_GAS_FEEDBACK_SPREADSHEET_ID" "$RUNNER_TEMP/setup-feedback.log" || { echo 'setupFeedbackSheet returned the wrong or missing spreadsheet ID.' >&2; exit 1; }
+
+      - name: Diagnose feedback inbox after setup
+        working-directory: gas
+        run: |
+          set +e
+          clasp run diagnoseFeedbackInbox 2>&1 | tee "$RUNNER_TEMP/diagnose-after-setup.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "clasp run diagnoseFeedbackInbox exited with status $status" >&2
+            exit "$status"
+          fi
+          if grep -Fq 'Unable to run script function. Please make sure you have permission to run the script function.' "$RUNNER_TEMP/diagnose-after-setup.log"; then
+            echo 'diagnoseFeedbackInbox reported an Execution API permission failure despite a successful process exit.' >&2
+            exit 1
+          fi
+          grep -Fq 'script_id' "$RUNNER_TEMP/diagnose-after-setup.log" || { echo 'diagnoseFeedbackInbox did not return script identity.' >&2; exit 1; }
+          grep -Fq "$CT_GAS_SCRIPT_ID" "$RUNNER_TEMP/diagnose-after-setup.log" || { echo 'diagnoseFeedbackInbox returned an unexpected Apps Script ID.' >&2; exit 1; }
+          grep -Fq "$CT_GAS_FEEDBACK_SPREADSHEET_ID" "$RUNNER_TEMP/diagnose-after-setup.log" || { echo 'diagnoseFeedbackInbox did not observe the dedicated feedback spreadsheet property.' >&2; exit 1; }
