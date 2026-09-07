@@ -7,6 +7,15 @@ var CT_GAS_TRIGGER = (function () {
   function retire(row,reason,out) { try { CT_GAS_STATE.invalid(row.id,reason); CT_GAS_STATE.event('wake_retired',{wake_id:row.id,work_order_id:row.payload&&row.payload.work_order_id,continuation_id:row.payload&&row.payload.continuation_id,operation:'wake-recovery',reason:reason,general_compute_requested:false}); } catch (_) {} out.push({status:'retired',wake_id:row.id,work_order_id:row.payload&&row.payload.work_order_id,reason:reason}); }
   return { registry:registry, ensure:ensure, schedule:schedule, due:due, retire:retire };
 }());
+function diagnoseFeedbackInbox() {
+  var props=PropertiesService.getScriptProperties();
+  return {
+    script_id:ScriptApp.getScriptId(),
+    feedback_spreadsheet_id:props.getProperty('CT_GAS_FEEDBACK_SPREADSHEET_ID'),
+    feedback_sheet_name:props.getProperty('CT_GAS_FEEDBACK_SHEET_NAME'),
+    feedback_ready:props.getProperty('CT_GAS_FEEDBACK_READY')
+  };
+}
 function gasSafetyWake() { var now=Date.now(), budget=CT_GAS.budgetMs(PropertiesService.getScriptProperties().getProperty('CT_GAS_BUDGET_MS')), clock=CT_GAS.clock(now,budget), out=[]; var ensured=CT_GAS.runGuard(clock,'trigger-ensure',CT_GAS.OPERATION_BUDGETS.trigger,CT_GAS_TRIGGER.ensure); if (ensured.status==='preempted') return [{status:'interrupted',reason:'insufficient-budget-for-trigger'}];
    /* The human feedback sheet is polled before runtime wakes so accepted messages become durable work. */
      try {
