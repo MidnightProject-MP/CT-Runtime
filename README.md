@@ -45,6 +45,8 @@ The only accepted keys are `status`, `summary`, and `requested_next_wake`. The l
 
 `complete` and the resulting runtime `success` describe only a bounded execution and valid handoff. They do not establish that the work-order claim, project objective, deployment, or user outcome succeeded; that judgment remains caller-owned and requires evidence appropriate to the claim.
 
+OpenCode historical backfill discovers **all local sessions** through the supported read-only database query, not a project-scoped listing. Backfill writes only current-version, metadata-only sanitized evidence: IDs, timing, counts, routes, agents, and tool status/timing/counts. It never persists transcripts, prompts, summaries, commands, inputs, outputs, errors, paths, repository data, patches, or rich export. A validated hash-backed semantic envelope may be reused for the exact source session as a separate semantic plane only when a durable source resolver reproduces every source hash; it is never inferred from structural metadata. Legacy sanitized artifacts do not suppress the current extractor.
+
 ## Claim-level semantic evidence
 
 Envelopes use `celestan-semantic-evidence-envelope-v1`. The core rule is that every claim is bounded, source-linked, and classified; execution success never upgrades a claim into objective or outcome truth. Sources are explicitly classified as operator-supplied, execution-reported, mechanically-verified, independently-reviewed, runtime-observed, or provider-reported. Drafts contain only `sources` and `claims`; transcripts and reasoning are never accepted or persisted. Observer binds the structural digest and envelope in an immutable `celestan-observer-evidence-join-v1`; no semantic task or result is admitted without that join and cited claim IDs.

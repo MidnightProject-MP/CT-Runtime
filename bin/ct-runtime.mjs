@@ -26,7 +26,7 @@ Commands:
   recover --store PATH [--stale-ms N]
   observe-pending --store PATH --observer PATH [--semantic-result FILE]
   evidence export EXECUTION|ses_... --store PATH [--project NAME] [--rich|--source rich]
-  evidence backfill --store PATH [--project NAME]  # includes supported sanitized OpenCode sessions
+  evidence backfill --store PATH [--project NAME]  # all local OpenCode sessions; current-version metadata-only sanitized revisions
   wake --store PATH --reason REASON
   status | inspect --id ID
   capabilities [--project NAME]        # list purpose-level capabilities and current bindings
