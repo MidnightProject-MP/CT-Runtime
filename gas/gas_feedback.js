@@ -3,9 +3,9 @@ var CT_GAS_FEEDBACK = (function () {
   var headers = ['created_at','thread_id','message_id','revision','project','message','reply_to','status','work_order_id','ack_at','updated_at','response','error'];
 
   function props() { return PropertiesService.getScriptProperties(); }
-  function spreadsheetId() { return props().getProperty('CT_GAS_FEEDBACK_SPREADSHEET_ID'); }
+  function spreadsheetId() { return props().getProperty('CT_GAS_FEEDBACK_SPREADSHEET_ID') || props().getProperty('CT_GAS_SPREADSHEET_ID'); }
   function sheetName() { return props().getProperty('CT_GAS_FEEDBACK_SHEET_NAME') || 'Feedback'; }
-  function book() { var id=spreadsheetId(); if (!id) throw new Error('CT_GAS_FEEDBACK_SPREADSHEET_ID is required'); return SpreadsheetApp.openById(id); }
+  function book() { var id=spreadsheetId(); if (!id) throw new Error('CT_GAS_FEEDBACK_SPREADSHEET_ID or CT_GAS_SPREADSHEET_ID is required'); return SpreadsheetApp.openById(id); }
   function sheet() { var s=book().getSheetByName(sheetName()); if (!s) throw new Error('Configured feedback sheet not found: '+sheetName()); if (s.getLastRow()===0) { s.appendRow(headers); s.setFrozenRows(1); } return s; }
   function values() { var s=sheet(), n=s.getLastRow(); if (n<2) return []; return s.getRange(2,1,n-1,headers.length).getValues().map(function(r,i){ var x={row:i+2}; headers.forEach(function(h,j){x[h]=r[j];}); return x; }); }
   function text(v,n) { return String(v==null?'':v).trim().slice(0,n||4000); }
