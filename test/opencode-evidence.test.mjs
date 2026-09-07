@@ -282,14 +282,26 @@ test('paused remote publisher does not fork revision lineage', async () => {
     put: async (arg) => {
       remoteCalls++;
       // Simulate slow remote that would exceed lock TTL if held inside critical section
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      // Increased delay to avoid flakiness on slower CI; local write is outside remote.
+      await new Promise((resolve) => setTimeout(resolve, 150));
       return { objectUri: `s3://test/${remoteCalls}`, objectKey: arg.label, bytes: arg.content.length };
     }
   };
   const firstInput = 41, secondInput = 42;
   const firstPromise = exportOpenCodeSession({ sessionId: 'ses_abc', store, evidenceStore: delayedEvidenceStore, run: successfulRun({ ...exported, info: { ...exported.info, tokens: { input: firstInput, output: 17 } } }) });
-  // Allow first to acquire lock, write local revision 2, release lock, and enter remote delay
-  await new Promise((resolve) => setTimeout(resolve, 15));
+  // Wait for first's local revision to be durably written (remote still delayed) before starting second.
+  // Polling avoids brittle fixed sleeps and races on slower runners.
+  const pollDeadline = Date.now() + 2000;
+  while (Date.now() < pollDeadline) {
+    const files = await readHistoricalEvidenceFiles(store.root);
+    if (files.length >= 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  // Ensure the local file exists before proceeding; timeout prevents deadlock.
+  {
+    const files = await readHistoricalEvidenceFiles(store.root);
+    if (files.length < 2) throw new Error('timed out waiting for first local revision to appear');
+  }
   const secondPromise = exportOpenCodeSession({ sessionId: 'ses_abc', store, evidenceStore: delayedEvidenceStore, run: successfulRun({ ...exported, info: { ...exported.info, tokens: { input: secondInput, output: 17 } } }) });
   const [first, second] = await Promise.all([firstPromise, secondPromise]);
   const revisions = [first.revision.number, second.revision.number].sort((a, b) => a - b);

@@ -39,3 +39,18 @@ Verification: targeted OpenCode suite **29 passed, 0 failed**; full `npm test` *
 The core rule is: **a claim is not evidence until it is bounded, linked to its supporting sources, and assigned an honest source classification**. Runtime accepts `celestan-semantic-evidence-envelope-v1` envelopes without embedding them in result handoffs or raw evidence. Source classifications are `operator-supplied`, `execution-reported`, `mechanically-verified`, `independently-reviewed`, `runtime-observed`, and `provider-reported`; they describe provenance, not confidence. Agent drafts contain only `sources` and `claims`, with no transcript or reasoning, and invalid drafts fall back to the minimal execution-reported handoff envelope.
 
 Observer seals an immutable `celestan-observer-evidence-join-v1` between the structural digest and a validated claim envelope before creating a semantic task. Structural context has no semantic authority by itself. Semantic output must cite the join binding hash and admitted claim IDs; records without a join terminate as `semantic-evidence-insufficient` and are excluded from consolidation and Chronicle narratives.
+
+### Canonical filename migration
+
+`observer/inbox` files for OpenCode historical evidence must be named exactly
+`${encodeURIComponent(evidenceId)}-${contentHash}.json` (see
+`readHistoricalEvidenceFiles` / `writeLocalHistoricalEvidence`). On load any
+mismatched name throws `OpenCode historical evidence canonical name is invalid`.
+
+If legacy files exist with a non-canonical name (e.g. manually renamed or
+pre-reconciliation naming), recanonicalization is required: rename each file to
+its canonical form and re-validate with `validateExecutionEvidence`. Do not copy
+or duplicate — rename in place and keep only the canonical name. A helper CLI
+for automated recanonicalization is planned (future TODO: `ct-runtime
+reconstruct --recanonicalize-opencode`); until then use a safe one-off rename
+script and verify hashes out-of-band.
