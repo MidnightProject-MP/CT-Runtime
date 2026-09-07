@@ -22,6 +22,8 @@ permissions:
 env:
   NODE_VERSION: '22.14.0'
   CLASP_VERSION: '3.3.0'
+  CT_GAS_FEEDBACK_SPREADSHEET_ID: '1i0cHzahVDUtODDWRL7b-qVW5mEz2b-DHuUDI8PbO7W8'
+  CT_GAS_FEEDBACK_SHEET_NAME: 'Feedback'
 
 jobs:
   deploy:
@@ -76,6 +78,11 @@ jobs:
           else
             clasp create-deployment --description "$DEPLOYMENT_DESCRIPTION"
           fi
+
+      - name: Configure dedicated feedback inbox
+        working-directory: gas
+        run: |
+          clasp run configureFeedbackInbox --params "[\"$CT_GAS_FEEDBACK_SPREADSHEET_ID\",\"$CT_GAS_FEEDBACK_SHEET_NAME\"]"
 
       - name: Bootstrap feedback sheet
         working-directory: gas
