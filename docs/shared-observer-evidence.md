@@ -20,7 +20,19 @@ Execution Federation remains the authority for claims, fencing, handoffs, and co
 
 Legacy compatibility is deliberately one-way: evidence and inline Observer records created before this pipeline remain historical records and are not copied into `observer/inbox`. Legacy GAS reasoning artifacts receive content-addressed classifications with a safe structural projection, but the full artifact is semantically ineligible. Sanitized historical OpenCode structure may join a separately validated semantic claim envelope; without one it is `semantic-evidence-insufficient`. Rich extraction remains recovery-only regardless of envelope presence and never enters normal semantic inference.
 
+OpenCode backfill queries all local sessions with `opencode db "SELECT id FROM session ORDER BY time_created, id" --format json`, validates and deterministically de-duplicates `ses_` IDs, and continues after unavailable individual exports. Its report separates discovered, attempted, exported, duplicate, unavailable, and skipped-current sessions. Current sanitized evidence is metadata-only and audited fail-closed against a closed extractor-version-2 schema; old sanitized files are immutable history and do not count as current coverage. The optional `semanticEvidenceEnvelope` is independently validated, must have exact session lineage, and persists or reuses only when a durable source resolver supplies bytes whose SHA-256 hashes match every source. Reusable conflicting envelopes and corrupted canonical artifacts are rejected. No transcript or rich export is persisted.
+
 > **Execution is responsible for leaving trustworthy evidence. Observer is responsible for deciding what that evidence means.**
+
+### Reconciliation status (2026-09-07)
+
+The main checkout was fast-forwarded to `00fafc8` and the unique evidence changes were isolated on `feat/opencode-evidence-reconciliation`. Original staged, unstaged, and untracked work is preserved in the named stash `preserve-pre-opencode-evidence-reconciliation-2026-09-07` (`13290cd8e5d073df3eb456e0b23c29ac8121b7a4`). No GAS changes were replayed; no commits or pushes were made during reconciliation.
+
+Retained work is metadata-only extractor v2, all-local-session sanitized discovery/backfill, immutable revisions, and exact-session semantic envelopes whose source bytes are independently hash-checked by a supplied resolver. Canonical hashing retains the legacy ordinal key ordering and now round-trips omitted object values and undefined/sparse array entries. Admission checks cover malformed exports without source-text diagnostics, nested session lineage, closed metadata fields, corrupt canonical files, and preventing silent removal of an attached semantic envelope.
+
+`lib/semantic-recovery.mjs` and `test/semantic-recovery.test.mjs` remain preserved only in the stash's untracked snapshot; their CLI/import/reexport wiring is not admitted. Heuristic objective/review/completion interpretation belongs outside Runtime's mechanics boundary, and campaign concurrency/revision risks remain deferred—not completed. No live OpenCode export/backfill, provider execution, database mutation, or deployment was performed.
+
+Verification: targeted OpenCode suite **29 passed, 0 failed**; full `npm test` **191 tests, 187 passed, 0 failed, 4 skipped**, using the clean Observer/schema files at Foundry CI pin `5bb45fca93394800f533e75150599a54e6aaf96b` through `CT_RUNTIME_OBSERVER_MODULE`. The skipped Neon convergence, PostgreSQL runtime, PostgreSQL Observer, and S3 integration tests were not exercised; live integration remains unverified.
 
 ## Claim-level semantic evidence (Stage 1)
 
