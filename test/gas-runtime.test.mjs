@@ -295,6 +295,8 @@ test('live inspection reports bounded disposition facts and writes nothing', asy
   state.create('work_orders', { id: 'order-unlinked', lifecycle: 'requested', payload: { goal: 'not feedback' } });
   const kinds = ['work_orders', 'wakes', 'executions', 'observer_ledger', 'chronicle', 'schema', 'continuations'];
   kinds.forEach(k => state.list(k));
+  h.rows.set('Feedback', [['Inbox'], [], [], ['Project (optional)', 'Message / objective', 'Status', 'Celestan update / question', 'Your reply', 'Last activity', 'Thread ID', 'Reply revision'], ['CT-Runtime', 'secret objective text', 'Waiting', 'secret human response', '', '', 'thread-secret', '1']]);
+  const feedbackBefore = JSON.stringify(h.rows.get('Feedback'));
   const countsBefore = kinds.map(k => (h.rows.get(k) || []).length);
   const result = h.context.inspectFeedbackObjectives();
   assert.equal(result.version, 'feedback-objective-inspect-v1');
@@ -307,7 +309,9 @@ test('live inspection reports bounded disposition facts and writes nothing', asy
   assert.equal(result.objectives[0].active_wakes, 0);
   const dumped = JSON.stringify(result);
   assert.ok(!dumped.includes('secret objective text') && !dumped.includes('secret human response') && !dumped.includes('thread-secret'), 'no content leaves the boundary');
+  assert.equal(JSON.stringify(result.sheet_rows), JSON.stringify([{ row: 5, status: 'Waiting', work_order_id: 'order-inspect' }]));
   assert.deepEqual(kinds.map(k => (h.rows.get(k) || []).length), countsBefore, 'inspection writes nothing');
+  assert.equal(JSON.stringify(h.rows.get('Feedback')), feedbackBefore, 'inspection never writes the human sheet');
 });
 
 test('generic objectives fail closed and invalid/completed history never restarts work', async () => {
