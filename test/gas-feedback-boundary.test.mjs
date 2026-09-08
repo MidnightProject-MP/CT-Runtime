@@ -36,7 +36,7 @@ function makeSheet(grid) {
 async function loadFeedback({ grid, props = {}, withTrigger = false, seed = null }) {
   const sheet = makeSheet(grid);
   const store = { work_orders: [], wakes: [], observer_ledger: [] };
-  if (seed) for (const [kind, rows] of Object.entries(seed)) store[kind].push(...rows);
+  if (seed) for (const [kind, rows] of Object.entries(seed)) (store[kind] = store[kind] || []).push(...rows);
   const sandbox = {
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' },
@@ -302,4 +302,105 @@ test('an 8-column human row cannot be read as a positional durable 13-field row'
   assert.equal(order.payload.step, 'feedback');
   assert.equal(order.payload.launch_context.source, 'feedback-sheet');
   assert.ok(!('message' in order.payload) || typeof order.payload.goal === 'string', 'durable goal derives semantically, never by positional column copy');
+});
+
+const MALFORMED_WAKE_ID_2 = 'wake_18b1d9bc40a3e9beda145a43ea0f9c63';
+
+function seedMalformedChain() {
+  const grid = liveMirrorGrid();
+  grid[3][7] = 'Accepted';
+  grid[3].push(MALFORMED_WORK_ORDER_ID, '2026-09-08T01:12:15.886Z', '2026-09-08T01:12:15.886Z', '', '');
+  return {
+    grid,
+    seed: {
+      work_orders: [{
+        id: MALFORMED_WORK_ORDER_ID, kind: 'work_order', lifecycle: 'checkpointed', revision: 3,
+        payload: { goal: 'Last activity', project: 'Your reply', feedback_thread_id: 'Message / objective', feedback_message_id: 'Status', feedback_revision: 1 },
+      }],
+      wakes: [
+        {
+          id: MALFORMED_WAKE_ID,
+          kind: 'wake', lifecycle: 'completed', revision: 3,
+          payload: { work_order_id: MALFORMED_WORK_ORDER_ID, execution_id: 'feedback-execution_x', continuation_id: 'feedback-continuation_y' },
+        },
+        {
+          id: MALFORMED_WAKE_ID_2, kind: 'wake', lifecycle: 'claimed', revision: 2, owner: 'gas-safety', fence: 'old-fence',
+          lease_until: new Date(Date.now() - 60000).toISOString(),
+          payload: { work_order_id: MALFORMED_WORK_ORDER_ID, execution_id: 'physical-execution_8264536fb04f38e734d54735b3fd805b', continuation_id: 'feedback-continuation_z' },
+        },
+      ],
+      continuations: [{
+        id: 'feedback-continuation_z', kind: 'continuation', execution_id: 'physical-execution_8264536fb04f38e734d54735b3fd805b', revision: 1,
+        payload: { work_order_id: MALFORMED_WORK_ORDER_ID, execution_id: 'physical-execution_8264536fb04f38e734d54735b3fd805b', continuation_id: 'feedback-continuation_z' },
+      }],
+    },
+  };
+}
+
+test('checkpointed work orders may transition to invalid for chain retirement', async () => {
+  const { CT_GAS } = await loadFeedback({ grid: liveMirrorGrid(), props: {} });
+  assert.equal(CT_GAS.transition('checkpointed', 'invalid'), 'invalid');
+});
+
+test('chain repair fences order, descendant wakes, continuations, and restores row 4', async () => {
+  const { grid, seed } = seedMalformedChain();
+  const { ctx, sheet, store } = await loadFeedback({
+    grid,
+    props: { CT_GAS_FEEDBACK_SPREADSHEET_ID: 'feedback-sheet-id', CT_GAS_PROOF_MODEL: 'test/model:free' },
+    withTrigger: true,
+    seed,
+  });
+  const result = ctx.CT_GAS_FEEDBACK.repairChain();
+  assert.equal(result.status, 'chain-repaired');
+  assert.equal(result.work_order_id, MALFORMED_WORK_ORDER_ID);
+  assert.deepStrictEqual([...result.wakes_retired].sort(), [MALFORMED_WAKE_ID_2]);
+  assert.deepStrictEqual([...result.wakes_noted.already_completed], [MALFORMED_WAKE_ID]);
+  assert.deepStrictEqual([...result.continuations_fenced], ['feedback-continuation_z']);
+  assert.equal(result.header, 'restored');
+  assert.deepEqual(sheet.grid[3].slice(0, 8), CANONICAL_HEADER);
+  assert.deepEqual(sheet.grid[3].slice(8, 13), ['', '', '', '', '']);
+  const order = store.work_orders[store.work_orders.length - 1];
+  assert.equal(order.lifecycle, 'invalid');
+  assert.equal(order.payload.retire_reason, 'feedback-header-row-misadmission');
+  assert.deepStrictEqual([...order.payload.fenced_continuation_ids], ['feedback-continuation_z']);
+  const second = store.wakes.filter((w) => w.id === MALFORMED_WAKE_ID_2).pop();
+  assert.equal(second.lifecycle, 'invalid');
+  const retired = store.observer_ledger.filter((e) => e.kind === 'wake_retired');
+  assert.equal(retired.length, 1);
+  assert.equal(retired[0].payload.work_order_id, MALFORMED_WORK_ORDER_ID);
+  const audit = store.observer_ledger.filter((e) => e.kind === 'feedback_chain_repaired');
+  assert.equal(audit.length, 1);
+  assert.ok(audit[0].payload.physical_execution_ids.includes('physical-execution_8264536fb04f38e734d54735b3fd805b'));
+  // Row 5 was never touched by the repair.
+  assert.equal(sheet.grid[4][1], 'Verify the CT-Runtime wake pipeline end to end');
+});
+
+test('chain repair refuses a live-claimed descendant wake with zero mutations', async () => {
+  const { grid, seed } = seedMalformedChain();
+  seed.wakes[1].lease_until = new Date(Date.now() + 600000).toISOString();
+  const { ctx, store, sheet } = await loadFeedback({
+    grid,
+    props: { CT_GAS_FEEDBACK_SPREADSHEET_ID: 'feedback-sheet-id', CT_GAS_PROOF_MODEL: 'test/model:free' },
+    withTrigger: true,
+    seed,
+  });
+  assert.throws(() => ctx.CT_GAS_FEEDBACK.repairChain(), /lifecycle is claimed/);
+  assert.equal(store.work_orders.length, 1);
+  assert.equal(store.work_orders[0].lifecycle, 'checkpointed');
+  assert.equal(store.wakes.filter((w) => w.id === MALFORMED_WAKE_ID_2)[0].lifecycle, 'claimed');
+  assert.equal(sheet.grid[3][7], 'Accepted');
+  assert.deepEqual(store.observer_ledger, []);
+});
+
+test('chain repair refuses when an expected wake is missing from the chain', async () => {
+  const { grid, seed } = seedMalformedChain();
+  seed.wakes = seed.wakes.slice(0, 1);
+  const { ctx, store } = await loadFeedback({
+    grid,
+    props: { CT_GAS_FEEDBACK_SPREADSHEET_ID: 'feedback-sheet-id', CT_GAS_PROOF_MODEL: 'test/model:free' },
+    withTrigger: true,
+    seed,
+  });
+  assert.throws(() => ctx.CT_GAS_FEEDBACK.repairChain(), /expected wake not found/);
+  assert.equal(store.work_orders[0].lifecycle, 'checkpointed');
 });
