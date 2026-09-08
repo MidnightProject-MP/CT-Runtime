@@ -1,11 +1,13 @@
 name: GAS feedback header repair
 
-# One-shot fenced repair for the 2026-09-08 row-4 header misadmission.
-# Runs the hardcoded repair function against live Apps Script state via the
-# Execution API. Dispatch only after the fix branch has been merged AND the
-# canonical gas-clasp-deploy workflow has pushed it (the repair function must
-# exist in the live project). This workflow never pushes source and never
-# creates, updates, or deletes deployments.
+# One-shot fenced repair for the 2026-09-08 row-4 header misadmission chain.
+# The original wake executed before the first repair ran, so this fences the
+# entire checkpointed chain (order, all descendant wakes, continuations) and
+# restores the canonical row-4 header. Dispatch only after the chain-repair
+# branch has been merged AND the canonical gas-clasp-deploy workflow has
+# pushed it (the repair function must exist in the live project). This
+# workflow never pushes source and never creates, updates, or deletes
+# deployments.
 on:
   workflow_dispatch:
 
@@ -18,6 +20,7 @@ env:
   CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
   MALFORMED_WORK_ORDER_ID: 'feedback-work-order_fa0cdf76b1a3dce3e4a0dca04a626ee0'
   MALFORMED_WAKE_ID: 'wake_b5fb51881cb9ffdd6ef00eadd940266e'
+  MALFORMED_WAKE_ID_2: 'wake_18b1d9bc40a3e9beda145a43ea0f9c63'
 
 concurrency:
   group: gas-feedback-repair
@@ -54,9 +57,9 @@ jobs:
           node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
           test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
 
-      - name: Run fenced row-4 repair
+      - name: Run fenced chain repair
         working-directory: gas
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/repair-row4.log" repairFeedbackHeaderRowAdmission \
-            --require 'repaired' --require "$MALFORMED_WORK_ORDER_ID" --require "$MALFORMED_WAKE_ID" \
-            -- clasp run repairFeedbackHeaderRowAdmission
+          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/repair-chain.log" repairFeedbackHeaderChain \
+            --require 'chain-repaired' --require "$MALFORMED_WORK_ORDER_ID" --require "$MALFORMED_WAKE_ID" --require "$MALFORMED_WAKE_ID_2" \
+            -- clasp run repairFeedbackHeaderChain

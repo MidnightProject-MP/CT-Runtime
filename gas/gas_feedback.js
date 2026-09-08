@@ -202,9 +202,67 @@ var CT_GAS_FEEDBACK = (function () {
     CT_GAS_STATE.event('feedback_admission_repaired',{operation:'feedback-repair',work_order_id:m.workOrderId,wake_id:m.wakeId,row:m.row,reason:m.reason,wake:wakeAction,general_compute_requested:false});
     return {status:'repaired',work_order_id:m.workOrderId,wake_id:m.wakeId,wake:wakeAction,header:'restored'};
   }
-  return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet,configure:configure,repairRow4Admission:repairRow4Admission};
+  /* One-shot fenced repair for the checkpointed malformed chain of 2026-09-08. The original
+     wake executed before the first repair ran, so the work order is checkpointed with a live
+     continuation and descendant wakes (one already resurrected). This fences the entire chain:
+     the order goes to the existing invalid terminal; every wake carrying it is retired (or
+     noted when already terminal); every continuation is audit-fenced. Continuations are
+     append-only facts: they become inert once the order is terminal and no dispatchable wake
+     references them, and history is preserved. All expected IDs are hardcoded; any mismatch
+     aborts before the first mutation. */
+  var MALFORMED_ROW4_CHAIN = {
+    row:4,
+    workOrderId:'feedback-work-order_fa0cdf76b1a3dce3e4a0dca04a626ee0',
+    wakeIds:['wake_b5fb51881cb9ffdd6ef00eadd940266e','wake_18b1d9bc40a3e9beda145a43ea0f9c63'],
+    goal:'Last activity', project:'Your reply',
+    threadLabel:'Message / objective', messageLabel:'Status',
+    reason:'feedback-header-row-misadmission'
+  };
+  function latestPerId(rows) { var byId={}; rows.forEach(function(r){ var cur=byId[r.id]; if(!cur||Number(r.revision||0)>=Number(cur.revision||0)) byId[r.id]=r; }); return Object.keys(byId).map(function(k){ return byId[k]; }); }
+  function chainWakes(workOrderId) { return latestPerId(CT_GAS_STATE.list('wakes')).filter(function(w){ return w.payload&&w.payload.work_order_id===workOrderId; }); }
+  function chainContinuations(workOrderId) { return CT_GAS_STATE.list('continuations').filter(function(c){ return c.payload&&c.payload.work_order_id===workOrderId; }); }
+  function observedExecutions(wakes,continuations) {
+    var ids={};
+    wakes.forEach(function(w){ if(w.payload&&w.payload.execution_id) ids[w.payload.execution_id]=1; });
+    continuations.forEach(function(c){ if(c.payload){ if(c.payload.execution_id) ids[c.payload.execution_id]=1; if(c.payload.resumed_from) ids[c.payload.resumed_from]=1; } });
+    return Object.keys(ids);
+  }
+  function repairChain() {
+    var m=MALFORMED_ROW4_CHAIN;
+    var order=CT_GAS_STATE.get('work_orders',m.workOrderId);
+    if(!order) throw new Error('chain repair refused: malformed work order not found: '+m.workOrderId);
+    if(order.lifecycle==='completed') throw new Error('chain repair refused: malformed work order is completed; manual review required');
+    if(order.lifecycle!=='checkpointed') throw new Error('chain repair refused: malformed work order lifecycle is '+order.lifecycle+'; manual review required');
+    var p=order.payload||{};
+    if(text(p.goal,1200)!==m.goal||text(p.project,100)!==m.project||text(p.feedback_thread_id,160)!==m.threadLabel||text(p.feedback_message_id,160)!==m.messageLabel) throw new Error('chain repair refused: work order payload does not match the malformed header admission');
+    var wakes=chainWakes(m.workOrderId);
+    if(!wakes.length) throw new Error('chain repair refused: no wakes carry the malformed work order');
+    m.wakeIds.forEach(function(id){ if(!wakes.some(function(w){ return w.id===id; })) throw new Error('chain repair refused: expected wake not found among order wakes: '+id); });
+    var continuations=chainContinuations(m.workOrderId);
+    if(!continuations.length) throw new Error('chain repair refused: no continuations carry the malformed work order');
+    var plan=wakes.map(function(w){
+      if(w.lifecycle==='pending') return {wake:w,action:'retire'};
+      if(w.lifecycle==='invalid') return {wake:w,action:'already-invalid'};
+      if(w.lifecycle==='completed') return {wake:w,action:'already-completed'};
+      if(w.lifecycle==='claimed'&&new Date(w.lease_until||0).getTime()<=Date.now()) return {wake:w,action:'retire'};
+      throw new Error('chain repair refused: wake '+w.id+' lifecycle is '+w.lifecycle+'; manual review required');
+    });
+    var s=sheet();
+    if(!pollutedRow4(s,m.workOrderId)) throw new Error('chain repair refused: sheet row 4 does not carry the expected malformed admission markers');
+    var continuationIds=continuations.map(function(c){ return c.id; });
+    var executionIds=observedExecutions(wakes,continuations);
+    for(var i=0;i<SHEET_HEADERS.length;i++) s.getRange(m.row,i+1).setValue(SHEET_HEADERS[i]);
+    for(var c=9;c<=13;c++) s.getRange(m.row,c).setValue('');
+    CT_GAS_STATE.update('work_orders',m.workOrderId,{lifecycle:'invalid',payload:{retire_reason:m.reason,retired_at:nowISO(),retired_row:m.row,fenced_wake_ids:plan.map(function(a){ return a.wake.id; }),fenced_continuation_ids:continuationIds}});
+    var retired=[], noted={already_invalid:[],already_completed:[]};
+    plan.forEach(function(a){ if(a.action==='retire'){ CT_GAS_TRIGGER.retire(a.wake,m.reason,[]); retired.push(a.wake.id); } else if(a.action==='already-invalid'){ noted.already_invalid.push(a.wake.id); } else { noted.already_completed.push(a.wake.id); } });
+    CT_GAS_STATE.event('feedback_chain_repaired',{operation:'feedback-repair',work_order_id:m.workOrderId,wake_ids_retired:retired,wake_ids_noted:noted,continuation_ids:continuationIds,physical_execution_ids:executionIds,row:m.row,reason:m.reason,general_compute_requested:false});
+    return {status:'chain-repaired',work_order_id:m.workOrderId,wakes_retired:retired,wakes_noted:noted,continuations_fenced:continuationIds,header:'restored'};
+  }
+  return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet,configure:configure,repairRow4Admission:repairRow4Admission,repairChain:repairChain};
 }());
 function setupFeedbackSheet() { return CT_GAS_FEEDBACK.setup(); }
 function configureFeedbackInbox(spreadsheetId,sheetName) { return CT_GAS_FEEDBACK.configure(spreadsheetId,sheetName); }
 function reconcileFeedbackSheet(clock) { return CT_GAS_FEEDBACK.reconcile(clock); }
 function repairFeedbackHeaderRowAdmission() { return CT_GAS_FEEDBACK.repairRow4Admission(); }
+function repairFeedbackHeaderChain() { return CT_GAS_FEEDBACK.repairChain(); }
