@@ -8,7 +8,7 @@ import { createSemanticEvidenceEnvelope } from '../lib/semantic-evidence.mjs';
 import { canonicalJson } from '../lib/config.mjs';
 
 test('GAS source has no Node globals or module imports', async () => {
-  const files = ['gas_core.js','gas_state.js','gas_trigger.js','gas_federation.js','gas_v8.js','gas_observer.js','gas_evidence.js','gas_agent_executor.js','gas_github.js','gas_actions.js'];
+  const files = ['gas_core.js','gas_state.js','gas_trigger.js','gas_federation.js','gas_v8.js','gas_observer.js','gas_evidence.js','gas_agent_executor.js','gas_github.js','gas_actions.js','gas_migrate.js'];
   for (const file of files) { const source = await readFile(new URL(`../gas/${file}`, import.meta.url), 'utf8'); assert.doesNotMatch(source, /\b(require|process|Buffer|import\s|export\s)\b/); }
 });
 test('schema, IDs, free-only model and bounded proof are deterministic', () => {

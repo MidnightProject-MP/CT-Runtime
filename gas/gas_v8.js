@@ -1,4 +1,11 @@
 /* One bounded unit per wake. Durable continuation identity is authoritative. */
+function isGasDiagnosticOrder(order,context) {
+  var p=order&&order.payload||{}, launch=p.launch_context||{}, c=context||{};
+  if (p.execution_kind==='objective') return false;
+  // Feedback provenance wins over all diagnostic flags, including legacy checkpoints.
+  if (p.feedback_message_id||p.feedback_thread_id||p.step==='feedback'||launch.source==='feedback-sheet'||(p.resume_context||{}).source==='feedback-sheet'||(c.launch||{}).source==='feedback-sheet'||(c.resume||{}).source==='feedback-sheet') return false;
+  return p.execution_kind==='acknowledgement_diagnostic'||launch.proof==='gas-a-b'||(!order&&(c.launch||{}).proof==='gas-a-b');
+}
 function runWakeAttempt(context) {
   context=context||{}; var started=Date.now(), props=PropertiesService.getScriptProperties(), budget=CT_GAS.budgetMs(props.getProperty('CT_GAS_BUDGET_MS')), clock=CT_GAS.clock(started,budget), state=CT_GAS_STATE;
   var supplied=context.work_order_id, wakeId=context.wake_id, parentExecutionId=context.execution_id, executionId=context.physical_execution_id || context.execution_id, physicalExecutionId=context.physical_execution_id || '', suppliedContinuation=context.continuation_id;
@@ -22,6 +29,10 @@ function runWakeAttempt(context) {
     } catch (_) { try { state.event('wake_interrupted',{execution_id:executionId,work_order_id:supplied,wake_id:wakeId,continuation_id:c&&c.continuation_id||suppliedContinuation,operation:'checkpoint',reason:'incomplete-checkpoint-recoverable',general_compute_requested:false}); } catch (__) {} return {status:'interrupted',reason:'incomplete-checkpoint-recoverable',work_order_id:supplied,execution_id:executionId,wake_id:wakeId}; }
   }
   if (!supplied||!wakeId||!executionId||!suppliedContinuation) return {status:'interrupted',reason:'missing-wake-identity'};
+  var authoritative=state.get('work_orders',supplied);
+  if (authoritative&&(authoritative.lifecycle==='completed'||authoritative.lifecycle==='invalid')) return {status:'duplicate',reason:'work-order-'+authoritative.lifecycle,work_order_id:supplied};
+  if (typeof CT_GAS_MIGRATION!=='undefined'&&authoritative&&!CT_GAS_MIGRATION.legacyAdvanceAllowed(supplied)) return {status:'deferred',reason:'cutover-new-authority',work_order_id:supplied};
+  if (!isGasDiagnosticOrder(authoritative,context)) return waitForGasObjectiveCapacity(supplied);
    var work=op('state-read-work-order',CT_GAS.OPERATION_BUDGETS.stateRead,function () { return state.get('work_orders',supplied); }); if (work&&work.status==='preempted') return checkpoint('before-work-order-read'); if (work && work.lifecycle === 'completed') return {status:'duplicate',work_order_id:supplied,execution_id:executionId,wake_id:wakeId,continuation_id:suppliedContinuation};
   var latest=op('state-read-continuation',CT_GAS.OPERATION_BUDGETS.stateRead,function () { return state.latestContinuation(supplied); }); if (latest&&latest.status==='preempted') return checkpoint('before-continuation-read',(work&&work.payload)||{});
   var p=work&&work.payload||{}, launch=CT_GAS.context((latest&&latest.launch_context)||p.launch_context||context.launch), resume=CT_GAS.context((latest&&latest.resume_context)||p.resume_context||context.resume);
@@ -45,8 +56,12 @@ function runWakeAttempt(context) {
   try { var scheduled=requestNextWake(wakeFor(progressId,progress,'checkpoint')); if (!scheduled||!scheduled.id) throw new Error('wake-not-scheduled'); } catch (_) { return {status:'interrupted',reason:'checkpointed-without-continuation-wake',work_order_id:supplied,execution_id:executionId}; }
   return {status:'checkpointed',step:'A',evidence:evidence};
 }
- function runWakeInternal(context) {
-   context=context||{};
+  function runWakeInternal(context) {
+    context=context||{};
+    var current=CT_GAS_STATE.get('work_orders',context.work_order_id);
+    if (current&&(current.lifecycle==='completed'||current.lifecycle==='invalid')) return {status:'duplicate',reason:'work-order-'+current.lifecycle,work_order_id:context.work_order_id};
+    if (typeof CT_GAS_MIGRATION!=='undefined'&&current&&!CT_GAS_MIGRATION.legacyAdvanceAllowed(context.work_order_id)) return {status:'deferred',reason:'cutover-new-authority',work_order_id:context.work_order_id};
+    if (!isGasDiagnosticOrder(current,context)) return waitForGasObjectiveCapacity(context.work_order_id);
    var started=Date.now(), record=null, result;
    try {
      record=CT_GAS_STATE.executionStart({work_order_id:context.work_order_id,parent_execution_id:context.execution_id,wake_id:context.wake_id,continuation_id:context.continuation_id,reconstruction_source:context.reconstruction_source||'durable-sheets'});
