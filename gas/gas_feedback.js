@@ -173,9 +173,18 @@ var CT_GAS_FEEDBACK = (function () {
     threadLabel:'Message / objective', messageLabel:'Status',
     reason:'feedback-header-row-misadmission'
   };
+  /* Observed malformed status words for row 4. The pre-fix synchronizer stamped the order's
+     lifecycle word into H4 as it moved (Accepted while requested, Working while running,
+     Waiting once checkpointed); 'Waiting' was observed live on 2026-09-08. No other word is
+     accepted: the I4 work-order pin plus intact label cells stay the exact-match fence. */
+  var MALFORMED_ROW4_STATUSES = ['Accepted','Working','Waiting'];
   function pollutedRow4(s,workOrderId) {
     var cells=s.getRange(MALFORMED_ROW4_ADMISSION.row,1,1,9).getValues()[0];
-    return text(cells[7],80)==='Accepted' && text(cells[8],200)===workOrderId;
+    if(text(cells[8],200)!==workOrderId) return false;
+    if(isHeaderCells(cells.slice(0,8))) return false;
+    var intact=[0,1,2,4,5,6];
+    for(var k=0;k<intact.length;k++) if(norm(cells[intact[k]])!==norm(SHEET_HEADERS[intact[k]])) return false;
+    return MALFORMED_ROW4_STATUSES.indexOf(text(cells[7],80))>=0;
   }
   function repairRow4Admission() {
     var m=MALFORMED_ROW4_ADMISSION;
