@@ -134,7 +134,7 @@ var CT_GAS_FEEDBACK = (function () {
       if(clock&&!clock.canStart(CT_GAS.OPERATION_BUDGETS.stateRead)) break;
       var row=all[i], order=resolveOrder(row); if(!order) continue;
       var cp=CT_GAS_STATE.latestContinuation(order.id), status=statusFor(order), response=responseFor(order,cp), patch={status:status,activity:nowISO()};
-      if(response && status==='Verified') patch.response=CT_GAS.bound(response,4000);
+       if(response && (status==='Verified'||status==='Waiting')) patch.response=CT_GAS.bound(response,4000);
       if(status==='Failed') patch.response=CT_GAS.bound((order.payload&&order.payload.reason)||'runtime failure',400);
       write(row.row,patch); out.push({row:row.row,status:status,work_order_id:order.id});
     }
