@@ -306,9 +306,9 @@ test('an 8-column human row cannot be read as a positional durable 13-field row'
 
 const MALFORMED_WAKE_ID_2 = 'wake_18b1d9bc40a3e9beda145a43ea0f9c63';
 
-function seedMalformedChain() {
+function seedMalformedChain(status = 'Waiting') {
   const grid = liveMirrorGrid();
-  grid[3][7] = 'Accepted';
+  grid[3][7] = status;
   grid[3].push(MALFORMED_WORK_ORDER_ID, '2026-09-08T01:12:15.886Z', '2026-09-08T01:12:15.886Z', '', '');
   return {
     grid,
@@ -388,7 +388,7 @@ test('chain repair refuses a live-claimed descendant wake with zero mutations', 
   assert.equal(store.work_orders.length, 1);
   assert.equal(store.work_orders[0].lifecycle, 'checkpointed');
   assert.equal(store.wakes.filter((w) => w.id === MALFORMED_WAKE_ID_2)[0].lifecycle, 'claimed');
-  assert.equal(sheet.grid[3][7], 'Accepted');
+  assert.equal(sheet.grid[3][7], 'Waiting');
   assert.deepEqual(store.observer_ledger, []);
 });
 
@@ -403,4 +403,32 @@ test('chain repair refuses when an expected wake is missing from the chain', asy
   });
   assert.throws(() => ctx.CT_GAS_FEEDBACK.repairChain(), /expected wake not found/);
   assert.equal(store.work_orders[0].lifecycle, 'checkpointed');
+});
+
+test('chain repair also accepts the earlier Accepted marker variant', async () => {
+  const { grid, seed } = seedMalformedChain('Accepted');
+  const { ctx, store } = await loadFeedback({
+    grid,
+    props: { CT_GAS_FEEDBACK_SPREADSHEET_ID: 'feedback-sheet-id', CT_GAS_PROOF_MODEL: 'test/model:free' },
+    withTrigger: true,
+    seed,
+  });
+  const result = ctx.CT_GAS_FEEDBACK.repairChain();
+  assert.equal(result.status, 'chain-repaired');
+  assert.equal(store.work_orders[store.work_orders.length - 1].lifecycle, 'invalid');
+});
+
+test('chain repair refuses an unknown status word with zero mutations', async () => {
+  const { grid, seed } = seedMalformedChain('Failed');
+  const { ctx, store, sheet } = await loadFeedback({
+    grid,
+    props: { CT_GAS_FEEDBACK_SPREADSHEET_ID: 'feedback-sheet-id', CT_GAS_PROOF_MODEL: 'test/model:free' },
+    withTrigger: true,
+    seed,
+  });
+  assert.throws(() => ctx.CT_GAS_FEEDBACK.repairChain(), /does not carry the expected malformed admission markers/);
+  assert.equal(store.work_orders[0].lifecycle, 'checkpointed');
+  assert.equal(store.wakes.filter((w) => w.id === MALFORMED_WAKE_ID_2)[0].lifecycle, 'claimed');
+  assert.equal(sheet.grid[3][7], 'Failed');
+  assert.deepEqual(store.observer_ledger, []);
 });
