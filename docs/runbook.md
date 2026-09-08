@@ -33,6 +33,10 @@ Membership in the host `docker` group and access to `/var/run/docker.sock` are e
 
 If a worker loses its fence, its child must be terminated and its terminal write must be rejected. Run `recover`; inspect the immutable crash event and attempt rows. Reconcile S3 objects that lack database references before deleting anything.
 
+### GAS feedback deployment
+
+Before repeating a GAS external effect, inspect reality first: run `diagnoseFeedbackInbox` and confirm the returned Script ID plus configured feedback spreadsheet property. Only run `configureFeedbackInbox` or `setupFeedbackSheet` on observed mismatch. Deployment identity, execution authority, and sheet ownership are separate boundaries; a green `clasp` process exit is not proof of success without the expected semantic payload. Stale local GAS branches are a known deployment-source hazard; branch retirement is a separate cleanup operation.
+
 ## Human blockers
 
 Database, bucket, network, secret-management, image-signing, retention, semantic-provider, Cloud Run, Oracle, and production Git access require external authorization and credentials. Local syntax and unit checks do not satisfy those gates.
