@@ -1,0 +1,74 @@
+name: GAS feedback header repair
+
+# One-shot fenced repair for the 2026-09-08 row-4 header misadmission.
+# Runs the hardcoded repair function against live Apps Script state via the
+# Execution API. Dispatch only after the fix branch has been merged AND the
+# canonical gas-clasp-deploy workflow has pushed it (the repair function must
+# exist in the live project). This workflow never pushes source and never
+# creates, updates, or deletes deployments.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.14.0'
+  CLASP_VERSION: '3.3.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
+  MALFORMED_WORK_ORDER_ID: 'feedback-work-order_fa0cdf76b1a3dce3e4a0dca04a626ee0'
+  MALFORMED_WAKE_ID: 'wake_b5fb51881cb9ffdd6ef00eadd940266e'
+
+concurrency:
+  group: gas-feedback-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    environment: gas-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install clasp
+        run: npm install --global @google/clasp@${CLASP_VERSION}
+
+      - name: Configure clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          test -n "$CLASPRC_JSON"
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+
+      - name: Configure Apps Script project
+        working-directory: gas
+        run: |
+          test -n "$CT_GAS_SCRIPT_ID"
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+          test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
+
+      - name: Run fenced row-4 repair
+        working-directory: gas
+        run: |
+          set +e
+          clasp run repairFeedbackHeaderRowAdmission 2>&1 | tee "$RUNNER_TEMP/repair-row4.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "clasp run repairFeedbackHeaderRowAdmission exited with status $status" >&2
+            exit "$status"
+          fi
+          if grep -Fq 'Unable to run script function. Please make sure you have permission to run the script function.' "$RUNNER_TEMP/repair-row4.log"; then
+            echo 'repairFeedbackHeaderRowAdmission reported an Execution API permission failure despite a successful process exit.' >&2
+            exit 1
+          fi
+          grep -Fq 'repaired' "$RUNNER_TEMP/repair-row4.log" || { echo 'Repair did not report repaired status; it refused or failed. Inspect the log.' >&2; exit 1; }
+          grep -Fq "$MALFORMED_WORK_ORDER_ID" "$RUNNER_TEMP/repair-row4.log" || { echo 'Repair output missing the expected work order ID.' >&2; exit 1; }
+          grep -Fq "$MALFORMED_WAKE_ID" "$RUNNER_TEMP/repair-row4.log" || { echo 'Repair output missing the expected wake ID.' >&2; exit 1; }
