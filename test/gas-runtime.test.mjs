@@ -17,10 +17,12 @@ function harness({ now = 100000, budget = 30000, fetch = () => { throw new Error
   context.LockService = { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) };
   context.SpreadsheetApp = { openById: () => ({ getSheetByName: name => rows.has(name) ? sheet(name) : null, insertSheet: name => { rows.set(name, [['id','kind','lifecycle','execution_id','parent_id','worker_id','idempotency_key','payload_json','created_at','updated_at','schema_version','revision','supersedes','owner','fence','lease_until']]); return sheet(name); } }) };
   context.ScriptApp = { getProjectTriggers: () => triggers, newTrigger: handler => ({ timeBased: () => ({ everyMinutes: () => ({ create: () => { triggers.push({ getHandlerFunction: () => handler, getTriggerSource: () => 'time', getUniqueId: () => `t${triggers.length}` }); } }) }) }) };
-  const evidenceFolder = () => ({ getFoldersByName: () => ({ hasNext: () => false }), createFile: blob => { const id = `file-${++fileCounter}`; files.set(id, String(blob.x || '')); return { getId: () => id, setDescription: () => {} }; } });
-  context.DriveApp = { getFolderById: () => ({ getFoldersByName: () => ({ hasNext: () => false }), createFolder: evidenceFolder }), getFileById: id => ({ getId: () => id, getBlob: () => ({ getDataAsString: () => files.get(id) || '' }) }) };
+  const folder = (id, parents = []) => ({ getId: () => id, getFoldersByName: () => ({ hasNext: () => false }), getParents: () => { let i = 0; return { hasNext: () => i < parents.length, next: () => parents[i++] }; } });
+  const fileParents = new Map();
+  const evidenceFolder = () => ({ getFoldersByName: () => ({ hasNext: () => false }), createFile: blob => { const id = `file-${++fileCounter}`; files.set(id, String(blob.x || '')); fileParents.set(id, [folder('observer-inbox', [folder('root')])]); return { getId: () => id, setDescription: () => {}, getParents: () => { let i = 0; const parents = fileParents.get(id) || []; return { hasNext: () => i < parents.length, next: () => parents[i++] }; } }; } });
+  context.DriveApp = { getFolderById: () => Object.assign(folder('root'), { createFolder: evidenceFolder }), getFileById: id => ({ getId: () => id, getBlob: () => ({ getDataAsString: () => files.get(id) || '' }), getParents: () => { let i = 0; const parents = fileParents.get(id) || []; return { hasNext: () => i < parents.length, next: () => parents[i++] }; } }) };
   context.UrlFetchApp = { fetch: (url, options) => String(url).includes('/models') ? ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ data: [{ id: 'openrouter/test:free', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text'], output_modalities: ['text'] } }, { id: 'test/provider:free', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text'], output_modalities: ['text'] } }] }) }) : fetch(url, options) };
-  vm.createContext(context); return { context, rows, props, setNow: n => { clock = n; } };
+  vm.createContext(context); return { context, rows, props, files, fileParents, setNow: n => { clock = n; } };
 }
 async function boot(options) { const h = harness(options); vm.runInContext(await source(), h.context); return h; }
 function wake(id = 'wake-1', continuation = 'cont-1', execution = 'exec-1', time = new Date(0).toISOString(), workOrder = 'order-1') { return { time, reason: 'checkpoint', work_order_id: workOrder, execution_id: execution, continuation_id: continuation, launch: { model: 'openrouter/test:free' }, resume: { step: 'A' }, wake_id: id, id }; }
@@ -39,6 +41,24 @@ test('separate VM contexts reconstruct A then B from durable state', async () =>
   const h2 = await boot({ budget: 300000, fetch: () => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }) }) });
   for (const [k, v] of h.rows) h2.rows.set(k, v.map(x => [...x]));
   assert.equal(h2.context.CT_GAS_STATE.latestContinuation('order-1').work_order_id, 'order-1');
+});
+
+test('deterministic Drive-root verification blocks and retires the wake instead of looping', async () => {
+  const h = await boot({ budget: 300000, fetch: () => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }) }) });
+  h.context.CT_GAS_STATE.create('work_orders', { id: 'order-root-boundary', lifecycle: 'requested', payload: { goal: 'g', step: 'A', model: 'openrouter/test:free' } });
+  const first = h.context.runWake(wake('wake-root-a', 'cont-root-a', 'seed-root', new Date(0).toISOString(), 'order-root-boundary'));
+  assert.equal(first.status, 'checkpointed', JSON.stringify(first));
+  const evidence = h.context.CT_GAS_STATE.list('evidence').at(-1);
+  h.fileParents.set(evidence.payload.drive_file_id, [{ getId: () => 'wrong-root', getParents: () => ({ hasNext: () => false }) }]);
+  h.setNow(102000);
+  const result = h.context.gasSafetyWake();
+  assert.ok(result.some(row => row.status === 'blocked' && row.reason === 'evidence-root-configuration'), JSON.stringify(result));
+  assert.equal(h.context.CT_GAS_STATE.get('work_orders', 'order-root-boundary').lifecycle, 'waiting');
+  assert.equal(h.context.CT_GAS_STATE.get('wakes', result.find(row => row.status === 'blocked').wake_id).lifecycle, 'invalid');
+  const order = h.context.CT_GAS_STATE.get('work_orders', 'order-root-boundary');
+  assert.equal(order.payload.wait_condition, 'configuration');
+  assert.match(order.payload.response, /configured Drive root/);
+  assert.equal(h.context.gasSafetyWake().filter(row => row.work_order_id === 'order-root-boundary').length, 0);
 });
 
 test('due wake routes its persisted identity and deferred retry retains it', async () => {
