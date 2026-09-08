@@ -21,7 +21,13 @@ This directory is a copyable Apps Script provider binding. It uses global V8 Jav
 
 ## Feedback sheet
 
-The human interface is a normal Google Sheet tab named `Feedback` by default. Set `CT_GAS_FEEDBACK_SPREADSHEET_ID` to point at an existing human-facing spreadsheet; otherwise the runtime uses `CT_GAS_SPREADSHEET_ID`. `CT_GAS_FEEDBACK_SHEET_NAME` may override the tab name. The human contract is 8 columns with the header in row 4: `Project (optional)`, `Message / objective`, `Status`, `Celestan update/question`, `Your reply`, `Last activity`, `Thread ID`, `Reply revision`. Rows 1-4 are bootstrap/header content and are never treated as messages; human intake begins at row 5. The adapter fails closed (admits nothing) unless row 4 carries exactly the canonical header. The 13-field durable record shape stays internal to Runtime state and is never exposed in this sheet.
+The human interface is a normal Google Sheet tab named `Feedback` by default. Set `CT_GAS_FEEDBACK_SPREADSHEET_ID` to point at an existing human-facing spreadsheet; otherwise the runtime uses `CT_GAS_SPREADSHEET_ID`. `CT_GAS_FEEDBACK_SHEET_NAME` may override the tab name. The human contract is 8 columns with the header in row 4: `Project (optional)`, `Message / objective`, `Status`, `Celestan update/question`, `Your reply`, `Last activity`, `Thread ID`, `Reply revision`. Rows 1-4 are bootstrap/header content and are never treated as messages; human intake begins at row 5. The adapter fails closed (admits nothing) unless row 4 carries exactly the canonical header.
+
+The 8-column sheet is not a reduced representation of the 13-column Runtime row. It is a different interface contract with a semantic mapping, never a positional mapping. Some durable fields are Runtime-generated with no human cell; some human cells are projections of durable state:
+
+- Human input: A `Project (optional)` → durable `project`; B `Message / objective` plus E `Your reply` → durable `goal` via effective message plus thread context; H `Reply revision` → durable `feedback_revision` via numeric revision; G `Thread ID` may join an existing thread when supplied.
+- Runtime projections (system-written columns C, D, F, and assigned G): C `Status` reflects lifecycle; D `Celestan update/question` reflects response mapping; F `Last activity` reflects poll time; G `Thread ID` is assigned on first admission by deterministic derivation.
+- Runtime-generated durable fields with no human cell: `work_order_id`, `step`, `model` (from `CT_GAS_PROOF_MODEL`), `physical_execution_count`, `feedback_thread_id` / `feedback_message_id` / `feedback_fingerprint` (deterministic hashes), `reply_to`, and `launch_context` / `resume_context` with `source:'feedback-sheet'`. There are no `message_id` / `work_order_id` / `ack` columns: message identity is derived deterministically and work linkage resolves via thread plus revision.
 
 Humans write a message in `Message / objective` (or a follow-up in `Your reply`) and may optionally supply `Project (optional)`, `Thread ID`, and `Reply revision`. Runtime-owned columns are `Status`, `Celestan update/question`, `Last activity`, and `Thread ID` (assigned on first admission). Admission creates a durable work-order binding before writing `Accepted`; the recurring `gasSafetyWake` then dispatches due work and reconciles status/results back to the same physical row. The interface never requires a human to manage a work-order ID.
 
@@ -29,15 +35,15 @@ The sheet is polled/reconciled rather than relying on a user edit trigger. This 
 
 ## GitHub Actions / clasp
 
-The repository now contains a manual deployment path at `.github/workflows/gas-clasp-deploy.yml`. It keeps Apps Script credentials out of Git, generates the local `.clasp.json` from a GitHub Actions repository variable, validates the manifest, shows the clasp file set, pushes the complete GAS project, and creates or updates a deployment. `gas/.clasp.json.example` documents the local shape and is intentionally not a live project configuration.
+Canonical GAS writes happen only through GitHub Actions. `.github/workflows/gas-clasp-deploy.yml` runs on push to `main` or manual dispatch; it keeps Apps Script credentials out of Git, generates the local `.clasp.json` from a GitHub Actions repository variable, validates the manifest, shows the clasp file set, pushes the complete GAS project, and creates or updates a deployment. `.github/workflows/gas-feedback-repair.yml` is dispatch-only, never pushes source, and runs only the fenced row-4 repair. `gas/.clasp.json.example` documents the local shape and is intentionally not a live project configuration. No supported workflow or documented operator path performs a local `clasp push`; an accidental local push is a detectable policy violation and recovery event, not a supported path. Do not rely on a machine-local git hook as the control plane.
 
 Before using the workflow, configure:
 
 - repository variable `CT_GAS_SCRIPT_ID` — the Apps Script project ID;
-- repository secret `CLASPRC_JSON` — the complete authenticated `.clasprc.json` content for the deployment identity;
+- repository secret `CLASPRC_JSON` — the complete authenticated `.clasprc.json` content for the deployment identity; it must contain the working `ct-runtime` credential as `tokens.default` (CI checks structural keys and type only and never logs credential values);
 - GitHub environment `gas-production` — the workflow targets this environment so its approval/protection rules can remain the release gate.
 
-The deployment workflow is deliberately `workflow_dispatch` only. GitHub Actions is a deployment mechanism here, not the GAS scheduler or runtime authority. Existing deployment IDs can be supplied at dispatch time; otherwise clasp creates a new deployment. Never commit `.clasprc.json`, access tokens, Script Properties, or other credentials.
+Deployment authority, execution authority, and sheet ownership are different boundaries: verify each independently. Before repeating an external effect, inspect reality first: run `diagnoseFeedbackInbox`, confirm the returned Script ID and configured spreadsheet property, and only then run `configureFeedbackInbox` or `setupFeedbackSheet` when the observed state mismatches. GitHub Actions is a deployment mechanism here, not the GAS scheduler or runtime authority. Existing deployment IDs can be supplied at dispatch time; otherwise clasp creates a new deployment. Never commit `.clasp.json`, `.clasprc.json`, access tokens, Script Properties, or other credentials; CI rejects tracked credential or config artifacts.
 
 ## Operation
 

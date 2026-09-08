@@ -263,3 +263,43 @@ test('fenced repair refuses when the header no longer carries the malformed mark
   assert.equal(store.wakes[0].lifecycle, 'pending');
   assert.deepStrictEqual([...sheet.writes], []);
 });
+
+test('historical header-label admission would have been caught: polluted row 4 admits nothing', async () => {
+  const grid = liveMirrorGrid();
+  grid[3][7] = 'Accepted';
+  grid[3].push(MALFORMED_WORK_ORDER_ID, '2026-09-08T01:12:15.886Z', '2026-09-08T01:12:15.886Z', '', '');
+  const { ctx, sheet, store, clock } = await loadFeedback({
+    grid,
+    props: { CT_GAS_FEEDBACK_SPREADSHEET_ID: 'feedback-sheet-id', CT_GAS_PROOF_MODEL: 'test/model:free' },
+  });
+  const result = ctx.CT_GAS_FEEDBACK.reconcile(clock);
+  assert.equal(result.sheet.header_ok, false);
+  assert.deepStrictEqual([...result.admitted], []);
+  assert.deepStrictEqual([...result.synced], []);
+  assert.deepStrictEqual([...sheet.writes], []);
+  assert.equal(store.work_orders.length, 0);
+  assert.ok(!store.work_orders.some((o) => o.payload.goal === 'Last activity'), 'header labels must not become a durable goal');
+});
+
+test('an 8-column human row cannot be read as a positional durable 13-field row', async () => {
+  const source = await readFile(new URL('../gas/gas_feedback.js', import.meta.url), 'utf8');
+  assert.match(source, /SHEET_HEADERS/);
+  assert.match(source, /HEADER_ROW = 4/);
+  assert.match(source, /DATA_FIRST_ROW = 5/);
+  assert.match(source, /COL = \{ project:1, message:2, status:3, response:4, reply:5, activity:6, thread:7, revision:8 \}/);
+  assert.match(source, /r\[COL\.project-1\]/);
+  assert.doesNotMatch(source, /r\[0\],100\)\,message:text\(r\[1\]/);
+  const { ctx, clock } = await loadFeedback({
+    grid: liveMirrorGrid(),
+    props: { CT_GAS_FEEDBACK_SPREADSHEET_ID: 'feedback-sheet-id', CT_GAS_PROOF_MODEL: 'test/model:free' },
+  });
+  const result = ctx.CT_GAS_FEEDBACK.reconcile(clock);
+  const order = result.admitted.length ? ctx.CT_GAS_STATE.list('work_orders')[0] : null;
+  assert.ok(order, 'row 5 admits one durable order');
+  const payloadKeys = Object.keys(order.payload).sort();
+  assert.deepStrictEqual(payloadKeys, ['feedback_fingerprint', 'feedback_message_id', 'feedback_revision', 'feedback_thread_id', 'goal', 'launch_context', 'model', 'physical_execution_count', 'project', 'reply_to', 'resume_context', 'step', 'work_order_id']);
+  assert.equal(payloadKeys.length, 13);
+  assert.equal(order.payload.step, 'feedback');
+  assert.equal(order.payload.launch_context.source, 'feedback-sheet');
+  assert.ok(!('message' in order.payload) || typeof order.payload.goal === 'string', 'durable goal derives semantically, never by positional column copy');
+});

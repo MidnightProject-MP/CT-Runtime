@@ -1,9 +1,13 @@
 /* Human feedback-sheet adapter. The sheet is an interface; runtime state remains authoritative. */
 var CT_GAS_FEEDBACK = (function () {
   /* Canonical human-facing contract: 8 columns, header row 4, human intake begins at row 5.
-     Rows 1-4 are bootstrap/header content and are never messages. The 13-field durable record
-     shape stays internal to Runtime state; it is never exposed in, or positionally read from,
-     this sheet. A previous revision read the human sheet positionally as the durable layout,
+     Rows 1-4 are bootstrap/header content and are never messages. The 8-column sheet is a
+     different interface contract from the 13-field durable work-order payload, never a reduced
+     positional view of it: human project/message/reply/revision plus deterministic thread and
+     message derivation map semantically to durable goal and linkage, while lifecycle, response,
+     activity, and assigned thread project back to system-written columns. Runtime-generated
+     identifiers, fingerprint, model binding, and launch/resume context have no human cell.
+     A previous revision read the human sheet positionally as the durable layout,
      which admitted the header row as a message; the mapping below is the fix. */
   var SHEET_HEADERS = ['Project (optional)','Message / objective','Status','Celestan update / question','Your reply','Last activity','Thread ID','Reply revision'];
   var HEADER_ROW = 4, DATA_FIRST_ROW = 5, HEADER_SCAN_ROWS = 10;
@@ -30,7 +34,7 @@ var CT_GAS_FEEDBACK = (function () {
     for(var i=0;i<found.length;i++) {
       if(isHeaderCells(found[i])) continue;
       var r=found[i];
-      rows.push({row:DATA_FIRST_ROW+i,project:text(r[0],100),message:text(r[1],CT_GAS.MAX_MESSAGE),status:text(r[2],80),response:text(r[3],4000),reply:text(r[4],CT_GAS.MAX_MESSAGE),activity:text(r[5],80),thread:text(r[6],160),revision:text(r[7],80)});
+      rows.push({row:DATA_FIRST_ROW+i,project:text(r[COL.project-1],100),message:text(r[COL.message-1],CT_GAS.MAX_MESSAGE),status:text(r[COL.status-1],80),response:text(r[COL.response-1],4000),reply:text(r[COL.reply-1],CT_GAS.MAX_MESSAGE),activity:text(r[COL.activity-1],80),thread:text(r[COL.thread-1],160),revision:text(r[COL.revision-1],80)});
     }
     return {header:header,rows:rows};
   }

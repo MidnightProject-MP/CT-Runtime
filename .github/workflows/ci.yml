@@ -32,6 +32,24 @@ jobs:
           --health-retries=20
     steps:
       - uses: actions/checkout@v4
+      - name: Guard GAS deployment policy
+        run: |
+          bash -n .github/scripts/clasp-run-gate.sh
+          test -f .github/scripts/clasp-run-gate.sh
+          if git ls-files | grep -Eq '(^|/)\.clasp\.json$|(^|/)\.clasprc\.json$'; then
+            echo 'Tracked .clasp.json or .clasprc.json credential/config artifact found; credentials stay out of Git.' >&2
+            git ls-files | grep -E '(^|/)\.clasp\.json$|(^|/)\.clasprc\.json$' >&2
+            exit 1
+          fi
+          if grep -Rn -- 'PIPESTATUS' .github/workflows/gas-clasp-deploy.yml .github/workflows/gas-feedback-repair.yml; then
+            echo 'Duplicated clasp PIPESTATUS gate found; use .github/scripts/clasp-run-gate.sh as the single implementation.' >&2
+            exit 1
+          fi
+          if grep -RnE '^[[:space:]]*clasp run' .github/workflows/gas-clasp-deploy.yml .github/workflows/gas-feedback-repair.yml; then
+            echo 'Bare clasp run found outside the shared gate; route every clasp run through clasp-run-gate.sh.' >&2
+            exit 1
+          fi
+          grep -Fq 'tokens.default' .github/workflows/gas-clasp-deploy.yml || { echo 'Credential-shape assertion for tokens.default is missing.' >&2; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
