@@ -287,6 +287,29 @@ test('legacy feedback verification checkpoint cannot enter diagnostic path or re
   assert.equal(state.get('work_orders', 'legacy-feedback').revision, 2);
 });
 
+test('live inspection reports bounded disposition facts and writes nothing', async () => {
+  const h = await boot({ budget: 300000 });
+  vm.runInContext(await readFile(new URL('../gas/gas_feedback.js', import.meta.url), 'utf8'), h.context);
+  const state = h.context.CT_GAS_STATE;
+  state.create('work_orders', { id: 'order-inspect', lifecycle: 'waiting', payload: { execution_kind: 'objective', goal: 'secret objective text', step: 'feedback', feedback_thread_id: 'thread-secret', feedback_revision: 1, wait_condition: 'execution_capacity', response: 'secret human response', physical_execution_count: 0 } });
+  state.create('work_orders', { id: 'order-unlinked', lifecycle: 'requested', payload: { goal: 'not feedback' } });
+  const kinds = ['work_orders', 'wakes', 'executions', 'observer_ledger', 'chronicle', 'schema', 'continuations'];
+  kinds.forEach(k => state.list(k));
+  const countsBefore = kinds.map(k => (h.rows.get(k) || []).length);
+  const result = h.context.inspectFeedbackObjectives();
+  assert.equal(result.version, 'feedback-objective-inspect-v1');
+  assert.equal(result.objective_count, 1);
+  assert.equal(result.objectives[0].work_order_id, 'order-inspect');
+  assert.equal(result.objectives[0].lifecycle, 'waiting');
+  assert.equal(result.objectives[0].wait_condition, 'execution_capacity');
+  assert.equal(result.objectives[0].response_present, true);
+  assert.equal(result.objectives[0].physical_executions, 0);
+  assert.equal(result.objectives[0].active_wakes, 0);
+  const dumped = JSON.stringify(result);
+  assert.ok(!dumped.includes('secret objective text') && !dumped.includes('secret human response') && !dumped.includes('thread-secret'), 'no content leaves the boundary');
+  assert.deepEqual(kinds.map(k => (h.rows.get(k) || []).length), countsBefore, 'inspection writes nothing');
+});
+
 test('generic objectives fail closed and invalid/completed history never restarts work', async () => {
   for (const lifecycle of ['requested', 'invalid', 'completed']) {
     const h = await boot({ budget: 300000 });

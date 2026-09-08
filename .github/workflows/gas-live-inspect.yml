@@ -1,0 +1,70 @@
+name: GAS live objective inspect
+
+# Read-only live verification for the First Autonomous Objective Loop gate.
+# Runs the inspectFeedbackObjectives function, which returns bounded disposition
+# facts only (identity, lifecycle, named wait, response presence, execution and
+# wake counts) and performs no writes. Dispatch only; never pushes source and
+# never creates, updates, or deletes deployments.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_work_order_id:
+        description: 'Feedback work order ID expected in the inspection output'
+        required: false
+        default: 'feedback-work-order_cdf3e03abcbcf6d087bb60aabc196a31'
+        type: string
+      expected_wait_condition:
+        description: 'Named wait condition expected for the work order'
+        required: false
+        default: 'execution_capacity'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.14.0'
+  CLASP_VERSION: '3.3.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
+
+concurrency:
+  group: gas-live-inspect
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: gas-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install clasp
+        run: npm install --global @google/clasp@${CLASP_VERSION}
+
+      - name: Configure clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          test -n "$CLASPRC_JSON"
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+
+      - name: Configure Apps Script project
+        working-directory: gas
+        run: |
+          test -n "$CT_GAS_SCRIPT_ID"
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\n');"
+          test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
+
+      - name: Inspect live feedback objectives
+        working-directory: gas
+        run: |
+          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/inspect-objectives.log" inspectFeedbackObjectives \
+            --require 'feedback-objective-inspect-v1' --require "${{ inputs.expected_work_order_id }}" --require "${{ inputs.expected_wait_condition }}" \
+            -- clasp run inspectFeedbackObjectives

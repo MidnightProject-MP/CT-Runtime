@@ -272,8 +272,45 @@ var CT_GAS_FEEDBACK = (function () {
     CT_GAS_STATE.event('feedback_chain_repaired',{operation:'feedback-repair',work_order_id:m.workOrderId,wake_ids_retired:retired,wake_ids_noted:noted,continuation_ids:continuationIds,physical_execution_ids:executionIds,row:m.row,reason:m.reason,general_compute_requested:false});
     return {status:'chain-repaired',work_order_id:m.workOrderId,wakes_retired:retired,wakes_noted:noted,continuations_fenced:continuationIds,header:'restored'};
   }
-  return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet,configure:configure,repairRow4Admission:repairRow4Admission,repairChain:repairChain};
+  /* Read-only live inspection for the First Autonomous Objective Loop gate. Returns
+     bounded disposition facts only: identity, lifecycle, named wait, presence (never
+     content) of the human-facing response, physical execution count, and active wake
+     count. Goal, message, reply, thread, and response text are never returned. This
+     function performs no writes: it calls only list/get/latestContinuation/
+     physicalExecutionCount, which are read paths. */
+  function inspect() {
+    var scriptId=null;
+    try { scriptId=ScriptApp.getScriptId(); } catch (_) { scriptId=null; }
+    var seen={}, objectives=[];
+    CT_GAS_STATE.list('work_orders').forEach(function (o) {
+      if(!o||!o.id||seen[o.id]) return;
+      var p=(o.payload)||{};
+      if(!(p.feedback_message_id||p.feedback_thread_id||p.step==='feedback')) return;
+      seen[o.id]=true;
+      var current=CT_GAS_STATE.get('work_orders',o.id)||o, cp=(current.payload)||{};
+      var active=CT_GAS_STATE.list('wakes').filter(function (w) {
+        return w.payload&&w.payload.work_order_id===current.id&&(w.lifecycle==='pending'||w.lifecycle==='claimed');
+      }).length;
+      objectives.push({
+        work_order_id:current.id,
+        lifecycle:current.lifecycle,
+        wait_condition:cp.wait_condition||null,
+        response_present:typeof cp.response==='string'&&cp.response.length>0,
+        physical_executions:CT_GAS_STATE.physicalExecutionCount(current.id),
+        active_wakes:active,
+        cutover_authority:(typeof CT_GAS_MIGRATION!=='undefined')?CT_GAS_MIGRATION.writerFor(current.id):'legacy'
+      });
+    });
+    objectives.sort(function (a,b) { return String(a.work_order_id)<String(b.work_order_id)?-1:1; });
+    var polls=CT_GAS_STATE.list('observer_ledger').filter(function (r) { return r.kind==='feedback_poll_result'; }).slice(-3).map(function (r) {
+      var p=r.payload||{};
+      return {at:r.created_at||null,header_ok:!!p.header_ok,admitted_count:Number(p.admitted_count||0),synced_count:Number(p.synced_count||0)};
+    });
+    return {version:'feedback-objective-inspect-v1',script_id:scriptId,objective_count:objectives.length,objectives:objectives,recent_polls:polls};
+  }
+  return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet,configure:configure,repairRow4Admission:repairRow4Admission,repairChain:repairChain,inspect:inspect};
 }());
+function inspectFeedbackObjectives() { return CT_GAS_FEEDBACK.inspect(); }
 function setupFeedbackSheet() { return CT_GAS_FEEDBACK.setup(); }
 function configureFeedbackInbox(spreadsheetId,sheetName) { return CT_GAS_FEEDBACK.configure(spreadsheetId,sheetName); }
 function reconcileFeedbackSheet(clock) { return CT_GAS_FEEDBACK.reconcile(clock); }
