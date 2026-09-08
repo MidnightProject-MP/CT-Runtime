@@ -281,7 +281,7 @@ var CT_GAS_FEEDBACK = (function () {
   function inspect() {
     var scriptId=null;
     try { scriptId=ScriptApp.getScriptId(); } catch (_) { scriptId=null; }
-    var seen={}, objectives=[];
+    var seen={}, objectives=[], threads=[];
     CT_GAS_STATE.list('work_orders').forEach(function (o) {
       if(!o||!o.id||seen[o.id]) return;
       var p=(o.payload)||{};
@@ -300,13 +300,26 @@ var CT_GAS_FEEDBACK = (function () {
         active_wakes:active,
         cutover_authority:(typeof CT_GAS_MIGRATION!=='undefined')?CT_GAS_MIGRATION.writerFor(current.id):'legacy'
       });
+      if(cp.feedback_thread_id) threads.push({work_order_id:current.id,thread:String(cp.feedback_thread_id),revision:Number(cp.feedback_revision||1)});
     });
     objectives.sort(function (a,b) { return String(a.work_order_id)<String(b.work_order_id)?-1:1; });
+    /* Human-visible projection: system-written status per row for known objective threads.
+       Status column only (Accepted/Working/Waiting/Needs review/Failed); message, reply,
+       response, and thread content are never returned. Best-effort: an unreadable sheet
+       yields an empty list rather than failing the inspection. */
+    var sheetRows=[];
+    try {
+      values().rows.forEach(function (r) {
+        for (var i=0;i<threads.length;i++) {
+          if (String(threads[i].thread)===String(r.thread)&&threads[i].revision===revNum(r.revision)) { sheetRows.push({row:r.row,status:r.status||null,work_order_id:threads[i].work_order_id}); break; }
+        }
+      });
+    } catch (_) { sheetRows=[]; }
     var polls=CT_GAS_STATE.list('observer_ledger').filter(function (r) { return r.kind==='feedback_poll_result'; }).slice(-3).map(function (r) {
       var p=r.payload||{};
       return {at:r.created_at||null,header_ok:!!p.header_ok,admitted_count:Number(p.admitted_count||0),synced_count:Number(p.synced_count||0)};
     });
-    return {version:'feedback-objective-inspect-v1',script_id:scriptId,objective_count:objectives.length,objectives:objectives,recent_polls:polls};
+    return {version:'feedback-objective-inspect-v1',script_id:scriptId,objective_count:objectives.length,objectives:objectives,sheet_rows:sheetRows,recent_polls:polls};
   }
   return {setup:setup,reconcile:reconcile,ensureSheet:ensureSheet,configure:configure,repairRow4Admission:repairRow4Admission,repairChain:repairChain,inspect:inspect};
 }());

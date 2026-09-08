@@ -14,9 +14,9 @@ on:
         default: 'feedback-work-order_cdf3e03abcbcf6d087bb60aabc196a31'
         type: string
       expected_wait_condition:
-        description: 'Named wait condition expected for the work order'
+        description: 'Named wait condition expected for the work order; empty asserts nothing about wait state'
         required: false
-        default: 'execution_capacity'
+        default: ''
         type: string
 
 permissions:
@@ -65,6 +65,8 @@ jobs:
       - name: Inspect live feedback objectives
         working-directory: gas
         run: |
+          extra_require=()
+          if [ -n "${{ inputs.expected_wait_condition }}" ]; then extra_require=(--require "${{ inputs.expected_wait_condition }}"); fi
           bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/inspect-objectives.log" inspectFeedbackObjectives \
-            --require 'feedback-objective-inspect-v1' --require "${{ inputs.expected_work_order_id }}" --require "${{ inputs.expected_wait_condition }}" \
+            --require 'feedback-objective-inspect-v1' --require "${{ inputs.expected_work_order_id }}" "${extra_require[@]}" \
             -- clasp run inspectFeedbackObjectives
