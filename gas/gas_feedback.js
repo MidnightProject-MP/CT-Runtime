@@ -2,7 +2,7 @@
 var CT_GAS_FEEDBACK = (function () {
   /* Canonical human-facing contract: 8 columns, header row 4, human intake begins at row 5.
      Rows 1-4 are bootstrap/header content and are never messages. The 8-column sheet is a
-     different interface contract from the 13-field durable work-order payload, never a reduced
+      different interface contract from the durable work-order payload, never a reduced
      positional view of it: human project/message/reply/revision plus deterministic thread and
      message derivation map semantically to durable goal and linkage, while lifecycle, response,
      activity, and assigned thread project back to system-written columns. Runtime-generated
@@ -64,6 +64,8 @@ var CT_GAS_FEEDBACK = (function () {
   }
   function responseFor(order,continuation) {
     var p=(order&&order.payload)||{}, c=continuation||{};
+    if (order&&order.lifecycle==='completed') return 'This legacy record is terminal, but objective completion has not been established. An acknowledgement or verified artifact is not objective completion evidence. Review is required; no automatic retry was started.';
+    if (p.wait_condition==='execution_capacity') return p.response||'Waiting for execution_capacity: the objective has not been executed or verified. A qualified Celestan objective executor is required.';
     if (typeof p.response==='string' && p.response) return p.response;
     if (typeof p.output==='string' && p.output) return p.output;
     if (typeof c.output==='string' && c.output) return c.output;
@@ -78,7 +80,7 @@ var CT_GAS_FEEDBACK = (function () {
       case 'requested': case 'pending': return 'Accepted';
       case 'claimed': case 'running': return 'Working';
       case 'checkpointed': case 'deferred': case 'waiting': return 'Waiting';
-      case 'completed': return 'Verified';
+      case 'completed': return 'Needs review';
       case 'invalid': return 'Failed';
       default: return String(order.lifecycle||'Unknown');
     }
@@ -97,6 +99,8 @@ var CT_GAS_FEEDBACK = (function () {
     var continuationId=CT_GAS.id('feedback-continuation',{work_order_id:workOrderId,execution_id:executionId});
     var goal=threadContext(x,all,thread,message);
     var payload={work_order_id:workOrderId,goal:goal,step:'feedback',model:model,physical_execution_count:1,feedback_thread_id:thread,feedback_message_id:messageId,feedback_revision:revision,feedback_fingerprint:fingerprint,project:text(x.project,100),reply_to:'',launch_context:{model:model,source:'feedback-sheet'},resume_context:{source:'feedback-sheet',thread_id:thread,message_id:messageId}};
+    payload.execution_kind='objective';
+    payload.physical_execution_count=0;
     var order=CT_GAS_STATE.create('work_orders',{id:workOrderId,lifecycle:'requested',payload:payload});
     requestNextWake({time:new Date().toISOString(),reason:'human',project:text(x.project,100)||'feedback',work_order_id:workOrderId,execution_id:executionId,continuation_id:continuationId,launch:{model:model,source:'feedback-sheet',goal:goal},resume:{source:'feedback-sheet',thread_id:thread,message_id:messageId}});
     return order;
@@ -134,7 +138,7 @@ var CT_GAS_FEEDBACK = (function () {
       if(clock&&!clock.canStart(CT_GAS.OPERATION_BUDGETS.stateRead)) break;
       var row=all[i], order=resolveOrder(row); if(!order) continue;
       var cp=CT_GAS_STATE.latestContinuation(order.id), status=statusFor(order), response=responseFor(order,cp), patch={status:status,activity:nowISO()};
-       if(response && (status==='Verified'||status==='Waiting')) patch.response=CT_GAS.bound(response,4000);
+       if(response && (status==='Needs review'||status==='Waiting')) patch.response=CT_GAS.bound(response,4000);
       if(status==='Failed') patch.response=CT_GAS.bound((order.payload&&order.payload.reason)||'runtime failure',400);
       write(row.row,patch); out.push({row:row.row,status:status,work_order_id:order.id});
     }

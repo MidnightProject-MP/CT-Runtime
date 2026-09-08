@@ -281,7 +281,7 @@ test('historical header-label admission would have been caught: polluted row 4 a
   assert.ok(!store.work_orders.some((o) => o.payload.goal === 'Last activity'), 'header labels must not become a durable goal');
 });
 
-test('an 8-column human row cannot be read as a positional durable 13-field row', async () => {
+test('an 8-column human row maps semantically to a typed durable objective payload', async () => {
   const source = await readFile(new URL('../gas/gas_feedback.js', import.meta.url), 'utf8');
   assert.match(source, /SHEET_HEADERS/);
   assert.match(source, /HEADER_ROW = 4/);
@@ -297,8 +297,10 @@ test('an 8-column human row cannot be read as a positional durable 13-field row'
   const order = result.admitted.length ? ctx.CT_GAS_STATE.list('work_orders')[0] : null;
   assert.ok(order, 'row 5 admits one durable order');
   const payloadKeys = Object.keys(order.payload).sort();
-  assert.deepStrictEqual(payloadKeys, ['feedback_fingerprint', 'feedback_message_id', 'feedback_revision', 'feedback_thread_id', 'goal', 'launch_context', 'model', 'physical_execution_count', 'project', 'reply_to', 'resume_context', 'step', 'work_order_id']);
-  assert.equal(payloadKeys.length, 13);
+  assert.deepStrictEqual(payloadKeys, ['execution_kind', 'feedback_fingerprint', 'feedback_message_id', 'feedback_revision', 'feedback_thread_id', 'goal', 'launch_context', 'model', 'physical_execution_count', 'project', 'reply_to', 'resume_context', 'step', 'work_order_id']);
+  assert.equal(payloadKeys.length, 14);
+  assert.equal(order.payload.execution_kind, 'objective');
+  assert.equal(order.payload.physical_execution_count, 0);
   assert.equal(order.payload.step, 'feedback');
   assert.equal(order.payload.launch_context.source, 'feedback-sheet');
   assert.ok(!('message' in order.payload) || typeof order.payload.goal === 'string', 'durable goal derives semantically, never by positional column copy');
