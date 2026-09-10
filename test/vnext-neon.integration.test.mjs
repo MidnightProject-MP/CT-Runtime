@@ -10,6 +10,20 @@ import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 
+async function setup(pool, suffix) {
+  await migrate({ pool, directory: path.join(import.meta.dirname, '..', 'migrations') });
+  const workUnitId = `wu-neon-${suffix}`;
+  await createNeonStore({ pool }).saveWorkUnit(createWorkUnit({ workUnitId, objectiveRef: `objective-neon-${suffix}` }));
+  return workUnitId;
+}
+
+async function cleanup(pool, workUnitId) {
+  await pool.query('DELETE FROM vnext_evidence_refs WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
+  await pool.query('DELETE FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
+  await pool.query('DELETE FROM vnext_executions WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
+  await pool.query('DELETE FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
+}
+
 test('vNext survives disposable executions through durable Neon state', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 5 });
   const store = createNeonStore({ pool });
@@ -74,10 +88,35 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
       { execution_id: executions[1], state: 'succeeded', fence: '2' },
     ]);
   } finally {
-    await pool.query('DELETE FROM vnext_evidence_refs WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
-    await pool.query('DELETE FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
-    await pool.query('DELETE FROM vnext_executions WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
-    await pool.query('DELETE FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
+    await cleanup(pool, workUnitId);
     await pool.end();
+  }
+});
+
+test('two concurrent wakes cannot both claim one Work Unit', { skip: !connectionString, timeout: 60000 }, async () => {
+  const poolA = new Pool({ connectionString, max: 3 });
+  const poolB = new Pool({ connectionString, max: 3 });
+  const storeA = createNeonStore({ pool: poolA });
+  const storeB = createNeonStore({ pool: poolB });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const workUnitId = await setup(poolA, suffix);
+  const wake = { type: 'feedback.received', event_id: `concurrent-${suffix}`, work_unit_id: workUnitId };
+  let executions = 0;
+
+  try {
+    const results = await Promise.allSettled([
+      runOuterLoop({ wake, store: storeA, executor: async () => { executions += 1; return { objective_id: `objective-neon-${suffix}`, disposition: 'continue', summary: 'one bounded turn', continuation: { mode: 'immediate', next_action: 'inspect again' } }; } }),
+      runOuterLoop({ wake: { ...wake, event_id: `concurrent-${suffix}-b` }, store: storeB, executor: async () => { executions += 1; return { objective_id: `objective-neon-${suffix}`, disposition: 'continue', summary: 'one bounded turn', continuation: { mode: 'immediate', next_action: 'inspect again' } }; } }),
+    ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    assert.equal(executions, 1);
+    const row = (await poolA.query('SELECT fence,claim_execution_id,state FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId])).rows[0];
+    assert.equal(row.fence, '1');
+    assert.equal(row.claim_execution_id, null);
+    assert.equal(row.state, 'actionable');
+  } finally {
+    await cleanup(poolA, workUnitId);
+    await Promise.allSettled([poolA.end(), poolB.end()]);
   }
 });
