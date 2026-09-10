@@ -117,7 +117,7 @@ test('terminal authorization is awaited and only exact true settles terminally',
     executor: async () => ({ objective_id: 'objective-auth-reject', disposition: 'done', summary: 'authorization fails', outcome_evidence: [{ kind: 'manifest', execution_id: 'seed-auth-reject' }] }),
     authorizeTerminal: async () => { throw new Error('authorization unavailable'); },
   }), /authorization unavailable/);
-  assert.equal(rejectedStore.snapshot().work[0].state, 'actionable');
+  assert.equal(rejectedStore.snapshot().work[0].state, 'waiting');
 });
 
 test('objective identity mismatch is rejected before evidence verification or settlement', async () => {
@@ -165,4 +165,63 @@ test('stale execution cannot mutate after the fence advances', () => {
   const firstExecution = startExecution(createExecution(first, { executionId: 'exec-first', owner: 'body-a' }));
   const second = claimWorkUnit({ ...first, claim: null, state: 'actionable' }, { executionId: 'exec-second', owner: 'body-b' });
   assert.throws(() => applyTurn(second, firstExecution, { disposition: 'continue', summary: 'stale', continuation: { mode: 'immediate', next_action: 'nope' } }), /stale execution/);
+});
+
+test('an expired execution can be taken over once, and its late settlement is fenced out', async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const work = { ...createWorkUnit({ workUnitId: 'wu-expired-1', objectiveRef: 'objective-expired' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-dead', owner: 'dead-owner', fence: 1, claim_expires_at: expired } };
+  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, owner: 'dead-owner', fence: 1, state: 'running', attempt: 1 }] });
+  const result = await runOuterLoop({
+    wake: { type: 'recovery.wake', event_id: 'expired-wake', work_unit_id: work.work_unit_id },
+    store,
+    executor: async () => ({ objective_id: 'objective-expired', disposition: 'continue', summary: 'successor continued', continuation: { mode: 'immediate', next_action: 'inspect again' } }),
+  });
+  assert.equal(result.disposition, 'continue');
+  const snapshot = store.snapshot();
+  assert.equal(snapshot.work[0].fence, 2);
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-dead').state, 'expired');
+  assert.equal(snapshot.executions.length, 2);
+  await assert.rejects(() => store.persistTurn({ workUnit: work, execution: { execution_id: 'exec-dead', work_unit_id: work.work_unit_id, owner: 'dead-owner', fence: 1, state: 'succeeded' }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } }), /fencing conflict/);
+});
+
+test('duplicate event delivery is consumed once while a new event can create a later opportunity', async () => {
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-events-1', objectiveRef: 'objective-events' })] });
+  let calls = 0;
+  const executor = async () => { calls += 1; return { objective_id: 'objective-events', disposition: 'continue', summary: 'considered once per event', continuation: { mode: 'immediate', next_action: 'inspect again' } }; };
+  const wake = { type: 'external.changed', event_id: 'event-once', work_unit_id: 'wu-events-1' };
+  await runOuterLoop({ wake, store, executor });
+  assert.deepEqual(await runOuterLoop({ wake, store, executor }), { disposition: 'quiesced', reason: 'event-replayed' });
+  await runOuterLoop({ wake: { ...wake, event_id: 'event-new' }, store, executor });
+  assert.equal(calls, 2);
+});
+
+test('failure becomes a bounded retry condition rather than immediate actionability', async () => {
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-retry-1', objectiveRef: 'objective-retry' })] });
+  let calls = 0;
+  const failing = async () => { calls += 1; throw new Error('bounded failure'); };
+  await assert.rejects(() => runOuterLoop({ wake: { type: 'retry.event', event_id: 'retry-1', work_unit_id: 'wu-retry-1' }, store, executor: failing, retryDelayMs: 50, maxAttempts: 2 }), /bounded failure/);
+  assert.equal(store.snapshot().work[0].state, 'waiting');
+  assert.equal(store.snapshot().work[0].attempt, 1);
+  assert.deepEqual((await runOuterLoop({ wake: { type: 'retry.event', event_id: 'retry-2', work_unit_id: 'wu-retry-1' }, store, executor: failing, isJustified: async () => true })), { disposition: 'quiesced', reason: 'retry-not-due', work_unit_id: 'wu-retry-1' });
+  assert.equal(calls, 1);
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  await assert.rejects(() => runOuterLoop({ wake: { type: 'retry.event', event_id: 'retry-3', work_unit_id: 'wu-retry-1' }, store, executor: failing, isJustified: async () => true, retryDelayMs: 0, maxAttempts: 2 }), /bounded failure/);
+  assert.equal(store.snapshot().work[0].state, 'review');
+  assert.equal(calls, 2);
+});
+
+test('an ambiguous committed settlement is not replayed for the same event', async () => {
+  const base = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-uncertain-1', objectiveRef: 'objective-uncertain' })] });
+  let calls = 0;
+  const store = new Proxy(base, { get(target, property) {
+    if (property !== 'persistTurn') return Reflect.get(target, property);
+    return async (result) => { await target.persistTurn(result); throw new Error('settlement response lost'); };
+  } });
+  const wake = { type: 'external.changed', event_id: 'uncertain-1', work_unit_id: 'wu-uncertain-1' };
+  await assert.rejects(() => runOuterLoop({ wake, store, executor: async () => { calls += 1; return { objective_id: 'objective-uncertain', disposition: 'continue', summary: 'committed before response loss', continuation: { mode: 'immediate', next_action: 'inspect later' } }; } }), /fencing conflict|settlement response lost/);
+  const replay = await runOuterLoop({ wake, store, executor: async () => { calls += 1; throw new Error('must not replay'); } });
+  assert.equal(replay.disposition, 'quiesced');
+  assert.equal(replay.reason, 'event-replayed');
+  assert.equal(calls, 1);
+  assert.equal(base.snapshot().work[0].state, 'actionable');
 });
