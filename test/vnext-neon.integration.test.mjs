@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { migrate } from '../lib/migration.mjs';
+import { migrateVNext } from '../lib/vnext/migration.mjs';
 import { createWorkUnit } from '../lib/vnext/kernel.mjs';
 import { createNeonStore } from '../lib/vnext/neon-store.mjs';
 import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
@@ -11,9 +11,9 @@ import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
 const connectionString = process.env.TEST_DATABASE_URL;
 
 async function setup(pool, suffix) {
-  await migrate({ pool, directory: path.join(import.meta.dirname, '..', 'migrations') });
+  await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
   const workUnitId = `wu-neon-${suffix}`;
-  await createNeonStore({ pool }).saveWorkUnit(createWorkUnit({ workUnitId, objectiveRef: `objective-neon-${suffix}` }));
+  await createNeonStore({ pool }).createWorkUnit(createWorkUnit({ workUnitId, objectiveRef: `objective-neon-${suffix}` }));
   return workUnitId;
 }
 
@@ -32,8 +32,8 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
   const objectiveRef = `objective-neon-${suffix}`;
 
   try {
-    await migrate({ pool, directory: path.join(import.meta.dirname, '..', 'migrations') });
-    await store.saveWorkUnit(createWorkUnit({ workUnitId, objectiveRef }));
+    await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
+    await store.createWorkUnit(createWorkUnit({ workUnitId, objectiveRef }));
 
     const executions = [];
     const first = await runOuterLoop({
