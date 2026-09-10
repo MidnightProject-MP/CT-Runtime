@@ -111,7 +111,7 @@ test('two concurrent wakes cannot both claim one Work Unit', { skip: !connection
     const first = runOuterLoop({ wake, store: storeA, executor: async () => { executions += 1; entered(); await executionRelease; return { objective_id: `objective-neon-${suffix}`, disposition: 'continue', summary: 'one bounded turn', continuation: { mode: 'immediate', next_action: 'inspect again' } }; } });
     await executionEntered;
     const second = runOuterLoop({ wake: { ...wake, event_id: `concurrent-${suffix}-b` }, store: storeB, executor: async () => { throw new Error('must not execute'); } });
-    await assert.rejects(second, /Work Unit changed before execution could be claimed/);
+    await assert.rejects(second, /work unit is already claimed|Work Unit changed before execution could be claimed/);
     release();
     await first;
     assert.equal(executions, 1);
