@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
-import { createWorkUnit } from '../lib/vnext/kernel.mjs';
+import { claimWorkUnit, createExecution, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
 import { createNeonStore } from '../lib/vnext/neon-store.mjs';
 import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
 
@@ -118,5 +118,53 @@ test('two concurrent wakes cannot both claim one Work Unit', { skip: !connection
   } finally {
     await cleanup(poolA, workUnitId);
     await Promise.allSettled([poolA.end(), poolB.end()]);
+  }
+});
+
+test('Neon rejects stale settlement and preserves a newer claim', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 5 });
+  const store = createNeonStore({ pool });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const workUnitId = await setup(pool, `stale-${suffix}`);
+  try {
+    const original = await store.reconstruct({ work_unit_id: workUnitId });
+    const claimed = claimWorkUnit(original, { executionId: `exec-stale-${suffix}`, owner: 'owner-a' });
+    const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
+    const begun = await store.beginExecution(claimed, execution);
+    await pool.query(`UPDATE vnext_work_units SET fence=fence+1,claim_execution_id=$2,claim_owner=$3,claim_fence=fence+1 WHERE work_unit_id=$1`, [workUnitId, `exec-new-${suffix}`, 'owner-b']);
+    const staleResult = { workUnit: begun.workUnit, execution: { ...begun.execution, state: 'failed', finished_at: new Date().toISOString() }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } };
+    await assert.rejects(() => store.persistFailure(staleResult), /fencing conflict/);
+    const row = (await pool.query('SELECT fence,claim_execution_id,claim_owner,state FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId])).rows[0];
+    assert.equal(row.claim_execution_id, `exec-new-${suffix}`);
+    assert.equal(row.claim_owner, 'owner-b');
+    assert.equal(row.state, 'actionable');
+  } finally {
+    await cleanup(pool, workUnitId);
+    await pool.end();
+  }
+});
+
+test('Neon settlement rolls back all mutations when Work Unit transition fails', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 5 });
+  const store = createNeonStore({ pool });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const workUnitId = await setup(pool, `rollback-${suffix}`);
+  try {
+    const original = await store.reconstruct({ work_unit_id: workUnitId });
+    const claimed = claimWorkUnit(original, { executionId: `exec-rollback-${suffix}`, owner: 'owner-a' });
+    const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
+    const begun = await store.beginExecution(claimed, execution);
+    const invalid = {
+      workUnit: { ...begun.workUnit, state: 'not-a-work-state' },
+      execution: { ...begun.execution, state: 'succeeded', finished_at: new Date().toISOString() },
+      turn: { disposition: 'continue', continuation: { mode: 'immediate' } },
+    };
+    await assert.rejects(() => store.persistTurn(invalid));
+    const state = await pool.query(`SELECT w.state,w.claim_execution_id,e.state AS execution_state FROM vnext_work_units w JOIN vnext_executions e ON e.execution_id=$2 WHERE w.work_unit_id=$1`, [workUnitId, execution.execution_id]);
+    assert.deepEqual(state.rows[0], { state: 'actionable', claim_execution_id: execution.execution_id, execution_state: 'running' });
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId])).rows[0].count, 0);
+  } finally {
+    await cleanup(pool, workUnitId);
+    await pool.end();
   }
 });
