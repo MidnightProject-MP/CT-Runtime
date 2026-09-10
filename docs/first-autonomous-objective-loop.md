@@ -4,8 +4,9 @@
 
 2026-09-08: **active milestone; first bounded local truthful-state guard implemented**.
 This is not an autonomous objective success, a deployment, or a completed state migration.
-CT-Runtime owns execution mechanics; Celestan owns task judgment, stopping decisions,
-and `requested_next_wake`; Observer owns reflection and semantic interpretation.
+CT-Runtime owns execution mechanics; Celestan owns task judgment and stopping decisions;
+Observer owns reflection and semantic interpretation. The objective-turn contract does not
+own scheduling or Runtime orchestration.
 
 This work was local only. The starting Git worktree was clean at `af2f48a`.
 No commit, push, PR, stash, external service inspection, deployment, or live mutation
@@ -64,17 +65,24 @@ Connect a qualified host with explicit project, objective, model, agent, store,
 capabilities, and repository identity. It must reconstruct the actual objective,
 not substitute a proof prompt. Persist a typed turn result:
 
-- `continue`: factual progress, current continuation cursor, and Celestan's validated
-  requested next wake, with bounded retry accounting.
-- `waiting`: named condition, useful human response/question, and the state-change
-  signal required for resumption; no futile automatic retry.
-- `done`: objective-specific completion evidence, verified against the current
-  objective/cursor, and a current owner/fence guard at the terminal mutation.
+- `continue`: factual progress and a **continuation** with `mode: immediate` naming
+  the useful next direction. The turn contract does not choose a wake mechanism,
+  retry policy, or scheduler representation.
+- `waiting`: no presently justified work, plus a **continuation** with `mode: condition`
+  naming the change in reality that would make continuation worthwhile. An optional
+  question can explain what human input is needed. This is the same semantic concept
+  as immediate continuation, not a second dependency/scheduling system.
+- `done`: objective-specific completion evidence, verified against supplied facts.
+  A done claim remains non-authoritative; downstream independent judgment decides
+  whether it becomes authoritative completion.
 
-Receipt of a model response, process exit, artifact hash verification, transport
-checkpoint, or physical execution completion is insufficient by itself. A stale
-turn must not update the cursor, append contradictory completion, or finalize after
-another owner has taken over. End-to-end host/fence/completion proof remains undone.
+The standalone `lib/objective-turn.mjs` contract intentionally has no dependency on
+`lib/runtime.mjs`, does not persist turns, schedule wakes, resolve conditions, or
+finalize Work Units. Receipt of a model response, process exit, artifact hash
+verification, transport checkpoint, or physical execution completion is insufficient
+by itself. A stale turn must not update a cursor, append contradictory completion,
+or finalize after another owner has taken over. End-to-end host/fence/completion proof
+remains undone.
 
 ### 3. Same-objective conversation events
 
@@ -115,8 +123,8 @@ Pass conditions and results:
   An ambiguous winner is not safe promotion authority.
 
 Remaining gaps: no new-writer execution path exists yet, so the fence currently guards a
-door with nothing behind it; live cutover is not activated and must follow the host
-proof; conversation cursors remain deferred by plan; the Sheets lock still does not make
+door with nothing behind it; live cutover is not activated and must follow the host proof;
+conversation cursors remain deferred by plan; the Sheets lock still does not make
 multi-write transitions transactional (stable journal ids bound the damage, they do not
 remove the window).
 
@@ -157,12 +165,15 @@ qualification, and the production-route authorization decision.
 
 ## Verification and limits of evidence
 
-- `npm test` reported **235 tests, 231 passed, 0 failed, 4 skipped** on the refreshed
-  baseline after this cleanup. External database
-  and S3 integration activation was disabled for this local run. The skipped Neon,
-  Postgres runtime/Observer, and S3 tests provide no new live evidence.
+- `npm test` must pass after this reshape; the prior PR baseline reported **235 tests,
+  231 passed, 0 failed, 4 skipped**. External database and S3 integration activation
+  was disabled for that local run. The skipped Neon, Postgres runtime/Observer, and S3
+  tests provide no new live evidence.
+- `test/objective-turn-proof.test.mjs` covers the standalone continuation boundary,
+  malformed continuation shapes, symlink escape, evidence hash mismatch, successful
+  and failed execution-manifest evidence, and the non-authoritative done projection.
 - `test/gas-runtime.test.mjs` executes the real GAS state/trigger/V8 source in VM
-  service doubles. New regressions cover real feedback intake and sheet projection,
+  service doubles. Existing regressions cover real feedback intake and sheet projection,
   useful capacity wait, repeated safety polls, legacy verification checkpoint with
   conflicting diagnostic flags, generic fail-closed work, and completed/invalid
   historical revisions. No model/Drive objective work or physical execution occurs.
@@ -173,7 +184,7 @@ qualification, and the production-route authorization decision.
   zero physical executions at admission, and the unchanged human/header boundary.
 - Federation contract tests pass, but the newly added transport fact labels do not
   constitute a live federation round trip or a dedicated injected-failure proof.
-- `git diff --check` passed. Only local source, tests, and documentation were changed.
+- `git diff --check` must pass. Only local source, tests, and documentation should be changed.
 
 Live Sheets, Script Properties, trigger registry, latest workflow run, deployed code,
 and qualified host capacity are **unknown in this session**. Historical live reports and
