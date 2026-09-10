@@ -1,0 +1,10 @@
+ALTER TABLE vnext_work_units ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
+ALTER TABLE vnext_work_units ADD COLUMN IF NOT EXISTS attempt integer NOT NULL DEFAULT 0 CHECK (attempt >= 0);
+ALTER TABLE vnext_work_units ADD COLUMN IF NOT EXISTS failure jsonb;
+ALTER TABLE vnext_work_units ADD COLUMN IF NOT EXISTS retry_after timestamptz;
+ALTER TABLE vnext_executions ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
+ALTER TABLE vnext_executions ADD COLUMN IF NOT EXISTS attempt integer NOT NULL DEFAULT 1 CHECK (attempt > 0);
+ALTER TABLE vnext_executions ADD COLUMN IF NOT EXISTS failure jsonb;
+ALTER TABLE vnext_executions ADD COLUMN IF NOT EXISTS retry_after timestamptz;
+ALTER TABLE vnext_events ADD COLUMN IF NOT EXISTS event_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS vnext_events_event_id_idx ON vnext_events(event_id) WHERE event_id IS NOT NULL;
