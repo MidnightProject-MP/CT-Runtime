@@ -157,7 +157,7 @@ this machine with no new auth or spending. `lib/objective-turn.mjs` now defines 
 turn contract with bounded identifiers/evidence, realpath-contained evidence integrity
 checks, and a minimal reply projection as a draft contract. These checks verify supplied
 facts; they do not persist turns, fence owners, schedule wakes, or authorize a done claim.
-The filesystem completion journal and synthetic process re-entry fixture were removed.
+The filesystem completion journal and synthetic process fixture were removed.
 The local contract assumes a trusted, quiescent workspace during evidence verification;
 it is not a concurrent hostile-filesystem sandbox. Still open: binding a GAS-waiting
 objective to a local turn across systems, scheduler integration for quiescence, host
@@ -165,10 +165,7 @@ qualification, and the production-route authorization decision.
 
 ## Verification and limits of evidence
 
-- `npm test` must pass after this reshape; the prior PR baseline reported **235 tests,
-  231 passed, 0 failed, 4 skipped**. External database and S3 integration activation
-  was disabled for that local run. The skipped Neon, Postgres runtime/Observer, and S3
-  tests provide no new live evidence.
+- **CI passed on the current reshaped head `673d3dc` (September 10, 2026): both the push and pull-request jobs are green.** This verifies the reshaped branch at CI level; the skipped external database/S3 integrations still do not establish new Neon, Postgres, S3, or live-service evidence.
 - `test/objective-turn-proof.test.mjs` covers the standalone continuation boundary,
   malformed continuation shapes, symlink escape, evidence hash mismatch, successful
   and failed execution-manifest evidence, and the non-authoritative done projection.
@@ -184,7 +181,7 @@ qualification, and the production-route authorization decision.
   zero physical executions at admission, and the unchanged human/header boundary.
 - Federation contract tests pass, but the newly added transport fact labels do not
   constitute a live federation round trip or a dedicated injected-failure proof.
-- `git diff --check` must pass. Only local source, tests, and documentation should be changed.
+- `git diff --check` passed on the current reshaped head. Only local source, tests, and documentation were changed.
 
 Live Sheets, Script Properties, trigger registry, latest workflow run, deployed code,
 and qualified host capacity are **unknown in this session**. Historical live reports and
