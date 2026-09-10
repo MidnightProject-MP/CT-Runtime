@@ -11,7 +11,7 @@ env:
   NODE_VERSION: '22.14.0'
   POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
   MINIO_IMAGE: minio/minio:RELEASE.2025-04-22T22-12-26Z
-  MC_IMAGE: minio/mc:RELEASE.2025-04-16T18-13-26Z
+  MC_IMAGE: minio/mc:RELEASE-2025-04-16T18-13-26Z
   FOUNDRY_COMMIT: ${{ vars.FOUNDRY_COMMIT || '5bb45fca93394800f533e75150599a54e6aaf96b' }}
 
 jobs:
@@ -116,7 +116,7 @@ jobs:
           CT_RUNTIME_MODE: production
           CT_RUNTIME_DATABASE_URL: ${{ env.POSTGRES_URL }}
           CT_RUNTIME_S3_ENDPOINT: http://127.0.0.1:9000
-          CT_RUNTIME_S3_REGION: local
+          CT_RUNTIME_S3_REGION: us-east-1
           CT_RUNTIME_S3_BUCKET: ct-runtime
           CT_RUNTIME_S3_PATH_STYLE: 'true'
           CT_RUNTIME_S3_ACCESS_KEY_ID: test
