@@ -85,11 +85,12 @@ to the exact objective/message cursor. Current reply revisions still admit new w
 orders, and thread/revision lookup is not a complete conversation identity contract.
 No change to that behavior is claimed in this slice.
 
-## Migration/cutover proof (isolated, 2026-09-08)
+## Migration/cutover proof (isolated fixture semantics, 2026-09-08)
 
 `gas/gas_migrate.js` implements inert version-gated (`objective-state-v1`) reconstruction
-plus a single-writer cutover fence; `test/gas-migration-proof.test.mjs` proves it against
-copied-fixture semantics in VM doubles. No live state was touched and no cutover is active.
+plus entry-path cutover checks; `test/gas-migration-proof.test.mjs` exercises copied,
+sanitized fixture semantics in VM doubles. This is not a full current-row migration,
+does not fence already in-flight writers, and is not a live copy or cutover proof.
 
 Pass conditions and results:
 
@@ -99,18 +100,19 @@ Pass conditions and results:
   and artifact-verification records reconstruct to `needs-review`; every journal entry
   carries `objective_done: false`. Entity tables are untouched by migration (only
   `observer_ledger` journal rows and `schema` checkpoint/cutover rows are written).
-- **Idempotent rerun.** A simulated crash between journal write and checkpoint update
-  recovers on rerun via stable journal ids with zero duplicates; a clean rerun writes
-  nothing. Dry runs write nothing.
+- **Rerun boundary.** Stable journal ids prevent duplicate journal rows after a simulated
+  crash, but reruns still write checkpoint rows/churn. This does not prove a clean rerun
+  is mutation-free. Dry runs write nothing.
 - **Needs review.** Legacy completed/Verified diagnostic outcomes map to the explicit
   review disposition, never to accomplished objective. There is still no `done` value
   anywhere in the new semantics.
-- **Single-writer cutover.** With a cutover naming an objective, legacy recovery performs
-  no mutation, dispatch leaves its wake pending for the owning path, and execution
-  starts nothing (`cutover-new-authority`). Unnamed objectives and absent cutovers keep
-  exact legacy behavior.
-- **Negative.** Forked revision chains are flagged with a deterministic winner; dangling
-  references are flagged; unrecognizable rows fail closed to `needs-review`.
+- **Entry-path cutover check.** With a cutover naming an objective, the exercised legacy
+  recovery and dispatch entry paths perform no mutation or execution start
+  (`cutover-new-authority`). This is not in-flight writer fencing; unnamed objectives
+  and absent cutovers retain legacy behavior.
+- **Negative.** Forked revision chains are flagged with an ambiguity marker, dangling
+  references are flagged, and unrecognizable rows fail closed to `needs-review`.
+  An ambiguous winner is not safe promotion authority.
 
 Remaining gaps: no new-writer execution path exists yet, so the fence currently guards a
 door with nothing behind it; live cutover is not activated and must follow the host
@@ -118,10 +120,45 @@ proof; conversation cursors remain deferred by plan; the Sheets lock still does 
 multi-write transitions transactional (stable journal ids bound the damage, they do not
 remove the window).
 
+## Historical reported live evidence (2026-09-08, post-Slice-1)
+
+`gas-live-inspect.yml` (PRs #20, #21) runs read-only `inspectFeedbackObjectives`
+through the shared clasp gate: disposition facts only, zero writes, no content.
+
+- 21:52 UTC (pre-tick): row-5 order `feedback-work-order_cdf3...` is `completed`
+  with 49 physical executions — it finished via the pre-Slice-1 artifact path before
+  deploy, so the capacity-wait gate does not and must not apply to it.
+- 21:58 UTC (after the 21:57 post-deploy tick): order still `completed`, executions
+  still 49 (zero new), polls quiet (`admitted_count: 0`, header ok), and row 5
+  projects `Needs review` — the false-completion projection is gone live.
+- The raw historical wake-revision listing contains 51 rows referencing the completed
+  order and 6 referencing the invalid malformed order. Those are revision counts, not
+  57 current active wakes; current-wake deduplication and retire counts were not exposed
+  by this inspection, so no claim about a drain rate is made here.
+- Cutover authority is `legacy` everywhere: no cutover active, as intended.
+- NOT yet proven live: the `execution_capacity` wait transition itself — no
+  nonterminal objective exists. It awaits the next admitted objective or the
+  qualified-host connection (which will exercise it truthfully when capacity is
+  absent).
+
+## Qualified host draft contract (not host proof)
+
+Northflank remains the production-route host but its live proof explicitly requires
+human authorization (token, project, image, secret groups), so the first proof targets
+this machine with no new auth or spending. `lib/objective-turn.mjs` now defines a pure
+turn contract with bounded identifiers/evidence, realpath-contained evidence integrity
+checks, and a minimal reply projection as a draft contract. These checks verify supplied
+facts; they do not persist turns, fence owners, schedule wakes, or authorize a done claim.
+The filesystem completion journal and synthetic process re-entry fixture were removed.
+The local contract assumes a trusted, quiescent workspace during evidence verification;
+it is not a concurrent hostile-filesystem sandbox. Still open: binding a GAS-waiting
+objective to a local turn across systems, scheduler integration for quiescence, host
+qualification, and the production-route authorization decision.
+
 ## Verification and limits of evidence
 
-- `npm test` reported **230 tests, 226 passed, 0 failed, 4 skipped** (7 new migration-proof
-  tests included). External database
+- `npm test` reported **235 tests, 231 passed, 0 failed, 4 skipped** on the refreshed
+  baseline after this cleanup. External database
   and S3 integration activation was disabled for this local run. The skipped Neon,
   Postgres runtime/Observer, and S3 tests provide no new live evidence.
 - `test/gas-runtime.test.mjs` executes the real GAS state/trigger/V8 source in VM
@@ -139,8 +176,9 @@ remove the window).
 - `git diff --check` passed. Only local source, tests, and documentation were changed.
 
 Live Sheets, Script Properties, trigger registry, latest workflow run, deployed code,
-and qualified host capacity are **unknown in this session**. Historical STATE proof
-records are not refreshed by these tests. Before any future external effect or live
+and qualified host capacity are **unknown in this session**. Historical live reports and
+STATE proof records are not refreshed by these tests. Host qualification and atomic
+fencing remain unproven. Before any future external effect or live
 blocker decision, inspect the newest workflow evidence and `diagnoseFeedbackInbox`
 (Script ID and configured spreadsheet properties); configure/setup only on an
 observed mismatch. Canonical GAS writes remain GitHub Actions-only. No local
