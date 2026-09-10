@@ -102,14 +102,18 @@ test('two concurrent wakes cannot both claim one Work Unit', { skip: !connection
   const workUnitId = await setup(poolA, suffix);
   const wake = { type: 'feedback.received', event_id: `concurrent-${suffix}`, work_unit_id: workUnitId };
   let executions = 0;
+  let entered;
+  let release;
+  const executionEntered = new Promise((resolve) => { entered = resolve; });
+  const executionRelease = new Promise((resolve) => { release = resolve; });
 
   try {
-    const results = await Promise.allSettled([
-      runOuterLoop({ wake, store: storeA, executor: async () => { executions += 1; return { objective_id: `objective-neon-${suffix}`, disposition: 'continue', summary: 'one bounded turn', continuation: { mode: 'immediate', next_action: 'inspect again' } }; } }),
-      runOuterLoop({ wake: { ...wake, event_id: `concurrent-${suffix}-b` }, store: storeB, executor: async () => { executions += 1; return { objective_id: `objective-neon-${suffix}`, disposition: 'continue', summary: 'one bounded turn', continuation: { mode: 'immediate', next_action: 'inspect again' } }; } }),
-    ]);
-    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
-    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    const first = runOuterLoop({ wake, store: storeA, executor: async () => { executions += 1; entered(); await executionRelease; return { objective_id: `objective-neon-${suffix}`, disposition: 'continue', summary: 'one bounded turn', continuation: { mode: 'immediate', next_action: 'inspect again' } }; } });
+    await executionEntered;
+    const second = runOuterLoop({ wake: { ...wake, event_id: `concurrent-${suffix}-b` }, store: storeB, executor: async () => { throw new Error('must not execute'); } });
+    await assert.rejects(second, /Work Unit changed before execution could be claimed/);
+    release();
+    await first;
     assert.equal(executions, 1);
     const row = (await poolA.query('SELECT fence,claim_execution_id,state FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId])).rows[0];
     assert.equal(row.fence, '1');
