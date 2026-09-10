@@ -44,14 +44,20 @@ test('a later wake produces a new disposable execution rather than a handoff', a
       summary: executionIds.length === 1 ? 'Waiting for an external condition.' : 'Evidence supports the claimed outcome.',
       ...(executionIds.length === 1
         ? { continuation: { mode: 'condition', condition: { kind: 'external', condition: 'A new result is available.' } } }
-        : { outcome_evidence: [{ kind: 'manifest', execution_id: execution.execution_id }] }),
+        : { outcome_evidence: [{ kind: 'manifest', execution_id: executionIds[0] }] }),
     };
   };
 
   const first = await runOuterLoop({ wake: { type: 'feedback.received', event_id: 'feedback-2', work_unit_id: 'wu-repeat-1' }, store, executor });
   assert.equal(first.disposition, 'waiting');
 
-  const second = await runOuterLoop({ wake: { type: 'external.changed', event_id: 'external-1', work_unit_id: 'wu-repeat-1' }, store, executor, authorizeTerminal: () => true });
+  const second = await runOuterLoop({
+    wake: { type: 'external.changed', event_id: 'external-1', work_unit_id: 'wu-repeat-1' },
+    store,
+    executor,
+    isJustified: async ({ workUnit }) => workUnit.state === 'waiting',
+    authorizeTerminal: () => true,
+  });
   assert.equal(second.disposition, 'terminal');
   assert.equal(executionIds.length, 2);
   assert.notEqual(executionIds[0], executionIds[1]);
@@ -59,21 +65,24 @@ test('a later wake produces a new disposable execution rather than a handoff', a
 });
 
 test('done remains non-authoritative without independent authorization', async () => {
-  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-review-1', objectiveRef: 'objective-3' })] });
+  const store = createMemoryStore({
+    workUnits: [createWorkUnit({ workUnitId: 'wu-review-1', objectiveRef: 'objective-3' })],
+    executions: [{ execution_id: 'seed-execution', state: 'succeeded', work_unit_id: 'wu-review-1' }],
+  });
   const result = await runOuterLoop({
     wake: { type: 'feedback.received', event_id: 'feedback-3', work_unit_id: 'wu-review-1' },
     store,
-    executor: async ({ execution }) => ({
+    executor: async () => ({
       objective_id: 'objective-3',
       disposition: 'done',
       summary: 'The execution claims the outcome.',
-      outcome_evidence: [{ kind: 'manifest', execution_id: execution.execution_id }],
+      outcome_evidence: [{ kind: 'manifest', execution_id: 'seed-execution' }],
     }),
   });
 
   assert.equal(result.disposition, 'needs-review');
   assert.equal(store.snapshot().work[0].state, 'review');
-  assert.equal(store.snapshot().executions[0].state, 'succeeded');
+  assert.equal(store.snapshot().executions.at(-1).state, 'succeeded');
 });
 
 test('no reconstructed work means quiescence and no execution', async () => {
