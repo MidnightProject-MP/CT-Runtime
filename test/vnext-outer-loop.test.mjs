@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createWorkUnit, claimWorkUnit, createExecution, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
 import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
 import { runOuterLoop, recoverExpiredClaims } from '../lib/vnext/outer-loop.mjs';
+import { createObjectiveExecutor } from '../lib/vnext/objective-host.mjs';
 
 test('Feedback wake reconstructs one Work Unit and runs a disposable execution', async () => {
   const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-feedback-1', objectiveRef: 'objective-1' })] });
@@ -248,4 +249,62 @@ test('settlement readback distinguishes a committed attempt from an unknown one'
   });
   assert.equal((await store.readbackSettlement({ executionId: result.execution_id, eventId: 'readback-1' })).committed, true);
   assert.equal((await store.readbackSettlement({ executionId: 'missing', eventId: 'readback-1' })).committed, false);
+});
+
+test('a bound objective host receives the reconstructed objective and persists its typed turn', async () => {
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-host-1', objectiveRef: 'objective-host' })] });
+  let input;
+  const result = await runOuterLoop({
+    wake: { type: 'feedback.received', event_id: 'host-1', work_unit_id: 'wu-host-1' },
+    store,
+    host: {
+      project: 'project-a', model: 'model-a', agent: 'agent-a', repository: 'repo-a', capabilities: { durable_state: 'memory' },
+      run: async (value) => { input = value; return { turn: { objective_id: value.objective.id, disposition: 'continue', summary: 'made factual progress', continuation: { mode: 'immediate', next_action: 'inspect the next fact' } }, provenance: { provider: 'qualified-provider', model: 'actual-model', identity_ref: 'host-identity', identity_revision: 'rev-1', prompt_version: 'prompt-v1', contract_version: 'contract-v1' } }; },
+    },
+  });
+  assert.equal(result.disposition, 'continue');
+  assert.equal(input.binding.project, 'project-a');
+  assert.equal(input.objective.id, 'objective-host');
+  assert.equal(store.snapshot().work[0].last_turn.objective_id, 'objective-host');
+});
+
+test('an objective host requires explicit binding and cannot manufacture another objective', async () => {
+  assert.throws(() => createObjectiveExecutor({ run: async () => ({}), model: 'm', agent: 'a', repository: 'r', capabilities: {} }), /host.project/);
+  const executor = createObjectiveExecutor({ project: 'p', model: 'm', agent: 'a', repository: 'r', capabilities: {}, run: async () => ({ turn: { objective_id: 'other', disposition: 'continue', summary: 'x', continuation: { mode: 'immediate', next_action: 'y' } }, provenance: { provider: 'p', model: 'm', identity_ref: 'i', identity_revision: 'r', prompt_version: 'p', contract_version: 'c' } }) });
+  await assert.rejects(() => executor({ workUnit: { work_unit_id: 'wu', objective_ref: 'expected' }, execution: { work_unit_id: 'wu' } }), /objective_id/);
+});
+
+test('objective host receives immutable snapshots and cannot alter settlement inputs', async () => {
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-host-immutable', objectiveRef: 'objective-immutable' })] });
+  const wake = { type: 'feedback.received', event_id: 'host-immutable', work_unit_id: 'wu-host-immutable' };
+  const execution = [];
+  const result = await runOuterLoop({
+    wake,
+    store,
+    host: {
+      project: 'project-a', model: 'model-a', agent: 'agent-a', repository: 'repo-a', capabilities: { nested: { enabled: true } },
+      run: async (input) => {
+        execution.push(input.execution.execution_id);
+        assert.equal(Object.isFrozen(input.objective), true);
+        assert.equal(Object.isFrozen(input.binding.capabilities.nested), true);
+        assert.throws(() => { input.wake.event_id = 'tampered'; }, TypeError);
+        assert.throws(() => { input.binding.capabilities.nested.enabled = false; }, TypeError);
+        return { turn: { objective_id: input.objective.id, disposition: 'continue', summary: 'immutable input', continuation: { mode: 'immediate', next_action: 'continue' } }, provenance: { provider: 'qualified-provider', model: 'actual-model', identity_ref: 'host-identity', identity_revision: 'rev-1', prompt_version: 'prompt-v1', contract_version: 'contract-v1' } };
+      },
+    },
+  });
+  assert.equal(result.disposition, 'continue');
+  assert.equal(execution.length, 1);
+  assert.equal(wake.event_id, 'host-immutable');
+  assert.equal(store.snapshot().events[0].event_id, 'host-immutable');
+});
+
+test('outer loop rejects ambiguous executor and host configuration', async () => {
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-host-ambiguous', objectiveRef: 'objective-ambiguous' })] });
+  await assert.rejects(() => runOuterLoop({
+    wake: { type: 'feedback.received', event_id: 'host-ambiguous', work_unit_id: 'wu-host-ambiguous' },
+    store,
+    executor: async () => ({ objective_id: 'objective-ambiguous', disposition: 'continue', summary: 'x', continuation: { mode: 'immediate', next_action: 'y' } }),
+    host: {},
+  }), /mutually exclusive/);
 });
