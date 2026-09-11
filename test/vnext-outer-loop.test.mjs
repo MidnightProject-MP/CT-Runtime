@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorkUnit, claimWorkUnit, createExecution, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
 import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
-import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
+import { runOuterLoop, recoverExpiredClaims } from '../lib/vnext/outer-loop.mjs';
 
 test('Feedback wake reconstructs one Work Unit and runs a disposable execution', async () => {
   const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-feedback-1', objectiveRef: 'objective-1' })] });
@@ -184,6 +184,18 @@ test('an expired execution can be taken over once, and its late settlement is fe
   await assert.rejects(() => store.persistTurn({ workUnit: work, execution: { execution_id: 'exec-dead', work_unit_id: work.work_unit_id, owner: 'dead-owner', fence: 1, state: 'succeeded' }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } }), /fencing conflict/);
 });
 
+test('processing recovery expires stale executions without starting successor work', async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const work = { ...createWorkUnit({ workUnitId: 'wu-recovery-scan', objectiveRef: 'objective-recovery-scan' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-recovery-scan', owner: 'dead-owner', fence: 1, claim_expires_at: expired } };
+  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-recovery-scan', work_unit_id: work.work_unit_id, owner: 'dead-owner', fence: 1, state: 'running', attempt: 1 }] });
+  const recovered = await recoverExpiredClaims({ store, limit: 1 });
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].execution_id, 'exec-recovery-scan');
+  assert.equal(store.snapshot().executions[0].state, 'expired');
+  assert.equal(store.snapshot().work[0].claim.execution_id, 'exec-recovery-scan');
+  assert.deepEqual(await recoverExpiredClaims({ store }), []);
+});
+
 test('duplicate event delivery is consumed once while a new event can create a later opportunity', async () => {
   const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-events-1', objectiveRef: 'objective-events' })] });
   let calls = 0;
@@ -218,10 +230,22 @@ test('an ambiguous committed settlement is not replayed for the same event', asy
     return async (result) => { await target.persistTurn(result); throw new Error('settlement response lost'); };
   } });
   const wake = { type: 'external.changed', event_id: 'uncertain-1', work_unit_id: 'wu-uncertain-1' };
-  await assert.rejects(() => runOuterLoop({ wake, store, executor: async () => { calls += 1; return { objective_id: 'objective-uncertain', disposition: 'continue', summary: 'committed before response loss', continuation: { mode: 'immediate', next_action: 'inspect later' } }; } }), /fencing conflict|settlement response lost/);
+  const first = await runOuterLoop({ wake, store, executor: async () => { calls += 1; return { objective_id: 'objective-uncertain', disposition: 'continue', summary: 'committed before response loss', continuation: { mode: 'immediate', next_action: 'inspect later' } }; } });
+  assert.equal(first.recovered, true);
   const replay = await runOuterLoop({ wake, store, executor: async () => { calls += 1; throw new Error('must not replay'); } });
   assert.equal(replay.disposition, 'quiesced');
   assert.equal(replay.reason, 'event-replayed');
   assert.equal(calls, 1);
   assert.equal(base.snapshot().work[0].state, 'actionable');
+});
+
+test('settlement readback distinguishes a committed attempt from an unknown one', async () => {
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-readback-1', objectiveRef: 'objective-readback' })] });
+  const result = await runOuterLoop({
+    wake: { type: 'external.changed', event_id: 'readback-1', work_unit_id: 'wu-readback-1' },
+    store,
+    executor: async () => ({ objective_id: 'objective-readback', disposition: 'continue', summary: 'persisted', continuation: { mode: 'immediate', next_action: 'inspect' } }),
+  });
+  assert.equal((await store.readbackSettlement({ executionId: result.execution_id, eventId: 'readback-1' })).committed, true);
+  assert.equal((await store.readbackSettlement({ executionId: 'missing', eventId: 'readback-1' })).committed, false);
 });
