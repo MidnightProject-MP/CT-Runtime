@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { request } from 'node:https';
 import { bundleHash, deploymentIdFromWebAppUrl, normalizeFiles, signature } from '../lib/gas-deploy-contract.mjs';
 
 const bundle = JSON.parse(await readFile(process.env.GAS_BUNDLE_PATH ?? 'gas-bundle.json', 'utf8'));
