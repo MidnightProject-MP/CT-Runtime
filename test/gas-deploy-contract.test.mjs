@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bundleHash, normalizeFiles, signingString, signature, MAX_FILES } from '../lib/gas-deploy-contract.mjs';
+import { bundleHash, deploymentIdFromWebAppUrl, normalizeFiles, signingString, signature, MAX_FILES } from '../lib/gas-deploy-contract.mjs';
+
+test('derives deployment ID from the existing web app URL', () => {
+  assert.equal(deploymentIdFromWebAppUrl('https://script.google.com/macros/s/AbC_123-xyz/exec'), 'AbC_123-xyz');
+  assert.equal(deploymentIdFromWebAppUrl('https://script.google.com/macros/s/AbC_123-xyz/exec/'), 'AbC_123-xyz');
+  assert.throws(() => deploymentIdFromWebAppUrl('https://example.com/macros/s/AbC_123-xyz/exec'), /invalid-deploy-url/);
+  assert.throws(() => deploymentIdFromWebAppUrl('https://script.google.com/macros/s/AbC_123-xyz/dev'), /invalid-deploy-url/);
+});
 
 test('normalizes complete project deterministically', () => {
   const files = [
