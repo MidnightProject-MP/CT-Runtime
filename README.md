@@ -61,6 +61,10 @@ Production model telemetry uses `PostgresObserverStore.appendModelTelemetryEnvel
 
 `evidence export EXECUTION` packages local runtime executions as before. For `ses_...`, the default invokes `opencode export SESSION --sanitize` and records structural-only fidelity. `--rich` (or `--source rich`) invokes the supported export without sanitizing; stdout is ephemeral process memory, bounded to 64 MiB, redacted again, and never persisted. Both modes use allowlisted factual fields and retain the source session ID without claiming a physical execution ID. Per-assistant route metadata is separate from the session default route, with bounded aggregates and contiguous segments. Canonical local inbox packages are immutable: identical exports are duplicates, while changed extraction is an explicit revision linked to its predecessor. Backfill remains sanitized-only. Missing historical sessions are reported unavailable rather than guessed.
 
+## GAS self-deployment
+
+Normal GAS releases use the authenticated self-deployment path through the existing `doPost()` transport; `clasp` remains manual break-glass. The deployment plan reports the current immutable-version capacity because Apps Script permits at most 200 versions per script. Versioned deployments cannot delete old versions through the Versions API, so reaching that ceiling is an explicit release boundary requiring script-project rotation outside this slice. #27 does not implement rotation. The plan exposes `used`, `max`, `remaining`, and a `ready`/`low`/`exhausted` status so capacity is observable before mutation.
+
 ## Safety and retention
 
 Stdout and stderr are retained as redacted raw evidence, capped at 64 KiB per stream. Manifests record retrievable URI and SHA-256 references, byte counts, and truthful truncation flags. Events and telemetry contain bounded fields and no raw stderr. `--secret-name NAME` selects explicit secret names from the inherited/child environment for redaction; secret values are never persisted. This allowlist is not a claim that arbitrary model output is secret-free.
@@ -73,8 +77,7 @@ Stdout and stderr are retained as redacted raw evidence, capped at 64 KiB per st
 initial coordination adapter: one logical work order may have many physical
 executions, and every mutation requires a fenced lease. Checkpoints, handoffs,
 finalization, reconstruction, repository drift checks, and normalized Observer
-lineage are durable. Foreground mutation conflicts with active background work
-fail closed. GAS Sheets/Drive remain provider-local state, not coordination
+lineage are durable. GAS Sheets/Drive remain provider-local state, not coordination
 authority. The local OpenCode bridge exposes semantic boundaries, including a
 read-only project/work-order-scoped discovery operation and a separate explicit
 transactional foreground takeover. Takeover keeps the logical work-order ID,
