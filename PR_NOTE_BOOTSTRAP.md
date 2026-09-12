@@ -1,1 +1,0 @@
-Temporary bootstrap guard for GAS self-deploy; remove before merge or as part of the PR.
