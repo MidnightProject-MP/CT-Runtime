@@ -69,8 +69,7 @@ jobs:
 
       - name: Submit signed deployment and verify readback
         env:
-          CT_GAS_DEPLOYMENT_ID: ${{ vars.CT_GAS_DEPLOYMENT_ID }}
-          CT_GAS_DEPLOY_URL: ${{ vars.CT_GAS_DEPLOY_URL }}
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
           CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.CT_GAS_DEPLOY_HMAC_SECRET }}
           GAS_BUNDLE_PATH: ${{ runner.temp }}/gas-bundle.json
         run: node scripts/deploy-gas.mjs
