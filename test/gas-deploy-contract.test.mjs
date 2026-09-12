@@ -9,7 +9,7 @@ test('normalizes complete project deterministically', () => {
     { name: 'a.html', type: 'HTML', source: '<p>a</p>' }
   ];
   const normalized = normalizeFiles(files);
-  assert.deepEqual(normalized.map((f) => f.name), ['a.html', 'appsscript.json', 'z.js']);
+  assert.deepEqual(normalized.map((f) => f.name), ['a', 'appsscript', 'z']);
   assert.equal(bundleHash(files), bundleHash([...files].reverse()));
 });
 
