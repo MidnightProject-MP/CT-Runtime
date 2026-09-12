@@ -1,0 +1,133 @@
+name: Legacy S3 Regression
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'
+  push:
+    paths:
+      - 'bin/ct-runtime.mjs'
+      - 'lib/config.mjs'
+      - 'lib/evidence-*.mjs'
+      - 'lib/execution-evidence.mjs'
+      - 'lib/observer-store.mjs'
+      - 'lib/production-observer.mjs'
+      - 'lib/runtime.mjs'
+      - 'lib/s3-evidence.mjs'
+      - 'lib/startup.mjs'
+      - 'lib/stores.mjs'
+      - 'migrations/**'
+      - 'test/s3.integration.test.mjs'
+  pull_request:
+    paths:
+      - 'bin/ct-runtime.mjs'
+      - 'lib/config.mjs'
+      - 'lib/evidence-*.mjs'
+      - 'lib/execution-evidence.mjs'
+      - 'lib/observer-store.mjs'
+      - 'lib/production-observer.mjs'
+      - 'lib/runtime.mjs'
+      - 'lib/s3-evidence.mjs'
+      - 'lib/startup.mjs'
+      - 'lib/stores.mjs'
+      - 'migrations/**'
+      - 'test/s3.integration.test.mjs'
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.14.0'
+  POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
+  MINIO_IMAGE: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  MC_IMAGE: minio/mc:RELEASE.2025-04-16T18-13-26Z
+  FOUNDRY_COMMIT: ${{ vars.FOUNDRY_COMMIT || '5bb45fca93394800f533e75150599a54e6aaf96b' }}
+
+jobs:
+  legacy-s3:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.9-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: ctruntime
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ctruntime"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Fetch pinned Foundry Observer contract for legacy checks
+        run: |
+          mkdir -p ../CT-Foundry/capabilities/observer
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/MidnightProject-MP/CT-Foundry/$FOUNDRY_COMMIT/capabilities/observer/observer.mjs" --output ../CT-Foundry/capabilities/observer/observer.mjs
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/MidnightProject-MP/CT-Foundry/$FOUNDRY_COMMIT/capabilities/observer/schema.mjs" --output ../CT-Foundry/capabilities/observer/schema.mjs
+      - name: Provision database roles required by migrations
+        run: |
+          PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anonymous') THEN
+              CREATE ROLE anonymous NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+      - name: Start healthy MinIO service
+        run: |
+          docker run --detach --name minio --publish 9000:9000 \
+            --env MINIO_ROOT_USER=test --env MINIO_ROOT_PASSWORD=testtest \
+            "$MINIO_IMAGE" server /data
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 2
+          done
+          docker logs minio
+          exit 1
+      - name: Create integration bucket
+        run: docker run --rm --network host --entrypoint /bin/sh "$MC_IMAGE" -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
+      - name: Apply migrations explicitly
+        run: npm run migrate -- --database-url "$POSTGRES_URL"
+      - name: Run S3 integration
+        run: npm run test:s3
+        env:
+          TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          TEST_S3_REGION: us-east-1
+          TEST_S3_BUCKET: ct-runtime
+          TEST_S3_ACCESS_KEY_ID: test
+          TEST_S3_SECRET_ACCESS_KEY: testtest
+          TEST_S3_PATH_STYLE: 'true'
+      - name: Production doctor and reconstruction
+        run: |
+          export OPENROUTER_API_KEY=ci-placeholder
+          npm run doctor
+          npm run reconstruct
+        env:
+          CT_RUNTIME_MODE: production
+          CT_RUNTIME_DATABASE_URL: ${{ env.POSTGRES_URL }}
+          CT_RUNTIME_S3_ENDPOINT: http://127.0.0.1:9000
+          CT_RUNTIME_S3_REGION: us-east-1
+          CT_RUNTIME_S3_BUCKET: ct-runtime
+          CT_RUNTIME_S3_PATH_STYLE: 'true'
+          CT_RUNTIME_S3_ACCESS_KEY_ID: test
+          CT_RUNTIME_S3_SECRET_ACCESS_KEY: testtest
+          CT_RUNTIME_DEPLOYMENT_ID: legacy-s3-${{ github.run_id }}-${{ github.run_attempt }}
+          CT_RUNTIME_PROVIDER: github-actions
+          CT_RUNTIME_CLASS: integration
+          CT_RUNTIME_REGION: local
+          CT_RUNTIME_IMAGE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          CT_RUNTIME_CONFIG_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          CT_RUNTIME_GIT_REPOSITORY: ${{ github.repository }}
+          CT_RUNTIME_GIT_COMMIT: ${{ github.sha }}
