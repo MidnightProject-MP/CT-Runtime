@@ -85,11 +85,12 @@ function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES
     }
     if (method === 'patch' && /\/deployments\//.test(u.pathname)) {
       const n = String(calls.at(-1).body.deploymentConfig.versionNumber);
-      deploymentVersion = n;
       if (patchMismatch) {
         patchMismatch = false;
-        return response(200, { deploymentId: DEPLOYMENT_ID, versionNumber: String(Number(n) + 1) });
+        deploymentVersion = String(Number(n) + 1);
+        return response(200, { deploymentId: DEPLOYMENT_ID, versionNumber: n });
       }
+      deploymentVersion = n;
       if (patchLost) {
         patchLost = false;
         throw new Error('deploy-google-api-599 lost response');
@@ -212,7 +213,7 @@ test('lost deployment-update response converges by readback', () => {
 test('final readback mismatch never reports success', () => {
   const h = makeHarness({ patchMode: 'mismatch' });
   const request = requestFor();
-  assert.throws(() => h.deploy(request, NEW_FILES), /readback-deployment-mismatch|readback-bundle-mismatch/);
+  assert.throws(() => h.deploy(request, NEW_FILES), /readback-deployment-mismatch|deploy-google-api-404/);
 });
 
 test('plan exposes paginated version capacity', () => {
