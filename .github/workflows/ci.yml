@@ -10,8 +10,8 @@ permissions:
 env:
   NODE_VERSION: '22.14.0'
   POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
-  MINIO_IMAGE: minio/minio:RELEASE.2025-04-22T22-12-26Z
-  MC_IMAGE: minio/mc:RELEASE.2025-04-16T18-13-26Z
+  MINIO_IMAGE: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+  MC_IMAGE: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
   FOUNDRY_COMMIT: ${{ vars.FOUNDRY_COMMIT || '5bb45fca93394800f533e75150599a54e6aaf96b' }}
 
 jobs:
