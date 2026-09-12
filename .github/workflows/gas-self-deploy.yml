@@ -1,14 +1,6 @@
 name: GAS self-deploy
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'gas/**'
-      - 'lib/gas-deploy-contract.mjs'
-      - 'scripts/build-gas-bundle.mjs'
-      - 'scripts/deploy-gas.mjs'
   workflow_dispatch:
     inputs:
       expected_live_bundle_hash:
@@ -56,16 +48,8 @@ jobs:
             echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_INPUT" >> "$GITHUB_ENV"
             exit 0
           fi
-          if [ "$GITHUB_EVENT_NAME" != "push" ] || [ -z "${{ github.event.before }}" ] || [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
-            echo 'A bootstrap deployment requires workflow_dispatch with expected_live_bundle_hash.'
-            exit 1
-          fi
-          rm -rf "$RUNNER_TEMP/expected"
-          mkdir -p "$RUNNER_TEMP/expected"
-          git archive "${{ github.event.before }}" gas | tar -x -C "$RUNNER_TEMP/expected"
-          node scripts/build-gas-bundle.mjs "$RUNNER_TEMP/expected/gas" "$RUNNER_TEMP/expected-bundle.json"
-          EXPECTED_HASH=$(node -e "const b=require('fs').readFileSync(process.env.RUNNER_TEMP+'/expected-bundle.json','utf8'); const x=JSON.parse(b); const c=require('node:crypto'); const n=[...x.files].sort((a,b)=>a.name.localeCompare(b.name)); console.log(c.createHash('sha256').update(JSON.stringify(n)).digest('hex'))")
-          echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_HASH" >> "$GITHUB_ENV"
+          echo 'A manual self-deployment requires expected_live_bundle_hash.'
+          exit 1
 
       - name: Submit signed deployment and verify readback
         env:
