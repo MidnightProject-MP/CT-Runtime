@@ -1,0 +1,80 @@
+name: GAS clasp auth health
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Periodic early-warning check. UTC; does not keep OAuth grants alive.
+    - cron: "17 13 1 * *"
+
+permissions:
+  contents: read
+
+jobs:
+  auth-health:
+    runs-on: ubuntu-latest
+
+    env:
+      NODE_VERSION: "22.14.0"
+      CLASP_VERSION: "3.3.0"
+      CT_GAS_SCRIPT_ID: "1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install clasp
+        run: npm install --global "@google/clasp@${CLASP_VERSION}"
+
+      - name: Require clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          test -n "$CLASPRC_JSON" || {
+            echo "::error::CLASPRC_JSON is not configured."
+            exit 1
+          }
+
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+
+      - name: Configure target project
+        working-directory: gas
+        run: |
+          test -n "$CT_GAS_SCRIPT_ID"
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+          test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
+          echo "Target Apps Script project: $CT_GAS_SCRIPT_ID"
+
+      - name: Verify authorized user
+        working-directory: gas
+        run: |
+          clasp show-authorized-user --json
+
+      - name: Verify Apps Script deployment read access
+        working-directory: gas
+        run: |
+          clasp list-deployments
+
+      - name: Verify project-content read access
+        run: |
+          rm -rf "$RUNNER_TEMP/gas-auth-health"
+          mkdir -p "$RUNNER_TEMP/gas-auth-health"
+          cp gas/.clasp.json "$RUNNER_TEMP/gas-auth-health/.clasp.json"
+          cd "$RUNNER_TEMP/gas-auth-health"
+
+          # Reads the remote Apps Script project into a disposable runner
+          # directory. This does not mutate the Apps Script project.
+          clasp pull
+
+          test -f appsscript.json
+          test -n "$(find . -type f -not -path './.clasp.json' | head -n 1)"
+
+      - name: Remove local credentials
+        if: always()
+        run: rm -f "$HOME/.clasprc.json"
