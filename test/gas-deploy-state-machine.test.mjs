@@ -9,6 +9,8 @@ const SOURCE = fs.readFileSync(new URL('../gas/gas_deploy.js', import.meta.url),
 const SCRIPT_ID = 'script12345678901234567890';
 const DEPLOYMENT_ID = 'deployment12345678';
 const SECRET = 'test-secret';
+const MANIFEST = 'appsscript';
+const DEPLOYMENT_DESCRIPTION = 'production web app';
 const OLD_FILES = [
   { name: 'appsscript.json', type: 'JSON', source: '{"runtimeVersion":"V8"}' },
   { name: 'main.js', type: 'SERVER_JS', source: 'old' }
@@ -17,6 +19,27 @@ const NEW_FILES = [
   { name: 'appsscript.json', type: 'JSON', source: '{"runtimeVersion":"V8"}' },
   { name: 'main.js', type: 'SERVER_JS', source: 'new' }
 ];
+const DRIFT_FILES = [
+  { name: 'appsscript.json', type: 'JSON', source: '{"runtimeVersion":"V8"}' },
+  { name: 'main.js', type: 'SERVER_JS', source: 'drift' }
+];
+
+function deploymentPayload(versionNumber = '1') {
+  return {
+    deploymentId: DEPLOYMENT_ID,
+    deploymentConfig: {
+      scriptId: SCRIPT_ID,
+      versionNumber: Number(versionNumber),
+      manifestFileName: MANIFEST,
+      description: DEPLOYMENT_DESCRIPTION
+    },
+    updateTime: '2026-09-12T00:00:00Z',
+    entryPoints: [{
+      entryPointType: 'WEB_APP',
+      webApp: { url: 'https://example.invalid/exec', entryPointConfig: { executeAs: 'USER_DEPLOYING', access: 'ANYONE_ANONYMOUS' } }
+    }]
+  };
+}
 
 function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES, patchMode = 'normal', createMode = 'normal' } = {}) {
   const properties = new Map([
@@ -24,12 +47,12 @@ function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES
     ['CT_GAS_DEPLOYMENT_ID', DEPLOYMENT_ID]
   ]);
   const calls = [];
+  const lockEvents = [];
   let now = 1_750_000_000_000;
   let nextVersion = 1;
   const versionFiles = new Map();
-  const versionRows = versions ? versions.map((v) => ({ ...v })) : [{ versionNumber: '1', description: 'initial' }];
-  const initialVersionFiles = new Map([['1', OLD_FILES]]);
-  initialVersionFiles.forEach((value, key) => versionFiles.set(key, structuredClone(value)));
+  const versionRows = versions ? versions.map((v) => ({ scriptId: SCRIPT_ID, ...v })) : [{ scriptId: SCRIPT_ID, versionNumber: '1', description: 'initial' }];
+  versionFiles.set('1', structuredClone(OLD_FILES));
   let deploymentVersion = String(liveVersion);
   let currentHead = structuredClone(headFiles);
   nextVersion = Math.max(0, ...versionRows.map((v) => Number(v.versionNumber))) + 1;
@@ -37,21 +60,15 @@ function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES
   let patchLost = patchMode === 'lost-response';
   let patchMismatch = patchMode === 'mismatch';
 
-  function content(files) { return { files: structuredClone(files) }; }
-  function response(code, payload = {}) {
-    return { getResponseCode: () => code, getContentText: () => JSON.stringify(payload) };
-  }
-  function parse(url) {
-    return new URL(url);
-  }
+  function content(files) { return { scriptId: SCRIPT_ID, files: structuredClone(files) }; }
+  function response(code, payload = {}) { return { getResponseCode: () => code, getContentText: () => JSON.stringify(payload) }; }
+  function parse(url) { return new URL(url); }
   function fetch(url, options = {}) {
     const method = String(options.method || 'get').toLowerCase();
     const u = parse(url);
     calls.push({ method, url, body: options.payload ? JSON.parse(options.payload) : undefined });
 
-    if (method === 'get' && /\/deployments\//.test(u.pathname)) {
-      return response(200, { deploymentId: DEPLOYMENT_ID, versionNumber: deploymentVersion });
-    }
+    if (method === 'get' && /\/deployments\//.test(u.pathname)) return response(200, deploymentPayload(deploymentVersion));
     if (method === 'get' && /\/versions\/[^/]+$/.test(u.pathname)) {
       const n = u.pathname.split('/').pop();
       const row = versionRows.find((v) => String(v.versionNumber) === String(n));
@@ -65,8 +82,7 @@ function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES
     }
     if (method === 'get' && /\/content$/.test(u.pathname)) {
       const n = u.searchParams.get('versionNumber');
-      if (n) return response(200, content(versionFiles.get(String(n)) || currentHead));
-      return response(200, content(currentHead));
+      return response(200, n ? content(versionFiles.get(String(n)) || currentHead) : content(currentHead));
     }
     if (method === 'put' && /\/content$/.test(u.pathname)) {
       currentHead = structuredClone(calls.at(-1).body.files);
@@ -74,42 +90,41 @@ function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES
     }
     if (method === 'post' && /\/versions$/.test(u.pathname)) {
       const n = String(nextVersion++);
-      const row = { versionNumber: n, description: calls.at(-1).body.description };
+      const row = { scriptId: SCRIPT_ID, versionNumber: n, description: calls.at(-1).body.description, createTime: '2026-09-12T00:00:00Z' };
       versionRows.push(row);
       versionFiles.set(n, structuredClone(currentHead));
-      if (createLost) {
-        createLost = false;
-        throw new Error('deploy-google-api-599 lost response');
-      }
+      if (createLost) { createLost = false; throw new Error('deploy-google-api-599 lost response'); }
       return response(200, row);
     }
-    if (method === 'patch' && /\/deployments\//.test(u.pathname)) {
-      const n = String(calls.at(-1).body.deploymentConfig.versionNumber);
+    if (method === 'put' && /\/deployments\//.test(u.pathname)) {
+      const bodyConfig = calls.at(-1).body.deploymentConfig;
+      assert.equal(bodyConfig.scriptId, SCRIPT_ID);
+      assert.equal(bodyConfig.manifestFileName, MANIFEST);
+      assert.equal(bodyConfig.description, DEPLOYMENT_DESCRIPTION);
+      const n = String(bodyConfig.versionNumber);
       if (patchMismatch) {
         patchMismatch = false;
         deploymentVersion = String(Number(n) + 1);
-        return response(200, { deploymentId: DEPLOYMENT_ID, versionNumber: deploymentVersion });
+        return response(200, deploymentPayload(deploymentVersion));
       }
       deploymentVersion = n;
-      if (patchLost) {
-        patchLost = false;
-        throw new Error('deploy-google-api-599 lost response');
-      }
-      return response(200, { deploymentId: DEPLOYMENT_ID, versionNumber: n });
+      if (patchLost) { patchLost = false; throw new Error('deploy-google-api-599 lost response'); }
+      return response(200, deploymentPayload(n));
     }
     throw new Error(`unexpected API call: ${method} ${url}`);
   }
 
   const context = {
-    PropertiesService: {
-      getScriptProperties: () => ({
-        getProperty: (key) => properties.get(key) ?? null,
-        setProperty: (key, value) => properties.set(key, String(value)),
-        deleteProperty: (key) => properties.delete(key),
-        getProperties: () => Object.fromEntries(properties)
-      })
-    },
-    LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
+    PropertiesService: { getScriptProperties: () => ({
+      getProperty: (key) => properties.get(key) ?? null,
+      setProperty: (key, value) => properties.set(key, String(value)),
+      deleteProperty: (key) => properties.delete(key),
+      getProperties: () => Object.fromEntries(properties)
+    }) },
+    LockService: { getScriptLock: () => ({
+      waitLock: (timeout) => lockEvents.push(['wait', timeout]),
+      releaseLock: () => lockEvents.push(['release'])
+    }) },
     ScriptApp: { getScriptId: () => SCRIPT_ID, getOAuthToken: () => 'token' },
     UrlFetchApp: { fetch },
     Utilities: {
@@ -129,6 +144,7 @@ function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES
     plan: context.CT_GAS_DEPLOY.plan,
     calls,
     properties,
+    lockEvents,
     advance(ms) { now += ms; },
     sign(raw, request, nonce) {
       const timestamp = String(Math.floor(now / 1000));
@@ -153,6 +169,14 @@ function requestFor(files = NEW_FILES, overrides = {}) {
   };
 }
 
+function nonceProperty(nonce) {
+  return `CT_GAS_DEPLOY_NONCE_${crypto.createHash('sha256').update(nonce).digest('hex')}`;
+}
+
+function requestProperty(requestId) {
+  return `CT_GAS_DEPLOY_REQUEST_${crypto.createHash('sha256').update(requestId).digest('hex').slice(0, 48)}`;
+}
+
 test('nonce replay is rejected and expired nonces can be reused', () => {
   const h = makeHarness();
   const request = requestFor();
@@ -165,12 +189,32 @@ test('nonce replay is rejected and expired nonces can be reused', () => {
   h.authenticate(raw, fresh);
 });
 
+test('nonce capacity fails closed without evicting an active nonce', () => {
+  const h = makeHarness();
+  const expires = 1_750_000_600_000;
+  for (let i = 0; i < 256; i++) h.properties.set(nonceProperty(`active-${i}`), String(expires));
+  const request = requestFor();
+  const raw = JSON.stringify(request);
+  const auth = h.sign(raw, request, 'new-capacity-nonce');
+  assert.throws(() => h.authenticate(raw, auth), /nonce-capacity/);
+  assert.equal([...h.properties.keys()].filter((k) => k.startsWith('CT_GAS_DEPLOY_NONCE_')).length, 256);
+});
+
 test('same request identity with a different bundle is rejected', () => {
   const h = makeHarness();
   const request = requestFor();
   h.deploy(request, NEW_FILES);
   const changed = requestFor(OLD_FILES, { bundle_hash: bundleHash(OLD_FILES) });
   assert.throws(() => h.deploy(changed, OLD_FILES), /request-marker-conflict/);
+});
+
+test('request-fence capacity fails closed without evicting unresolved identities', () => {
+  const h = makeHarness();
+  for (let i = 0; i < 256; i++) h.properties.set(requestProperty(`unresolved-${i}`), JSON.stringify({ identity: `${'b'.repeat(64)}:${'c'.repeat(64)}`, createdAt: i }));
+  const request = requestFor();
+  assert.throws(() => h.deploy(request, NEW_FILES), /request-fence-capacity/);
+  assert.equal([...h.properties.keys()].filter((k) => k.startsWith('CT_GAS_DEPLOY_REQUEST_')).length, 256);
+  assert.equal(h.calls.filter((c) => ['put', 'post'].includes(c.method)).length, 0);
 });
 
 test('stale predecessor fence fails before mutation', () => {
@@ -180,7 +224,14 @@ test('stale predecessor fence fails before mutation', () => {
   ] });
   const request = requestFor();
   assert.throws(() => h.deploy(request, NEW_FILES), /live-state-conflict/);
-  assert.equal(h.calls.filter((c) => ['put', 'post', 'patch'].includes(c.method)).length, 0);
+  assert.equal(h.calls.filter((c) => ['put', 'post'].includes(c.method)).length, 0);
+});
+
+test('unexpected HEAD drift fails closed before mutation', () => {
+  const h = makeHarness({ headFiles: DRIFT_FILES });
+  const request = requestFor();
+  assert.throws(() => h.deploy(request, NEW_FILES), /head-state-conflict/);
+  assert.equal(h.calls.filter((c) => ['put', 'post'].includes(c.method)).length, 0);
 });
 
 test('already-updated HEAD resumes without rewriting it', () => {
@@ -188,7 +239,32 @@ test('already-updated HEAD resumes without rewriting it', () => {
   const request = requestFor();
   const result = h.deploy(request, NEW_FILES);
   assert.equal(result.status, 'verified');
-  assert.equal(h.calls.filter((c) => c.method === 'put').length, 0);
+  assert.equal(h.calls.filter((c) => c.method === 'put' && /\/content$/.test(c.url)).length, 0);
+  assert.equal(h.state().deploymentVersion, '2');
+});
+
+test('deployment update uses documented PUT and preserves full deployment config', () => {
+  const h = makeHarness();
+  const request = requestFor();
+  const result = h.deploy(request, NEW_FILES);
+  assert.equal(result.status, 'verified');
+  const updates = h.calls.filter((c) => /\/deployments\//.test(c.url) && c.method === 'put');
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].body, { deploymentConfig: {
+    scriptId: SCRIPT_ID,
+    versionNumber: 2,
+    manifestFileName: MANIFEST,
+    description: DEPLOYMENT_DESCRIPTION
+  } });
+  assert.equal(h.calls.some((c) => c.method === 'patch'), false);
+});
+
+test('deployment mutex is acquired for the entire mutation state machine', () => {
+  const h = makeHarness();
+  h.deploy(requestFor(), NEW_FILES);
+  assert.equal(h.lockEvents.filter(([event]) => event === 'wait').length, 1);
+  assert.equal(h.lockEvents.filter(([event]) => event === 'release').length, 1);
+  assert.deepEqual(h.lockEvents, [['wait', 30000], ['release']]);
 });
 
 test('lost version-create response is recovered by the immutable marker', () => {
@@ -198,7 +274,7 @@ test('lost version-create response is recovered by the immutable marker', () => 
   assert.equal(result.status, 'verified');
   assert.equal(h.state().versions.length, 2);
   assert.equal(h.calls.filter((c) => c.method === 'post').length, 1);
-  assert.equal(h.calls.filter((c) => c.method === 'patch').length, 1);
+  assert.equal(h.calls.filter((c) => c.method === 'put' && /\/deployments\//.test(c.url)).length, 1);
 });
 
 test('lost deployment-update response converges by readback', () => {
@@ -207,13 +283,24 @@ test('lost deployment-update response converges by readback', () => {
   const result = h.deploy(request, NEW_FILES);
   assert.equal(result.status, 'verified');
   assert.equal(h.state().deploymentVersion, '2');
-  assert.equal(h.calls.filter((c) => c.method === 'patch').length, 1);
+  assert.equal(h.calls.filter((c) => c.method === 'put' && /\/deployments\//.test(c.url)).length, 1);
 });
 
 test('final readback mismatch never reports success', () => {
   const h = makeHarness({ patchMode: 'mismatch' });
   const request = requestFor();
   assert.throws(() => h.deploy(request, NEW_FILES), /readback-deployment-mismatch|readback-bundle-mismatch/);
+});
+
+test('HEAD-new/web-old partial state converges without another HEAD mutation', () => {
+  const h = makeHarness({ headFiles: NEW_FILES, liveVersion: '1' });
+  const request = requestFor();
+  const result = h.deploy(request, NEW_FILES);
+  assert.equal(result.status, 'verified');
+  assert.equal(h.state().deploymentVersion, '2');
+  assert.deepEqual(h.state().head, NEW_FILES);
+  assert.equal(h.calls.filter((c) => c.method === 'put' && /\/content$/.test(c.url)).length, 0);
+  assert.equal(h.calls.filter((c) => c.method === 'put' && /\/deployments\//.test(c.url)).length, 1);
 });
 
 test('plan exposes paginated version capacity', () => {
