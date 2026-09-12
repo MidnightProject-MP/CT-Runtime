@@ -72,6 +72,20 @@ test('transport contract separates HMAC notification from identity-token RPC pol
   assert.doesNotMatch(gas, /e&&e\.headers/);
 });
 
+test('admin web route is separate, replay-resistant, and allowlisted', async () => {
+  const gas = await readFile(new URL('../gas/gas_federation.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/gas-clasp-deploy.yml', import.meta.url), 'utf8');
+  const caller = await readFile(new URL('../.github/scripts/gas-admin-call.mjs', import.meta.url), 'utf8');
+  assert.match(gas, /CT_GAS_ADMIN_SECRET/);
+  assert.match(gas, /CT_GAS_ADMIN_LAST_NONCE/);
+  assert.match(gas, /unsupported admin operation/);
+  assert.match(gas, /admin\.readinessCheck/);
+  assert.match(workflow, /CT_GAS_ADMIN_WEB_APP_URL/);
+  assert.doesNotMatch(workflow, /clasp run/);
+  assert.match(caller, /createHmac/);
+  assert.match(caller, /randomUUID/);
+});
+
 test('pre-persisted matching duplicate remains pending and notification can retry', async () => {
   const calls = [];
   const client = { query: async (sql, params) => {

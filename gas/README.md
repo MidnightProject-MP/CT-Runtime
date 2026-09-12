@@ -41,7 +41,16 @@ Before using the workflow, configure:
 
 - repository variable `CT_GAS_SCRIPT_ID` — the Apps Script project ID;
 - repository secret `CLASPRC_JSON` — the complete authenticated `.clasprc.json` content for the deployment identity; it must contain the working `ct-runtime` credential as `tokens.default` (CI checks structural keys and type only and never logs credential values);
+- repository variable `CT_GAS_ADMIN_WEB_APP_URL` — the existing deployed web-app `/exec` URL;
+- repository secret `CT_GAS_ADMIN_SECRET` — a long random shared secret also stored as Script Property `CT_GAS_ADMIN_SECRET`;
 - GitHub environment `gas-production` — the workflow targets this environment so its approval/protection rules can remain the release gate.
+
+The deploy workflow uses `clasp push` and deployment creation for source only. It
+uses the authenticated web-app admin route for configuration, diagnostics, and
+readiness; it does not call the Apps Script Execution API (`clasp run`). Admin
+requests are timestamped, nonce-bound, HMAC-authenticated, replay-rejected, and
+limited to the allowlisted `admin.*` operations. The endpoint returns bounded
+configuration facts only and never accepts credentials or human message content.
 
 Deployment authority, execution authority, and sheet ownership are different boundaries: verify each independently. Before repeating an external effect, inspect reality first: run `diagnoseFeedbackInbox`, confirm the returned Script ID and configured spreadsheet property, and only then run `configureFeedbackInbox` or `setupFeedbackSheet` when the observed state mismatches. GitHub Actions is a deployment mechanism here, not the GAS scheduler or runtime authority. Existing deployment IDs can be supplied at dispatch time; otherwise clasp creates a new deployment. Never commit `.clasp.json`, `.clasprc.json`, access tokens, Script Properties, or other credentials; CI rejects tracked credential or config artifacts.
 

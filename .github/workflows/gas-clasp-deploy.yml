@@ -102,30 +102,47 @@ jobs:
             clasp create-deployment --description "$DEPLOYMENT_DESCRIPTION"
           fi
 
-      - name: Configure dedicated feedback inbox
-        working-directory: gas
+      - name: Configure admin call
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ vars.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_ADMIN_SECRET: ${{ secrets.CT_GAS_ADMIN_SECRET }}
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/configure-feedback.log" configureFeedbackInbox \
-            --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" --require 'sheet_name' \
-            -- clasp run configureFeedbackInbox --params "[\"$CT_GAS_FEEDBACK_SPREADSHEET_ID\",\"$CT_GAS_FEEDBACK_SHEET_NAME\"]"
+          test -n "$CT_GAS_ADMIN_WEB_APP_URL"
+          test -n "$CT_GAS_ADMIN_SECRET"
+
+      - name: Configure dedicated feedback inbox
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ vars.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_ADMIN_SECRET: ${{ secrets.CT_GAS_ADMIN_SECRET }}
+          CT_GAS_ADMIN_OPERATION: admin.configureFeedbackInbox
+          CT_GAS_ADMIN_PARAMS: '{"spreadsheet_id":"${{ env.CT_GAS_FEEDBACK_SPREADSHEET_ID }}","sheet_name":"${{ env.CT_GAS_FEEDBACK_SHEET_NAME }}"}'
+          CT_GAS_ADMIN_REQUIRE: 'feedback_spreadsheet_id'
+        run: |
+          node .github/scripts/gas-admin-call.mjs | tee "$RUNNER_TEMP/configure-feedback.log"
 
       - name: Diagnose feedback inbox after configure
-        working-directory: gas
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ vars.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_ADMIN_SECRET: ${{ secrets.CT_GAS_ADMIN_SECRET }}
+          CT_GAS_ADMIN_OPERATION: admin.diagnoseFeedbackInbox
+          CT_GAS_ADMIN_REQUIRE: 'script_id'
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-configure.log" diagnoseFeedbackInbox \
-            --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" \
-            -- clasp run diagnoseFeedbackInbox
+          node .github/scripts/gas-admin-call.mjs | tee "$RUNNER_TEMP/diagnose-after-configure.log"
 
       - name: Bootstrap feedback sheet
-        working-directory: gas
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ vars.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_ADMIN_SECRET: ${{ secrets.CT_GAS_ADMIN_SECRET }}
+          CT_GAS_ADMIN_OPERATION: admin.setupFeedbackSheet
+          CT_GAS_ADMIN_REQUIRE: 'header_row'
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/setup-feedback.log" setupFeedbackSheet \
-            --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" \
-            -- clasp run setupFeedbackSheet
+          node .github/scripts/gas-admin-call.mjs | tee "$RUNNER_TEMP/setup-feedback.log"
 
       - name: Diagnose feedback inbox after setup
-        working-directory: gas
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ vars.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_ADMIN_SECRET: ${{ secrets.CT_GAS_ADMIN_SECRET }}
+          CT_GAS_ADMIN_OPERATION: admin.readinessCheck
+          CT_GAS_ADMIN_REQUIRE: 'script_id'
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-setup.log" diagnoseFeedbackInbox \
-            --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" \
-            -- clasp run diagnoseFeedbackInbox
+          node .github/scripts/gas-admin-call.mjs | tee "$RUNNER_TEMP/diagnose-after-setup.log"

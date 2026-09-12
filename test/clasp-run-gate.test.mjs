@@ -73,9 +73,9 @@ test('gate script refuses to run without required payload contract', () => {
   assert.notEqual(r.status, 0);
 });
 
-test('workflows route every clasp run through the shared gate', async () => {
+test('workflows route clasp execution and GAS administration through explicit gates', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const file of ['.github/workflows/gas-clasp-deploy.yml', '.github/workflows/gas-feedback-repair.yml', '.github/workflows/gas-live-inspect.yml']) {
+  for (const file of ['.github/workflows/gas-feedback-repair.yml', '.github/workflows/gas-live-inspect.yml']) {
     const text = await readFile(new URL(`../${file}`, import.meta.url), 'utf8');
     assert.match(text, /clasp-run-gate\.sh/);
     assert.doesNotMatch(text, /PIPESTATUS/);
@@ -83,4 +83,7 @@ test('workflows route every clasp run through the shared gate', async () => {
   }
   const deploy = await readFile(new URL('../.github/workflows/gas-clasp-deploy.yml', import.meta.url), 'utf8');
   assert.match(deploy, /tokens\.default/);
+  assert.match(deploy, /gas-admin-call\.mjs/);
+  assert.match(deploy, /CT_GAS_ADMIN_SECRET/);
+  assert.doesNotMatch(deploy, /clasp run/);
 });
