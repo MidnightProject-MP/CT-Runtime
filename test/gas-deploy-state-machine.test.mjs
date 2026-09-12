@@ -85,11 +85,12 @@ function makeHarness({ versions = null, liveVersion = '1', headFiles = OLD_FILES
     }
     if (method === 'patch' && /\/deployments\//.test(u.pathname)) {
       const n = String(calls.at(-1).body.deploymentConfig.versionNumber);
-      deploymentVersion = n;
       if (patchMismatch) {
         patchMismatch = false;
-        return response(200, { deploymentId: DEPLOYMENT_ID, versionNumber: String(Number(n) + 1) });
+        deploymentVersion = String(Number(n) + 1);
+        return response(200, { deploymentId: DEPLOYMENT_ID, versionNumber: deploymentVersion });
       }
+      deploymentVersion = n;
       if (patchLost) {
         patchLost = false;
         throw new Error('deploy-google-api-599 lost response');
