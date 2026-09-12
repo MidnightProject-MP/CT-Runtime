@@ -1,9 +1,6 @@
-name: GAS clasp deploy
+name: GAS clasp deploy (break glass)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       deployment_id:
@@ -13,7 +10,7 @@ on:
       description:
         description: 'Deployment description'
         required: false
-        default: 'CT-Runtime GAS deployment'
+        default: 'CT-Runtime GAS break-glass deployment'
         type: string
 
 permissions:
@@ -32,18 +29,14 @@ jobs:
     environment: gas-production
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-
       - name: Validate Apps Script manifest
         working-directory: gas
         run: node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync('appsscript.json','utf8')); if(m.runtimeVersion!=='V8') throw new Error('Expected V8 runtime'); if(!m.oauthScopes?.length) throw new Error('No OAuth scopes configured');"
-
       - name: Install clasp
         run: npm install --global @google/clasp@${CLASP_VERSION}
-
       - name: Configure clasp credentials
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
@@ -51,81 +44,50 @@ jobs:
           test -n "$CLASPRC_JSON"
           umask 077
           printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
-
       - name: Inspect clasp OAuth identity metadata
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const config = JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8'));
-          if (!config.tokens || typeof config.tokens !== 'object' || !config.tokens.default) {
-            throw new Error('CLASPRC_JSON must contain the working ct-runtime credential as tokens.default (structural keys only; values are never logged).');
-          }
+          if (!config.tokens || typeof config.tokens !== 'object' || !config.tokens.default) throw new Error('CLASPRC_JSON must contain tokens.default.');
           const settings = config.oauth2ClientSettings || {};
           const tokens = Object.values(config.tokens || {});
           const scopes = [...new Set(tokens.flatMap((token) => String(token.scope || '').split(/\s+/).filter(Boolean)))].sort();
           const serviceAccountLike = config.type === 'service_account' || Boolean(config.client_email || config.private_key);
-          console.log(JSON.stringify({
-            top_level_keys: Object.keys(config).sort(),
-            has_tokens_default: true,
-            token_ids: Object.keys(config.tokens || {}).sort(),
-            credential_shape: serviceAccountLike ? 'service-account-like' : 'user-oauth-like',
-            oauth2_client_id: settings.clientId || settings.client_id || null,
-            oauth2_project_id: settings.projectId || settings.project_id || null,
-            token_scopes: scopes
-          }, null, 2));
+          console.log(JSON.stringify({ top_level_keys: Object.keys(config).sort(), has_tokens_default: true, token_ids: Object.keys(config.tokens || {}).sort(), credential_shape: serviceAccountLike ? 'service-account-like' : 'user-oauth-like', oauth2_client_id: settings.clientId || settings.client_id || null, oauth2_project_id: settings.projectId || settings.project_id || null, token_scopes: scopes }, null, 2));
           NODE
-
       - name: Configure Apps Script project
         working-directory: gas
         run: |
           test -n "$CT_GAS_SCRIPT_ID"
           node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
           test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
-
       - name: Show clasp file status
         working-directory: gas
         run: clasp show-file-status --json
-
       - name: Push source
         working-directory: gas
         run: clasp push --force
-
       - name: Deploy
         working-directory: gas
         env:
           DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-          DEPLOYMENT_DESCRIPTION: ${{ inputs.description || 'CT-Runtime GAS deployment' }}
+          DEPLOYMENT_DESCRIPTION: ${{ inputs.description || 'CT-Runtime GAS break-glass deployment' }}
         run: |
-          if [ -n "$DEPLOYMENT_ID" ]; then
-            clasp create-deployment --deploymentId "$DEPLOYMENT_ID" --description "$DEPLOYMENT_DESCRIPTION"
-          else
-            clasp create-deployment --description "$DEPLOYMENT_DESCRIPTION"
-          fi
-
+          if [ -n "$DEPLOYMENT_ID" ]; then clasp create-deployment --deploymentId "$DEPLOYMENT_ID" --description "$DEPLOYMENT_DESCRIPTION"; else clasp create-deployment --description "$DEPLOYMENT_DESCRIPTION"; fi
       - name: Configure dedicated feedback inbox
         working-directory: gas
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/configure-feedback.log" configureFeedbackInbox \
-            --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" --require 'sheet_name' \
-            -- clasp run configureFeedbackInbox --params "[\"$CT_GAS_FEEDBACK_SPREADSHEET_ID\",\"$CT_GAS_FEEDBACK_SHEET_NAME\"]"
-
+          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/configure-feedback.log" configureFeedbackInbox --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" --require 'sheet_name' -- clasp run configureFeedbackInbox --params "[\"$CT_GAS_FEEDBACK_SPREADSHEET_ID\",\"$CT_GAS_FEEDBACK_SHEET_NAME\"]"
       - name: Diagnose feedback inbox after configure
         working-directory: gas
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-configure.log" diagnoseFeedbackInbox \
-            --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" \
-            -- clasp run diagnoseFeedbackInbox
-
+          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-configure.log" diagnoseFeedbackInbox --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" -- clasp run diagnoseFeedbackInbox
       - name: Bootstrap feedback sheet
         working-directory: gas
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/setup-feedback.log" setupFeedbackSheet \
-            --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" \
-            -- clasp run setupFeedbackSheet
-
+          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/setup-feedback.log" setupFeedbackSheet --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" -- clasp run setupFeedbackSheet
       - name: Diagnose feedback inbox after setup
         working-directory: gas
         run: |
-          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-setup.log" diagnoseFeedbackInbox \
-            --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" \
-            -- clasp run diagnoseFeedbackInbox
+          bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-setup.log" diagnoseFeedbackInbox --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" -- clasp run diagnoseFeedbackInbox

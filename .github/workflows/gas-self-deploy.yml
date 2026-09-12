@@ -1,0 +1,76 @@
+name: GAS self-deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'gas/**'
+      - 'lib/gas-deploy-contract.mjs'
+      - 'scripts/build-gas-bundle.mjs'
+      - 'scripts/deploy-gas.mjs'
+  workflow_dispatch:
+    inputs:
+      expected_live_bundle_hash:
+        description: 'Expected hash of the currently live GAS deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gas-production
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22.14.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: gas-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate and test deployment contract
+        run: npm test -- --test-name-pattern='gas deployment|normalizes complete project|requires a manifest|signing binds'
+
+      - name: Build complete GAS bundle
+        run: |
+          node scripts/build-gas-bundle.mjs gas "$RUNNER_TEMP/gas-bundle.json"
+          echo "GAS_BUNDLE_HASH=$(node -e "const b=require('fs').readFileSync(process.env.RUNNER_TEMP+'/gas-bundle.json','utf8'); const x=JSON.parse(b); const c=require('node:crypto'); const n=[...x.files].sort((a,b)=>a.name.localeCompare(b.name)); console.log(c.createHash('sha256').update(JSON.stringify(n)).digest('hex'))")" >> "$GITHUB_ENV"
+
+      - name: Establish expected live predecessor
+        env:
+          EXPECTED_INPUT: ${{ inputs.expected_live_bundle_hash }}
+        run: |
+          if [ -n "$EXPECTED_INPUT" ]; then
+            echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_INPUT" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "push" ] || [ -z "${{ github.event.before }}" ] || [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            echo 'A bootstrap deployment requires workflow_dispatch with expected_live_bundle_hash.'
+            exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/expected"
+          mkdir -p "$RUNNER_TEMP/expected"
+          git archive "${{ github.event.before }}" gas | tar -x -C "$RUNNER_TEMP/expected"
+          node scripts/build-gas-bundle.mjs "$RUNNER_TEMP/expected/gas" "$RUNNER_TEMP/expected-bundle.json"
+          EXPECTED_HASH=$(node -e "const b=require('fs').readFileSync(process.env.RUNNER_TEMP+'/expected-bundle.json','utf8'); const x=JSON.parse(b); const c=require('node:crypto'); const n=[...x.files].sort((a,b)=>a.name.localeCompare(b.name)); console.log(c.createHash('sha256').update(JSON.stringify(n)).digest('hex'))")
+          echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_HASH" >> "$GITHUB_ENV"
+
+      - name: Submit signed deployment and verify readback
+        env:
+          CT_GAS_DEPLOYMENT_ID: ${{ vars.CT_GAS_DEPLOYMENT_ID }}
+          CT_GAS_DEPLOY_URL: ${{ vars.CT_GAS_DEPLOY_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.CT_GAS_DEPLOY_HMAC_SECRET }}
+          GAS_BUNDLE_PATH: ${{ runner.temp }}/gas-bundle.json
+        run: node scripts/deploy-gas.mjs
