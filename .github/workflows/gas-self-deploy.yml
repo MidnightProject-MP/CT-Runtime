@@ -40,6 +40,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Install test dependencies
+        run: npm ci
+
       - name: Validate and test deployment contract
         run: npm test -- --test-name-pattern='gas deployment|normalizes complete project|requires a manifest|signing binds'
 
