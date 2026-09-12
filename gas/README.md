@@ -52,6 +52,12 @@ requests are timestamped, nonce-bound, HMAC-authenticated, replay-rejected, and
 limited to the allowlisted `admin.*` operations. The endpoint returns bounded
 configuration facts only and never accepts credentials or human message content.
 
+The scheduled `gas-auth-health.yml` workflow performs a read-only
+`clasp show-file-status` probe and publishes a bounded health classification. A
+failed refresh token affects future deployments only; it does not stop the
+already-deployed GAS trigger or web app. Do not regenerate the clasp credential
+unless the health probe or a required deployment has actually failed.
+
 Deployment authority, execution authority, and sheet ownership are different boundaries: verify each independently. Before repeating an external effect, inspect reality first: run `diagnoseFeedbackInbox`, confirm the returned Script ID and configured spreadsheet property, and only then run `configureFeedbackInbox` or `setupFeedbackSheet` when the observed state mismatches. GitHub Actions is a deployment mechanism here, not the GAS scheduler or runtime authority. Existing deployment IDs can be supplied at dispatch time; otherwise clasp creates a new deployment. Never commit `.clasp.json`, `.clasprc.json`, access tokens, Script Properties, or other credentials; CI rejects tracked credential or config artifacts.
 
 ## Operation

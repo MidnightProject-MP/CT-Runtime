@@ -1,0 +1,71 @@
+name: GAS deployment auth health
+
+# This is an infrastructure-health probe, not a runtime wake. A failed probe
+# means future source deployments may need human reauthorization; it does not
+# change the already-deployed Apps Script project or its triggers.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.14.0'
+  CLASP_VERSION: '3.3.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
+
+jobs:
+  auth-health:
+    runs-on: ubuntu-latest
+    environment: gas-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install clasp
+        run: npm install --global @google/clasp@${CLASP_VERSION}
+
+      - name: Restore deployment credential
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          test -n "$CLASPRC_JSON"
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+
+      - name: Configure Apps Script project
+        working-directory: gas
+        run: |
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+
+      - name: Read-only clasp auth probe
+        working-directory: gas
+        run: |
+          set +e
+          clasp show-file-status --json > "$RUNNER_TEMP/clasp-auth-health.out" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'GAS deployment credential health: healthy' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if grep -Eiq 'invalid_grant|invalid.aw|unauthorized|authentication|refresh.token' "$RUNNER_TEMP/clasp-auth-health.out"; then
+            classification='reauthorization-required'
+          else
+            classification='deployment-auth-probe-failed'
+          fi
+          {
+            echo '## GAS deployment credential health'
+            echo "Status: **degraded**"
+            echo "Classification: **$classification**"
+            echo 'The deployed GAS adapter is unchanged; only future source deployment is affected.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$RUNNER_TEMP/clasp-auth-health.out"
+          exit "$status"

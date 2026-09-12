@@ -86,4 +86,8 @@ test('workflows route clasp execution and GAS administration through explicit ga
   assert.match(deploy, /gas-admin-call\.mjs/);
   assert.match(deploy, /CT_GAS_ADMIN_SECRET/);
   assert.doesNotMatch(deploy, /clasp run/);
+  const health = await readFile(new URL('../.github/workflows/gas-auth-health.yml', import.meta.url), 'utf8');
+  assert.match(health, /clasp show-file-status --json/);
+  assert.match(health, /reauthorization-required/);
+  assert.doesNotMatch(health, /clasp run/);
 });
