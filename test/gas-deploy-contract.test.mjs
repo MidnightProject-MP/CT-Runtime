@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { bundleHash, deploymentIdFromWebAppUrl, normalizeFiles, signingString, signature, MAX_FILES } from '../lib/gas-deploy-contract.mjs';
+
+test('self-deploy client imports the HTTPS request implementation', async () => {
+  const source = await readFile(new URL('../scripts/deploy-gas.mjs', import.meta.url), 'utf8');
+  assert.match(source, /import \{ request \} from ['"]node:https['"];?/);
+});
 
 test('derives deployment ID from the existing web app URL', () => {
   assert.equal(deploymentIdFromWebAppUrl('https://script.google.com/macros/s/AbC_123-xyz/exec'), 'AbC_123-xyz');
