@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
-import { request } from 'node:https';
-import { bundleHash, normalizeFiles, signature } from '../lib/gas-deploy-contract.mjs';
+import { bundleHash, deploymentIdFromWebAppUrl, normalizeFiles, signature } from '../lib/gas-deploy-contract.mjs';
 
 const bundle = JSON.parse(await readFile(process.env.GAS_BUNDLE_PATH ?? 'gas-bundle.json', 'utf8'));
 if (bundle.schema !== 'ct-runtime-gas-bundle-v1') throw new Error('invalid bundle schema');
@@ -10,12 +9,12 @@ const computed = bundleHash(files);
 if (computed !== process.env.GAS_BUNDLE_HASH) throw new Error('bundle hash mismatch');
 
 const scriptId = process.env.CT_GAS_SCRIPT_ID;
-const deploymentId = process.env.CT_GAS_DEPLOYMENT_ID;
-const endpoint = process.env.CT_GAS_DEPLOY_URL;
+const endpoint = process.env.CT_GAS_ADMIN_WEB_APP_URL;
+const deploymentId = deploymentIdFromWebAppUrl(endpoint);
 const secret = process.env.CT_GAS_DEPLOY_HMAC_SECRET;
 const commit = process.env.GITHUB_SHA;
 const expectedLiveBundleHash = process.env.CT_GAS_EXPECTED_LIVE_BUNDLE_HASH;
-for (const [name, value] of Object.entries({ scriptId, deploymentId, endpoint, secret, commit, expectedLiveBundleHash })) if (!value) throw new Error(`${name} is required`);
+for (const [name, value] of Object.entries({ scriptId, endpoint, secret, commit, expectedLiveBundleHash })) if (!value) throw new Error(`${name} is required`);
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('GITHUB_SHA must be a full commit SHA');
 const requestId = `ct-runtime-${commit}`;
 
@@ -53,4 +52,4 @@ if (qualification.status !== 'qualified') throw new Error('self-deploy qualifica
 const plan = await post({ ...base, operation: 'self-deploy-plan' });
 if (plan.liveBundleHash !== expectedLiveBundleHash) throw new Error('live bundle does not match expected predecessor; refusing deployment');
 const result = await post({ ...base, operation: 'self-deploy', expected_live_version: plan.liveVersion, expected_live_bundle_hash: plan.liveBundleHash, files });
-console.log(JSON.stringify({ ...result, qualification, requestId, commit, bundleHash: computed }));
+console.log(JSON.stringify({ ...result, qualification, requestId, commit, bundleHash: computed, deploymentId }));
