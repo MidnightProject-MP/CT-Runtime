@@ -9,27 +9,11 @@ import vm from 'node:vm';
 import { bundleHash } from '../lib/gas-deploy-contract.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-
-// Canonical pre-precursor GAS fixture: the 16 files that were deployable before
-// gas_deploy_qualify.js was introduced. The adapter must hash these exactly as
-// gas_deploy.js's private bundleHash() does.
 const FIXTURE_FILES = [
-  'appsscript.json',
-  'gas_actions.js',
-  'gas_agent_executor.js',
-  'gas_bootstrap.js',
-  'gas_chronicle.js',
-  'gas_core.js',
-  'gas_deploy.js',
-  'gas_evidence.js',
-  'gas_federation.js',
-  'gas_feedback.js',
-  'gas_github.js',
-  'gas_migrate.js',
-  'gas_observer.js',
-  'gas_state.js',
-  'gas_trigger.js',
-  'gas_v8.js'
+  'appsscript.json', 'gas_actions.js', 'gas_agent_executor.js', 'gas_bootstrap.js',
+  'gas_chronicle.js', 'gas_core.js', 'gas_deploy.js', 'gas_evidence.js',
+  'gas_federation.js', 'gas_feedback.js', 'gas_github.js', 'gas_migrate.js',
+  'gas_observer.js', 'gas_state.js', 'gas_trigger.js', 'gas_v8.js'
 ];
 
 async function fixture() {
@@ -53,15 +37,12 @@ function runCompatibilityLayer() {
     qualify: (request) => {
       capturedRequest = request;
       return {
-        status: 'qualified',
-        scriptId: request.script_id,
-        headBundleHash: 'h'.repeat(64),
-        fileCount: Array.isArray(request.files) ? request.files.length : 0
+        status: 'qualified', scriptId: request.script_id,
+        headBundleHash: 'h'.repeat(64), fileCount: Array.isArray(request.files) ? request.files.length : 0
       };
     }
   };
-  const context = { Utilities, CT_GAS_DEPLOY };
-  vm.runInNewContext(source, context, { filename: 'gas_deploy_qualify.js' });
+  vm.runInNewContext(source, { Utilities, CT_GAS_DEPLOY }, { filename: 'gas_deploy_qualify.js' });
   return { CT_GAS_DEPLOY, getCapturedRequest: () => capturedRequest };
 }
 
@@ -70,9 +51,7 @@ test('compatibility qualification hash equals GAS-native desired hash for canoni
   const nativeHash = bundleHash(files);
   const { CT_GAS_DEPLOY, getCapturedRequest } = runCompatibilityLayer();
   const request = { script_id: 'fixture-script', files };
-
   const result = CT_GAS_DEPLOY.qualify(request);
-
   assert.equal(getCapturedRequest(), request);
   assert.equal(result.status, 'qualified');
   assert.equal(result.scriptId, 'fixture-script');
@@ -84,9 +63,7 @@ test('compatibility qualification hash equals GAS-native desired hash for canoni
 test('ordinary readback qualification without files preserves the original contract', () => {
   const { CT_GAS_DEPLOY, getCapturedRequest } = runCompatibilityLayer();
   const request = { script_id: 'readback-script' };
-
   const result = CT_GAS_DEPLOY.qualify(request);
-
   assert.equal(getCapturedRequest(), request);
   assert.equal(result.status, 'qualified');
   assert.equal(result.scriptId, 'readback-script');
