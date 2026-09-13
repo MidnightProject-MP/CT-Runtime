@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { bundleHash, deploymentIdFromWebAppUrl, normalizeFiles, signature } from '../lib/gas-deploy-contract.mjs';
+import { stateUncertainAfterMutation } from '../lib/gas-deploy-client.mjs';
 
 const bundle = JSON.parse(await readFile(process.env.GAS_BUNDLE_PATH ?? 'gas-bundle.json', 'utf8'));
 if (bundle.schema !== 'ct-runtime-gas-bundle-v1') throw new Error('invalid bundle schema');
@@ -54,7 +55,23 @@ if (process.env.CT_GAS_QUALIFY_ONLY === '1') process.exit(0);
 if (qualification.status !== 'qualified') throw new Error('self-deploy qualification failed');
 const plan = await post({ ...base, operation: 'self-deploy-plan' });
 if (plan.liveBundleHash !== expectedLiveBundleHash) throw new Error('live bundle does not match expected predecessor; refusing deployment');
-const result = await post({ ...base, operation: 'self-deploy', expected_live_version: plan.liveVersion, expected_live_bundle_hash: plan.liveBundleHash, files });
+
+let result;
+try {
+  result = await post({ ...base, operation: 'self-deploy', expected_live_version: plan.liveVersion, expected_live_bundle_hash: plan.liveBundleHash, files });
+} catch (error) {
+  const uncertain = stateUncertainAfterMutation(error);
+  console.error(JSON.stringify({
+    status: uncertain.state,
+    requestId,
+    deploymentId,
+    readbackRequired: uncertain.readbackRequired,
+    error: uncertain.message
+  }));
+  process.exitCode = 2;
+  process.exit();
+}
+
 if (result.githubBundleHash !== computed) throw new Error('GitHub bundle provenance mismatch');
 if (result.bundleHash !== result.headBundleHash) throw new Error('GAS bundle/head identity mismatch');
 console.log(JSON.stringify({ ...result, qualification, requestId, commit, githubBundleHash: computed, deploymentId }));
