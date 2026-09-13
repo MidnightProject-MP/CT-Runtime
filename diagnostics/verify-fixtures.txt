@@ -1,0 +1,1 @@
+Stage 1 fixture vectors are defined in source-fingerprint-fixtures.json.
