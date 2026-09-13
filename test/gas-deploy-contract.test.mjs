@@ -1,3 +1,6 @@
+// Deployment control-plane tests. See docs/GAS-DEPLOYMENT.md before modifying.
+// Changes must preserve the deployment contract.
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
