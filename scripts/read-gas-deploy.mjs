@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { bundleHash, signature } from '../lib/gas-deploy-contract.mjs';
+import { bundleHash, deploymentIdFromWebAppUrl, signature } from '../lib/gas-deploy-contract.mjs';
 
 const endpoint = process.env.CT_GAS_ADMIN_WEB_APP_URL;
 const secret = process.env.CT_GAS_DEPLOY_HMAC_SECRET;
 const scriptId = process.env.CT_GAS_SCRIPT_ID;
-const deploymentId = process.env.CT_GAS_DEPLOYMENT_ID;
+const deploymentId = deploymentIdFromWebAppUrl(endpoint);
 const commit = process.env.GITHUB_SHA ?? 'readback000000000000000000000000000000000000';
 const requestId = `ct-runtime-readback-${commit}`;
 const placeholderBundleHash = bundleHash([{ name: 'appsscript.json', type: 'JSON', source: '{}' }]);
