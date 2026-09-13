@@ -1,0 +1,58 @@
+name: GAS clasp push (break glass)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.14.0'
+  CLASP_VERSION: '3.3.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJorJor6Z5qpmUD2dri'
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    environment: gas-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate Apps Script manifest
+        working-directory: gas
+        run: node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync('appsscript.json','utf8')); if(m.runtimeVersion!=='V8') throw new Error('Expected V8 runtime'); if(!m.oauthScopes?.length) throw new Error('No OAuth scopes configured');"
+      - name: Install clasp
+        run: npm install --global @google/clasp@${CLASP_VERSION}
+      - name: Configure clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          test -n "$CLASPRC_JSON"
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+      - name: Inspect clasp OAuth identity metadata
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const config = JSON.parse(fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8'));
+          if (!config.tokens || typeof config.tokens !== 'object' || !config.tokens.default) throw new Error('CLASPRC_JSON must contain tokens.default.');
+          const settings = config.oauth2ClientSettings || {};
+          const tokens = Object.values(config.tokens || {});
+          const scopes = [...new Set(tokens.flatMap((token) => String(token.scope || '').split(/\s+/).filter(Boolean)))].sort();
+          const serviceAccountLike = config.type === 'service_account' || Boolean(config.client_email || config.private_key);
+          console.log(JSON.stringify({ top_level_keys: Object.keys(config).sort(), has_tokens_default: true, token_ids: Object.keys(config.tokens || {}).sort(), credential_shape: serviceAccountLike ? 'service-account-like' : 'user-oauth-like', oauth2_client_id: settings.clientId || settings.client_id || null, oauth2_project_id: settings.projectId || settings.project_id || null, token_scopes: scopes }, null, 2));
+          NODE
+      - name: Configure Apps Script project
+        working-directory: gas
+        run: |
+          test -n "$CT_GAS_SCRIPT_ID"
+          node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
+          test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
+      - name: Show clasp file status
+        working-directory: gas
+        run: clasp show-file-status --json
+      - name: Push source only
+        working-directory: gas
+        run: clasp push --force
