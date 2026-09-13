@@ -44,8 +44,10 @@ function runCompatibilityLayer() {
   const source = readFileSync(join(ROOT, 'gas', 'gas_deploy_qualify.js'), 'utf8');
   let capturedRequest;
   const Utilities = {
-    newBlob: (value) => ({ getBytes: () => Buffer.from(String(value), 'utf8') }),
-    computeDigest: (_algorithm, value) => createHash('sha256').update(String(value), 'utf8').digest()
+    DigestAlgorithm: { SHA_256: 'SHA_256' },
+    Charset: { UTF_8: 'UTF_8' },
+    newBlob: (value) => ({ getBytes: () => Array.from(Buffer.from(String(value), 'utf8')) }),
+    computeDigest: (_algorithm, value, _charset) => Array.from(createHash('sha256').update(String(value), 'utf8').digest())
   };
   const CT_GAS_DEPLOY = {
     qualify: (request) => {
