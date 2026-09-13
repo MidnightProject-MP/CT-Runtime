@@ -59,11 +59,13 @@ Production model telemetry uses `PostgresObserverStore.appendModelTelemetryEnvel
 
 `export-observer` calls Foundry's validated `joinedRecords()` projection and emits stable canonical JSON. PostgreSQL stores semantic tasks, policy decisions, coverage snapshots, and immutable Chronicle artifacts; an S3-compatible artifact sink may mirror them. Chronicle Markdown remains a portable manual Git-promotion format rather than operational authority.
 
-`evidence export EXECUTION` packages local runtime executions as before. For `ses_...`, the default invokes `opencode export SESSION --sanitize` and records structural-only fidelity. `--rich` (or `--source rich`) invokes the supported export without sanitizing; stdout is ephemeral process memory, bounded to 64 MiB, redacted again, and never persisted. Both modes use allowlisted factual fields and retain the source session ID without claiming a physical execution ID. Per-assistant route metadata is separate from the session default route, with bounded aggregates and contiguous segments. Canonical local inbox packages are immutable: identical exports are duplicates, while changed extraction is an explicit revision linked to its predecessor. Backfill remains sanitized-only. Missing historical sessions are reported unavailable rather than guessed.
-
 ## GAS self-deployment
 
-Normal GAS releases use the authenticated self-deployment path through the existing `doPost()` transport; `clasp` remains manual break-glass. The deployment plan reports the current immutable-version capacity because Apps Script permits at most 200 versions per script. Versioned deployments cannot delete old versions through the Versions API, so reaching that ceiling is an explicit release boundary requiring script-project rotation outside this slice. #27 does not implement rotation. The plan exposes `used`, `max`, `remaining`, and a `ready`/`low`/`exhausted` status so capacity is observable before mutation.
+**Deployment milestone:** normal deployment path is `GitHub → HMAC HTTPS → GAS self-deploy → readback verification`. `clasp` is bootstrap/break-glass only and is not part of the normal release path.
+
+The authenticated self-deployment path uses the existing `doPost()` transport. The deployment plan reports the current immutable-version capacity because Apps Script permits at most 200 versions per script. Versioned deployments cannot delete old versions through the Versions API, so reaching that ceiling is an explicit release boundary requiring script-project rotation outside this slice. #27 does not implement rotation. The plan exposes `used`, `max`, `remaining`, and a `ready`/`low`/`exhausted` status so capacity is observable before mutation.
+
+A deployment response after the mutation request is treated as **state-uncertain** if the client cannot establish the final response. The authoritative readback rule is intentionally simple: expected GAS-native hash plus `HEAD == LIVE` reconciles the deployment as successful; a hash mismatch or `HEAD != LIVE` is an incomplete transition requiring recovery. This state model reflects the possibility that a mutation succeeded even when immediate verification or transport returned an error.
 
 ## Safety and retention
 
