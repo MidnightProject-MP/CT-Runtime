@@ -16,7 +16,7 @@ const deploymentId = deploymentIdFromWebAppUrl(endpoint);
 const secret = process.env.CT_GAS_DEPLOY_HMAC_SECRET;
 const commit = process.env.GITHUB_SHA;
 const expectedLiveBundleHash = process.env.CT_GAS_EXPECTED_LIVE_BUNDLE_HASH;
-for (const [name, value] of Object.entries({ scriptId, endpoint, secret, commit, expectedLiveBundleHash })) if (!value) throw new Error(`${name} is required`);
+for (const [name, value] of Object.entries({ scriptId, endpoint, secret, commit })) if (!value) throw new Error(`${name} is required`);
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('GITHUB_SHA must be a full commit SHA');
 const requestId = `ct-runtime-${commit}`;
 
@@ -54,15 +54,19 @@ const qualification = await post({ ...base, operation: 'self-deploy-qualify', fi
 console.log(JSON.stringify({ qualification }, null, 2));
 if (process.env.CT_GAS_QUALIFY_ONLY === '1') process.exit(0);
 if (qualification.status !== 'qualified') throw new Error('self-deploy qualification failed');
+const expectedGasBundleHash = qualification.desiredBundleHash;
+if (!/^[0-9a-f]{64}$/.test(expectedGasBundleHash)) throw new Error('self-deploy qualification did not return a valid GAS-native desired bundle hash');
+if (expectedLiveBundleHash && !/^[0-9a-f]{64}$/.test(expectedLiveBundleHash)) throw new Error('CT_GAS_EXPECTED_LIVE_BUNDLE_HASH must be a 64-character hex hash');
 const plan = await post({ ...base, operation: 'self-deploy-plan' });
-if (plan.liveBundleHash !== expectedLiveBundleHash) throw new Error('live bundle does not match expected predecessor; refusing deployment');
+const livePredecessor = expectedLiveBundleHash ?? plan.liveBundleHash;
+if (plan.liveBundleHash !== livePredecessor) throw new Error('live bundle does not match expected predecessor; refusing deployment');
 
 const readback = () => post({ ...base, operation: 'self-deploy-plan' });
 let result;
 let needsReadback = false;
 
 try {
-  result = await post({ ...base, operation: 'self-deploy', expected_live_version: plan.liveVersion, expected_live_bundle_hash: plan.liveBundleHash, files });
+  result = await post({ ...base, operation: 'self-deploy', expected_live_version: plan.liveVersion, expected_live_bundle_hash: livePredecessor, files });
 } catch (error) {
   const uncertain = stateUncertainAfterMutation(error);
   console.error(JSON.stringify({
@@ -75,25 +79,25 @@ try {
   needsReadback = true;
 }
 
-if (!needsReadback && result.githubBundleHash === computed && result.bundleHash === computed && result.headBundleHash === computed) {
+if (!needsReadback && result.githubBundleHash === computed && result.bundleHash === expectedGasBundleHash && result.headBundleHash === expectedGasBundleHash) {
   console.log(JSON.stringify({ ...result, qualification, requestId, commit, githubBundleHash: computed, deploymentId }));
   process.exit(0);
 }
 
 if (!needsReadback) {
-  console.error('self-deploy response did not prove the requested bundle is live; switching to readback verification');
+  console.error('self-deploy response did not prove the requested GAS-native bundle is live; switching to readback verification');
 }
 
 try {
-  const verified = await verifyWithReadback({ readback, expectedBundleHash: computed });
+  const verified = await verifyWithReadback({ readback, expectedBundleHash: expectedGasBundleHash });
   result = {
     status: 'verified',
     requestId,
     deploymentId,
     versionNumber: verified.liveVersion,
-    bundleHash: computed,
+    bundleHash: expectedGasBundleHash,
     githubBundleHash: computed,
-    headBundleHash: computed,
+    headBundleHash: expectedGasBundleHash,
     fileCount: verified.fileCount,
     readbackAttempts: verified.readbackAttempts
   };
