@@ -19,7 +19,7 @@ function loadAdapter() {
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
     SpreadsheetApp: {
       DeveloperMetadataVisibility: { PROJECT: 'PROJECT' },
-      openById: (id) => ({ getSheetByName: (name) => ({ getRange: (row) => rows.get(Number(row)) }) }),
+      openById: () => ({ getSheetByName: () => ({ getRange: (row) => rows.get(Number(row)) }) }),
     },
   };
   vm.createContext(context);
@@ -86,10 +86,12 @@ test('partial metadata fails closed and copied identity conflicts', async () => 
   rows.set(5, new FakeRange(5));
   rows.set(6, new FakeRange(6));
   rows.get(5).addDeveloperMetadata('CT_FEEDBACK_ID', 'same-id');
-  rows.get(5).addDeveloperMetadata('CT_FEEDBACK_REVISION', '1');
-  rows.get(5).addDeveloperMetadata('CT_FEEDBACK_STATE_HASH', 'hash');
   const events = [];
-  await assert.rejects(() => ingest(adapter, [item(5, 'A')], events), /feedback adapter state is malformed/);
+  await assert.rejects(() => ingest(adapter, [item(5, 'A')], events), /feedback adapter state is incomplete/);
+  rows.get(5).metadata = [];
+  rows.get(5).addDeveloperMetadata('CT_FEEDBACK_ID', 'same-id');
+  rows.get(5).addDeveloperMetadata('CT_FEEDBACK_REVISION', '1');
+  rows.get(5).addDeveloperMetadata('CT_FEEDBACK_STATE_HASH', adapter.stateHash(item(5, 'A')));
   rows.get(6).addDeveloperMetadata('CT_FEEDBACK_ID', 'same-id');
   rows.get(6).addDeveloperMetadata('CT_FEEDBACK_REVISION', '1');
   rows.get(6).addDeveloperMetadata('CT_FEEDBACK_STATE_HASH', adapter.stateHash(item(6, 'B')));
