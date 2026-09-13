@@ -41,14 +41,14 @@ async function post(body) {
   try {
     value = JSON.parse(text);
   } catch (error) {
-    throw new Error(`invalid JSON response (HTTP ${response.status}): ${text.slice(0, 1000)}`);
+    throw new Error(`invalid JSON response (HTTP ${response.status}, request_bytes=${Buffer.byteLength(payload)}, response_url=${response.url}, redirected=${response.redirected}, content-type=${response.headers.get('content-type') || 'unknown'}): ${text.slice(0, 200)}`);
   }
   if (value.status === 'rejected') throw new Error(JSON.stringify(value));
   return value;
 }
 
 const base = { deployment_request_id: requestId, script_id: scriptId, deployment_id: deploymentId, commit_sha: commit, github_bundle_hash: computed };
-const qualification = await post({ ...base, operation: 'self-deploy-qualify' });
+const qualification = await post({ ...base, operation: 'self-deploy-qualify', files });
 if (qualification.status !== 'qualified') throw new Error('self-deploy qualification failed');
 const plan = await post({ ...base, operation: 'self-deploy-plan' });
 if (plan.liveBundleHash !== expectedLiveBundleHash) throw new Error('live bundle does not match expected predecessor; refusing deployment');
