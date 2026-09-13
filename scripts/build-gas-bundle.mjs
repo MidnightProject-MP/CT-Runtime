@@ -10,6 +10,7 @@ const DEPLOYABLE_FILES = new Set([
   'gas_chronicle.js',
   'gas_core.js',
   'gas_deploy.js',
+  'gas_deploy_qualify.js',
   'gas_evidence.js',
   'gas_federation.js',
   'gas_feedback.js',
