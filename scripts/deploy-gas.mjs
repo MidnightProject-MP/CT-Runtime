@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
-import { request } from 'node:https';
 import { bundleHash, deploymentIdFromWebAppUrl, normalizeFiles, signature } from '../lib/gas-deploy-contract.mjs';
 
 const bundle = JSON.parse(await readFile(process.env.GAS_BUNDLE_PATH ?? 'gas-bundle.json', 'utf8'));
@@ -19,32 +18,33 @@ for (const [name, value] of Object.entries({ scriptId, endpoint, secret, commit,
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('GITHUB_SHA must be a full commit SHA');
 const requestId = `ct-runtime-${commit}`;
 
-function post(body) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(endpoint);
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const nonce = randomBytes(24).toString('hex');
-    const payload = JSON.stringify(body);
-    const sig = signature(body, timestamp, nonce, payload, secret);
-    url.searchParams.set('timestamp', timestamp);
-    url.searchParams.set('nonce', nonce);
-    url.searchParams.set('signature', sig);
-    const req = request(url, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } }, (res) => {
-      let text = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { text += chunk; if (Buffer.byteLength(text) > 4 * 1024 * 1024) req.destroy(new Error('response too large')); });
-      res.on('end', () => {
-        try {
-          const value = JSON.parse(text);
-          if (res.statusCode < 200 || res.statusCode >= 300 || value.status === 'rejected') reject(new Error(JSON.stringify(value)));
-          else resolve(value);
-        } catch (error) { reject(error); }
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
+async function post(body) {
+  const url = new URL(endpoint);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = randomBytes(24).toString('hex');
+  const payload = JSON.stringify(body);
+  const sig = signature(body, timestamp, nonce, payload, secret);
+  url.searchParams.set('timestamp', timestamp);
+  url.searchParams.set('nonce', nonce);
+  url.searchParams.set('signature', sig);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: payload,
+    redirect: 'follow'
   });
+  const text = await response.text();
+  if (Buffer.byteLength(text) > 4 * 1024 * 1024) throw new Error('response too large');
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 1000)}`);
+  if (!text.trim()) throw new Error(`empty response body (HTTP ${response.status})`);
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`invalid JSON response (HTTP ${response.status}): ${text.slice(0, 1000)}`);
+  }
+  if (value.status === 'rejected') throw new Error(JSON.stringify(value));
+  return value;
 }
 
 const base = { deployment_request_id: requestId, script_id: scriptId, deployment_id: deploymentId, commit_sha: commit, bundle_hash: computed };
