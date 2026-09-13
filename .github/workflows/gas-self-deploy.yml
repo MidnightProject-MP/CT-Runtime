@@ -7,6 +7,11 @@ on:
         description: 'Expected hash of the currently live GAS deployment'
         required: true
         type: string
+      qualify_only:
+        description: 'Run qualification only; do not plan or deploy'
+        required: false
+        default: '0'
+        type: string
 
 permissions:
   contents: read
@@ -56,4 +61,5 @@ jobs:
           CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
           CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.CT_GAS_DEPLOY_HMAC_SECRET }}
           GAS_BUNDLE_PATH: ${{ runner.temp }}/gas-bundle.json
+          CT_GAS_QUALIFY_ONLY: ${{ inputs.qualify_only }}
         run: node scripts/deploy-gas.mjs

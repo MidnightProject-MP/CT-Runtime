@@ -49,6 +49,8 @@ async function post(body) {
 
 const base = { deployment_request_id: requestId, script_id: scriptId, deployment_id: deploymentId, commit_sha: commit, github_bundle_hash: computed };
 const qualification = await post({ ...base, operation: 'self-deploy-qualify', files });
+console.log(JSON.stringify({ qualification }, null, 2));
+if (process.env.CT_GAS_QUALIFY_ONLY === '1') process.exit(0);
 if (qualification.status !== 'qualified') throw new Error('self-deploy qualification failed');
 const plan = await post({ ...base, operation: 'self-deploy-plan' });
 if (plan.liveBundleHash !== expectedLiveBundleHash) throw new Error('live bundle does not match expected predecessor; refusing deployment');
