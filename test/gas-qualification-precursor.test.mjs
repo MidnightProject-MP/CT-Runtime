@@ -56,7 +56,7 @@ function runCompatibilityLayer() {
         status: 'qualified',
         scriptId: request.script_id,
         headBundleHash: 'h'.repeat(64),
-        fileCount: request.files.length
+        fileCount: Array.isArray(request.files) ? request.files.length : 0
       };
     }
   };
@@ -79,4 +79,18 @@ test('compatibility qualification hash equals GAS-native desired hash for canoni
   assert.equal(result.fileCount, 16);
   assert.equal(result.desiredBundleHash, nativeHash);
   assert.match(result.desiredBundleHash, /^[0-9a-f]{64}$/);
+});
+
+test('ordinary readback qualification without files preserves the original contract', () => {
+  const { CT_GAS_DEPLOY, getCapturedRequest } = runCompatibilityLayer();
+  const request = { script_id: 'readback-script' };
+
+  const result = CT_GAS_DEPLOY.qualify(request);
+
+  assert.equal(getCapturedRequest(), request);
+  assert.equal(result.status, 'qualified');
+  assert.equal(result.scriptId, 'readback-script');
+  assert.equal(result.headBundleHash, 'h'.repeat(64));
+  assert.equal(result.fileCount, 0);
+  assert.equal('desiredBundleHash' in result, false);
 });
