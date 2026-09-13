@@ -2,6 +2,25 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { bundleHash, normalizeFiles } from '../lib/gas-deploy-contract.mjs';
 
+const DEPLOYABLE_FILES = new Set([
+  'appsscript.json',
+  'gas_actions.js',
+  'gas_agent_executor.js',
+  'gas_bootstrap.js',
+  'gas_chronicle.js',
+  'gas_core.js',
+  'gas_deploy.js',
+  'gas_evidence.js',
+  'gas_federation.js',
+  'gas_feedback.js',
+  'gas_github.js',
+  'gas_migrate.js',
+  'gas_observer.js',
+  'gas_state.js',
+  'gas_trigger.js',
+  'gas_v8.js'
+]);
+
 const root = process.argv[2] ?? 'gas';
 const output = process.argv[3] ?? 'gas-bundle.json';
 const entries = await readdir(root, { withFileTypes: true });
@@ -9,8 +28,7 @@ const files = [];
 for (const entry of entries) {
   if (!entry.isFile()) continue;
   const name = entry.name;
-  if (name === '.clasp.json' || name === '.claspignore' || name === '.clasp.json.example') continue;
-  if (!['.js', '.mjs', '.html', '.json'].includes(extname(name)) || name === 'gas-bundle.json') continue;
+  if (!DEPLOYABLE_FILES.has(name)) continue;
   const source = await readFile(join(root, name), 'utf8');
   const type = name === 'appsscript.json' ? 'JSON' : extname(name) === '.html' ? 'HTML' : 'SERVER_JS';
   files.push({ name, type, source });
