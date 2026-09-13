@@ -1,3 +1,6 @@
+# Deployment control-plane code. See docs/GAS-DEPLOYMENT.md before modifying.
+# Changes must preserve the deployment contract tests.
+
 name: GAS self-deploy
 
 on:
@@ -65,7 +68,7 @@ jobs:
           if [ -n "$EXPECTED_INPUT" ]; then
             echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_INPUT" >> "$GITHUB_ENV"
           else
-            echo 'No predecessor override supplied; deploy script will use the just-observed LIVE predecessor.'
+            echo 'No predecessor override supplied; deploy script will use the just-observed live predecessor.'
           fi
 
       - name: Submit signed deployment and verify readback
