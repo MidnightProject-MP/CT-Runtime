@@ -1,11 +1,20 @@
 name: GAS self-deploy
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'gas/**'
+      - 'scripts/build-gas-bundle.mjs'
+      - 'scripts/deploy-gas.mjs'
+      - 'lib/gas-deploy-contract.mjs'
   workflow_dispatch:
     inputs:
       expected_live_bundle_hash:
-        description: 'Expected hash of the currently live GAS deployment'
-        required: true
+        description: 'Expected hash of the currently live GAS deployment; leave empty to use the observed live predecessor'
+        required: false
+        default: ''
         type: string
       qualify_only:
         description: 'Run qualification only; do not plan or deploy'
@@ -17,12 +26,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: gas-production
+  group: gas-production-deploy
   cancel-in-progress: false
 
 env:
   NODE_VERSION: '22.14.0'
   CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   deploy:
@@ -51,10 +64,9 @@ jobs:
         run: |
           if [ -n "$EXPECTED_INPUT" ]; then
             echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_INPUT" >> "$GITHUB_ENV"
-            exit 0
+          else
+            echo 'No predecessor override supplied; deploy script will use the just-observed LIVE predecessor.'
           fi
-          echo 'A manual self-deployment requires expected_live_bundle_hash.'
-          exit 1
 
       - name: Submit signed deployment and verify readback
         env:
