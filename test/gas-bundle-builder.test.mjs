@@ -27,6 +27,10 @@ const deployableFiles = [
   'gas_v8.js'
 ];
 
+const canonicalDeployableFiles = deployableFiles.map((name) =>
+  name === 'appsscript.json' ? 'appsscript' : name.replace(/\.js$/i, '')
+);
+
 test('builds exactly the clasp deployment file set', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ct-runtime-gas-bundle-'));
   const output = join(root, 'bundle.json');
@@ -44,7 +48,8 @@ test('builds exactly the clasp deployment file set', async () => {
     const names = bundle.files.map((file) => file.name).sort();
 
     assert.equal(bundle.files.length, 16);
-    assert.deepEqual(names, [...deployableFiles].sort());
+    assert.deepEqual(names, [...canonicalDeployableFiles].sort());
+    assert.ok(!names.includes('core'));
     assert.ok(!names.includes('core.mjs'));
     assert.ok(!names.includes('README.md'));
     assert.ok(!names.includes('schema.md'));
