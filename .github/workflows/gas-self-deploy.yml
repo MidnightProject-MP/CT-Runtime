@@ -38,7 +38,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Validate and test deployment contract
-        run: node --test test/gas-deploy-contract.test.mjs test/gas-deploy-state-machine.test.mjs
+        run: node --test test/gas-deploy-contract.test.mjs test/gas-deploy-state-machine.test.mjs test/gas-deploy-readback.test.mjs
 
       - name: Build complete GAS bundle
         run: |
