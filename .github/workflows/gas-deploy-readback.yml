@@ -1,0 +1,32 @@
+name: GAS deployment readback
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.14.0'
+  CT_GAS_SCRIPT_ID: '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'
+
+jobs:
+  readback:
+    runs-on: ubuntu-latest
+    environment: gas-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate readback client
+        run: node --check scripts/read-gas-deploy.mjs
+
+      - name: Run read-only qualification and plan
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.CT_GAS_DEPLOY_HMAC_SECRET }}
+          CT_GAS_DEPLOYMENT_ID: AKfycbwyFPC55MvhCfPUmBlfm7eRp-uHr5tpZ2H9suobETGXod_hLLVDQtC9DelC7ee_WSNawg
+        run: node scripts/read-gas-deploy.mjs
