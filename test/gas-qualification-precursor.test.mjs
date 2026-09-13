@@ -1,0 +1,79 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+import { bundleHash } from '../lib/gas-deploy-contract.mjs';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+// Canonical pre-precursor GAS fixture: the 16 files that were deployable before
+// gas_deploy_qualify.js was introduced. The adapter must hash these exactly as
+// gas_deploy.js's private bundleHash() does.
+const FIXTURE_FILES = [
+  'appsscript.json',
+  'gas_actions.js',
+  'gas_agent_executor.js',
+  'gas_bootstrap.js',
+  'gas_chronicle.js',
+  'gas_core.js',
+  'gas_deploy.js',
+  'gas_evidence.js',
+  'gas_federation.js',
+  'gas_feedback.js',
+  'gas_github.js',
+  'gas_migrate.js',
+  'gas_observer.js',
+  'gas_state.js',
+  'gas_trigger.js',
+  'gas_v8.js'
+];
+
+async function fixture() {
+  return Promise.all(FIXTURE_FILES.map(async (name) => ({
+    name,
+    type: name === 'appsscript.json' ? 'JSON' : 'SERVER_JS',
+    source: await readFile(join(ROOT, 'gas', name), 'utf8')
+  })));
+}
+
+function runCompatibilityLayer() {
+  const source = require('node:fs').readFileSync(join(ROOT, 'gas', 'gas_deploy_qualify.js'), 'utf8');
+  let capturedRequest;
+  const Utilities = {
+    newBlob: (value) => ({ getBytes: () => Buffer.from(String(value), 'utf8') }),
+    computeDigest: (_algorithm, value) => createHash('sha256').update(String(value), 'utf8').digest()
+  };
+  const CT_GAS_DEPLOY = {
+    qualify: (request) => {
+      capturedRequest = request;
+      return {
+        status: 'qualified',
+        scriptId: request.script_id,
+        headBundleHash: 'h'.repeat(64),
+        fileCount: request.files.length
+      };
+    }
+  };
+  const context = { Utilities, CT_GAS_DEPLOY };
+  vm.runInNewContext(source, context, { filename: 'gas_deploy_qualify.js' });
+  return { CT_GAS_DEPLOY, getCapturedRequest: () => capturedRequest };
+}
+
+test('compatibility qualification hash equals GAS-native desired hash for canonical 16-file fixture', async () => {
+  const files = await fixture();
+  const nativeHash = bundleHash(files);
+  const { CT_GAS_DEPLOY, getCapturedRequest } = runCompatibilityLayer();
+  const request = { script_id: 'fixture-script', files };
+
+  const result = CT_GAS_DEPLOY.qualify(request);
+
+  assert.equal(getCapturedRequest(), request);
+  assert.equal(result.status, 'qualified');
+  assert.equal(result.scriptId, 'fixture-script');
+  assert.equal(result.fileCount, 16);
+  assert.equal(result.desiredBundleHash, nativeHash);
+  assert.match(result.desiredBundleHash, /^[0-9a-f]{64}$/);
+});
