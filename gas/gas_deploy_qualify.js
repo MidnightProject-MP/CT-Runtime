@@ -35,12 +35,9 @@
 
   CT_GAS_DEPLOY.qualify = function (request) {
     var result = originalQualify(request);
-    return {
-      status: result.status,
-      scriptId: result.scriptId,
-      headBundleHash: result.headBundleHash,
-      desiredBundleHash: bundleHash(request.files),
-      fileCount: result.fileCount
-    };
+    if (request && Array.isArray(request.files) && request.files.length) {
+      result.desiredBundleHash = bundleHash(request.files);
+    }
+    return result;
   };
 }());
