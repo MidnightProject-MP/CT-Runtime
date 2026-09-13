@@ -35,12 +35,12 @@ test('requires a manifest and rejects unsafe or oversized sets', () => {
   assert.throws(() => normalizeFiles(files), /invalid-file-count/);
 });
 
-test('signing binds operation, request identity, bundle and body hash', () => {
-  const request = { operation: 'self-deploy', deployment_request_id: 'request-12345678', script_id: 'script12345678901234567890', deployment_id: 'deployment12345678', commit_sha: 'a'.repeat(40), bundle_hash: 'b'.repeat(64) };
+test('signing binds operation, request identity, GitHub provenance hash and body hash', () => {
+  const request = { operation: 'self-deploy', deployment_request_id: 'request-12345678', script_id: 'script12345678901234567890', deployment_id: 'deployment12345678', commit_sha: 'a'.repeat(40), github_bundle_hash: 'b'.repeat(64) };
   const body = JSON.stringify({ files: [] });
   const signed = signingString(request, '1750000000', 'nonce-12345678', body);
   assert.match(signed, /self-deploy/);
   assert.match(signed, /request-12345678/);
   assert.match(signed, /\na{40}\nb{64}\n/);
-  assert.notEqual(signature(request, '1750000000', 'nonce-12345678', body, 'secret'), signature({ ...request, bundle_hash: 'c'.repeat(64) }, '1750000000', 'nonce-12345678', body, 'secret'));
+  assert.notEqual(signature(request, '1750000000', 'nonce-12345678', body, 'secret'), signature({ ...request, github_bundle_hash: 'c'.repeat(64) }, '1750000000', 'nonce-12345678', body, 'secret'));
 });

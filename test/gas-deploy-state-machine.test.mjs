@@ -162,7 +162,7 @@ function requestFor(files = NEW_FILES, overrides = {}) {
     script_id: SCRIPT_ID,
     deployment_id: DEPLOYMENT_ID,
     commit_sha: 'a'.repeat(40),
-    bundle_hash: bundleHash(files),
+    github_bundle_hash: bundleHash(files),
     expected_live_version: '1',
     expected_live_bundle_hash: bundleHash(OLD_FILES),
     ...overrides
@@ -204,7 +204,7 @@ test('same request identity with a different bundle is rejected', () => {
   const h = makeHarness();
   const request = requestFor();
   h.deploy(request, NEW_FILES);
-  const changed = requestFor(OLD_FILES, { bundle_hash: bundleHash(OLD_FILES) });
+  const changed = requestFor(OLD_FILES, { github_bundle_hash: bundleHash(OLD_FILES) });
   assert.throws(() => h.deploy(changed, OLD_FILES), /request-marker-conflict/);
 });
 
