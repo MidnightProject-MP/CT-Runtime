@@ -1,0 +1,10 @@
+[
+  {"fixtureId":"A-ASCII","source":"function hello() { return \"hello\"; }","utf8ByteLength":36,"sourceSha256":"484424745e76ee25898a2a02c21583bf52b0b01f7c623cab1e601d0f911433cc"},
+  {"fixtureId":"B-UNICODE","source":"function hello() { return \"héllo 👋\"; }","utf8ByteLength":42,"sourceSha256":"357ccd5c61ce363012df4d28b74acda521b6765cca143de7a45394381bd9ec2e"},
+  {"fixtureId":"C-LF","source":"a\nb\n","utf8ByteLength":4,"sourceSha256":"911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2"},
+  {"fixtureId":"D-CRLF","source":"a\r\nb\r\n","utf8ByteLength":6,"sourceSha256":"58055bdcc73787eb88c78d36f0b4939e9c5dc1c3ad17e25cc85a6833cf1a0cab"},
+  {"fixtureId":"E-NO-FINAL-NL","source":"abc","utf8ByteLength":3,"sourceSha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+  {"fixtureId":"E-FINAL-NL","source":"abc\n","utf8ByteLength":4,"sourceSha256":"edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb"},
+  {"fixtureId":"F-BLANK-LINES","source":"a\n\nb","utf8ByteLength":4,"sourceSha256":"38022fd2b8dbc5cb3d2cee74e083edbf59e3d4e13d067ebcb5db633d4cff4d8c"},
+  {"fixtureId":"G-ESCAPING","source":"const x = \"\\\\path\\\\to\\\\file \\\"quoted\\\"\";","utf8ByteLength":40,"sourceSha256":"12f911ac501b498cc677b1dbc6606a5f23eeabf491b2a0ec633666d639429532"}
+]
