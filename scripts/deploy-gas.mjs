@@ -47,10 +47,12 @@ async function post(body) {
   return value;
 }
 
-const base = { deployment_request_id: requestId, script_id: scriptId, deployment_id: deploymentId, commit_sha: commit, bundle_hash: computed };
+const base = { deployment_request_id: requestId, script_id: scriptId, deployment_id: deploymentId, commit_sha: commit, github_bundle_hash: computed };
 const qualification = await post({ ...base, operation: 'self-deploy-qualify' });
 if (qualification.status !== 'qualified') throw new Error('self-deploy qualification failed');
 const plan = await post({ ...base, operation: 'self-deploy-plan' });
 if (plan.liveBundleHash !== expectedLiveBundleHash) throw new Error('live bundle does not match expected predecessor; refusing deployment');
 const result = await post({ ...base, operation: 'self-deploy', expected_live_version: plan.liveVersion, expected_live_bundle_hash: plan.liveBundleHash, files });
-console.log(JSON.stringify({ ...result, qualification, requestId, commit, bundleHash: computed, deploymentId }));
+if (result.githubBundleHash !== computed) throw new Error('GitHub bundle provenance mismatch');
+if (result.bundleHash !== result.headBundleHash) throw new Error('GAS bundle/head identity mismatch');
+console.log(JSON.stringify({ ...result, qualification, requestId, commit, githubBundleHash: computed, deploymentId }));
