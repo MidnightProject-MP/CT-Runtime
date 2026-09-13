@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,7 @@ async function fixture() {
 }
 
 function runCompatibilityLayer() {
-  const source = require('node:fs').readFileSync(join(ROOT, 'gas', 'gas_deploy_qualify.js'), 'utf8');
+  const source = readFileSync(join(ROOT, 'gas', 'gas_deploy_qualify.js'), 'utf8');
   let capturedRequest;
   const Utilities = {
     newBlob: (value) => ({ getBytes: () => Buffer.from(String(value), 'utf8') }),
