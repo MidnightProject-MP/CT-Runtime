@@ -58,8 +58,9 @@ const plan = await post({ ...base, operation: 'self-deploy-plan' });
 if (plan.liveBundleHash !== expectedLiveBundleHash) throw new Error('live bundle does not match expected predecessor; refusing deployment');
 
 const readback = () => post({ ...base, operation: 'self-deploy-plan' });
-
 let result;
+let needsReadback = false;
+
 try {
   result = await post({ ...base, operation: 'self-deploy', expected_live_version: plan.liveVersion, expected_live_bundle_hash: plan.liveBundleHash, files });
 } catch (error) {
@@ -71,35 +72,33 @@ try {
     readbackRequired: uncertain.readbackRequired,
     error: uncertain.message
   }));
-
-  try {
-    const recovered = await verifyWithReadback({ readback, expectedBundleHash: computed });
-    result = {
-      ...recovered,
-      status: 'verified',
-      requestId,
-      deploymentId,
-      githubBundleHash: computed,
-      bundleHash: computed,
-      headBundleHash: computed,
-      fileCount: recovered.fileCount
-    };
-    console.log(JSON.stringify({ ...result, qualification, commit }));
-  } catch (readbackError) {
-    console.error(readbackError.message);
-    process.exitCode = 2;
-    process.exit();
-  }
+  needsReadback = true;
 }
 
-if (result.githubBundleHash !== computed) {
-  try {
-    result = { ...result, ...(await verifyWithReadback({ readback, expectedBundleHash: computed })) };
-  } catch (error) {
-    throw new Error(error.message);
-  }
+if (!needsReadback && result.githubBundleHash === computed && result.bundleHash === computed && result.headBundleHash === computed) {
+  console.log(JSON.stringify({ ...result, qualification, requestId, commit, githubBundleHash: computed, deploymentId }));
+  process.exit(0);
 }
-if (result.bundleHash !== result.headBundleHash) {
-  result = { ...result, ...(await verifyWithReadback({ readback, expectedBundleHash: computed })) };
+
+if (!needsReadback) {
+  console.error('self-deploy response did not prove the requested bundle is live; switching to readback verification');
 }
-console.log(JSON.stringify({ ...result, qualification, requestId, commit, githubBundleHash: computed, deploymentId }));
+
+try {
+  const verified = await verifyWithReadback({ readback, expectedBundleHash: computed });
+  result = {
+    status: 'verified',
+    requestId,
+    deploymentId,
+    versionNumber: verified.liveVersion,
+    bundleHash: computed,
+    githubBundleHash: computed,
+    headBundleHash: computed,
+    fileCount: verified.fileCount,
+    readbackAttempts: verified.readbackAttempts
+  };
+  console.log(JSON.stringify({ ...result, qualification, commit }));
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 2;
+}
