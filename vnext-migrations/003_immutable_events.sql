@@ -3,8 +3,10 @@
 ALTER TABLE public.vnext_events
   ADD COLUMN IF NOT EXISTS event_id text;
 
-CREATE UNIQUE INDEX IF NOT EXISTS vnext_events_event_id_uidx
-  ON public.vnext_events(event_id);
+-- 002_survivability already establishes this exact partial unique invariant.
+-- Reuse it rather than creating a redundant second unique index.
+CREATE UNIQUE INDEX IF NOT EXISTS vnext_events_event_id_idx
+  ON public.vnext_events(event_id) WHERE event_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.vnext_append_immutable_event(
   p_event_id text,
