@@ -47,7 +47,7 @@ test('authenticated immutable event RPC is idempotent, conflict-safe, and side-e
     const payloadR2 = { feedback_id: 'F1', source_revision: 2, message: 'B' };
 
     assert.equal(await rpc(pool, { sub }, `${prefix}:1`, 'external_input.received', payloadR1), 'inserted');
-    assert.equal(await rpc(pool, { sub }, `${prefix}:1`, 'external_input.received', payloadR1), 'duplicate');
+    assert.equal(await rpc(pool, { sub }, `${prefix}:1`, 'external_input.received', { message: 'A', source_revision: 1, feedback_id: 'F1' }), 'duplicate');
     assert.equal(await rpc(pool, { sub }, `${prefix}:1`, 'external_input.received', { ...payloadR1, message: 'changed' }), 'integrity_conflict');
     assert.equal(await rpc(pool, { sub }, `${prefix}:2`, 'external_input.received', payloadR2), 'inserted');
 
