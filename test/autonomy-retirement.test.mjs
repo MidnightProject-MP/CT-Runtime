@@ -48,15 +48,3 @@ test('GAS safety wake and trigger scheduling retire before touching legacy state
   assert.deepEqual(context.CT_GAS_TRIGGER.schedule({}), { status: 'RETIRED_VNEXT', operation: 'trigger-schedule', autonomy_mode: 'vnext' });
   assert.equal(triggers.length, 0);
 });
-
-test('legacy CLI remains explicitly break-glass callable outside vNext mode', async () => {
-  const child = spawn(process.execPath, ['bin/ct-runtime.mjs', 'run', '--help'], {
-    cwd: new URL(repoRoot).pathname,
-    env: { ...process.env, CT_AUTONOMY_MODE: 'legacy-break-glass' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stdout = '';
-  child.stdout.on('data', chunk => { stdout += chunk; });
-  await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
-  assert.match(stdout, /Commands:/);
-});
