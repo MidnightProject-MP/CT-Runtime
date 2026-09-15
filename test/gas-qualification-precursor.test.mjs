@@ -12,7 +12,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const FIXTURE_FILES = [
   'appsscript.json', 'gas_actions.js', 'gas_agent_executor.js', 'gas_bootstrap.js',
   'gas_chronicle.js', 'gas_core.js', 'gas_deploy.js', 'gas_evidence.js',
-  'gas_federation.js', 'gas_feedback.js', 'gas_github.js', 'gas_migrate.js',
+  'gas_federation.js', 'gas_github.js', 'gas_migrate.js',
   'gas_observer.js', 'gas_state.js', 'gas_trigger.js', 'gas_v8.js'
 ];
 
@@ -46,7 +46,7 @@ function runCompatibilityLayer() {
   return { CT_GAS_DEPLOY, getCapturedRequest: () => capturedRequest };
 }
 
-test('compatibility qualification hash equals GAS-native desired hash for canonical 16-file fixture', async () => {
+test('compatibility qualification hash equals GAS-native desired hash for canonical 15-file fixture', async () => {
   const files = await fixture();
   const nativeHash = bundleHash(files);
   const { CT_GAS_DEPLOY, getCapturedRequest } = runCompatibilityLayer();
@@ -55,7 +55,7 @@ test('compatibility qualification hash equals GAS-native desired hash for canoni
   assert.equal(getCapturedRequest(), request);
   assert.equal(result.status, 'qualified');
   assert.equal(result.scriptId, 'fixture-script');
-  assert.equal(result.fileCount, 16);
+  assert.equal(result.fileCount, 15);
   assert.equal(result.desiredBundleHash, nativeHash);
   assert.match(result.desiredBundleHash, /^[0-9a-f]{64}$/);
 });
