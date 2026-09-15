@@ -61,8 +61,10 @@
   var originalDoPost = doPost;
   doPost = function (e) {
     var raw = String(e && e.postData && e.postData.contents || '');
+    var query = e && e.parameter || {};
     var request = parsed(raw);
     var diagnosticId = String(request.correlation_id || Utilities.getUuid());
+    trace(raw, query, 'received', 'dispatcher', null);
     var output = originalDoPost(e);
     var text = output && output.getContent ? output.getContent() : '';
     try {
