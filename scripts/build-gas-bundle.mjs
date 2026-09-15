@@ -34,7 +34,7 @@ for (const entry of entries) {
   if (!DEPLOYABLE_FILES.has(name)) continue;
   const source = await readFile(join(root, name), 'utf8');
   const type = name === 'appsscript.json' ? 'JSON' : extname(name) === '.html' ? 'HTML' : 'SERVER_JS';
-  files.push({ name, source, type });
+  files.push({ name, type, source });
 }
 const normalized = normalizeFiles(files);
 const bundle = { schema: 'ct-runtime-gas-bundle-v1', files: normalized };
