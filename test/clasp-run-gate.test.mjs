@@ -57,9 +57,9 @@ test('nonzero exit fails the gate', () => {
 test('expected payload passes the gate', () => {
   const r = runGate({
     logName: 'good.log',
-    label: 'repairFeedbackHeaderRowAdmission',
-    requires: ['repaired', 'work-order-1', 'wake-1'],
-    stubJs: `console.log(JSON.stringify({status:'repaired',work_order_id:'work-order-1',wake_id:'wake-1'}));`,
+    label: 'deployFeedback',
+    requires: ['deployed'],
+    stubJs: `console.log(JSON.stringify({status:'deployed'}));`,
   });
   assert.equal(r.status, 0);
 });
@@ -73,14 +73,12 @@ test('gate script refuses to run without required payload contract', () => {
   assert.notEqual(r.status, 0);
 });
 
-test('workflows route every clasp run through the shared gate', async () => {
+test('remaining GAS clasp workflow routes through the shared gate', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const file of ['.github/workflows/gas-clasp-deploy.yml', '.github/workflows/gas-feedback-repair.yml', '.github/workflows/gas-live-inspect.yml']) {
-    const text = await readFile(new URL(`../${file}`, import.meta.url), 'utf8');
-    assert.match(text, /clasp-run-gate\.sh/);
-    assert.doesNotMatch(text, /PIPESTATUS/);
-    assert.ok(!/^[\s]*clasp run/m.test(text), `${file} must not invoke bare clasp run`);
-  }
-  const deploy = await readFile(new URL('../.github/workflows/gas-clasp-deploy.yml', import.meta.url), 'utf8');
-  assert.match(deploy, /tokens\.default/);
+  const file = '.github/workflows/gas-clasp-deploy.yml';
+  const text = await readFile(new URL(`../${file}`, import.meta.url), 'utf8');
+  assert.match(text, /clasp-run-gate\.sh/);
+  assert.doesNotMatch(text, /PIPESTATUS/);
+  assert.ok(!/^[\s]*clasp run/m.test(text), `${file} must not invoke bare clasp run`);
+  assert.match(text, /tokens\.default/);
 });
