@@ -20,7 +20,8 @@ const DEPLOYABLE_FILES = new Set([
   'gas_observer.js',
   'gas_state.js',
   'gas_trigger.js',
-  'gas_v8.js'
+  'gas_v8.js',
+  'gas_zz_auth_trace.js'
 ]);
 
 const root = process.argv[2] ?? 'gas';
@@ -33,7 +34,7 @@ for (const entry of entries) {
   if (!DEPLOYABLE_FILES.has(name)) continue;
   const source = await readFile(join(root, name), 'utf8');
   const type = name === 'appsscript.json' ? 'JSON' : extname(name) === '.html' ? 'HTML' : 'SERVER_JS';
-  files.push({ name, type, source });
+  files.push({ name, source, type });
 }
 const normalized = normalizeFiles(files);
 const bundle = { schema: 'ct-runtime-gas-bundle-v1', files: normalized };
