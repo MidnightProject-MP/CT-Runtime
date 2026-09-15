@@ -15,7 +15,7 @@ async function snapshot(pool) {
     pool.query('SELECT work_unit_id,objective_ref,state,fence,claim_execution_id,claim_owner,claim_fence,continuation,last_execution_id,last_turn FROM vnext_work_units ORDER BY work_unit_id'),
     pool.query('SELECT execution_id,work_unit_id,owner,fence,state,started_at,finished_at FROM vnext_executions ORDER BY execution_id'),
     pool.query('SELECT id,work_unit_id,execution_id,continuation FROM vnext_continuations ORDER BY id'),
-    pool.query('SELECT schedule_key,wake_time,reason,priority,project,claimed_at,claim_owner,claim_fence FROM runtime_schedules ORDER BY schedule_key'),
+    pool.query('SELECT * FROM runtime_schedules ORDER BY schedule_key'),
   ]);
   return { work: work.rows, executions: executions.rows, continuations: continuations.rows, wakes: wakes.rows };
 }
@@ -70,7 +70,10 @@ test('Postgres FeedbackEvaluation persistence rejects divergent judgment for an 
     const store = new PostgresFeedbackEvaluationStore({ pool });
     const base = { evaluation_id: `feedback-evaluation:${feedbackId}:1`, feedback_id: feedbackId, source_revision: 1, disposition: 'no_action', summary: 'first', project_reference: null, related_work_reference: null, proposed_action: null, response: null, receipt_event_id: `human-feedback:${feedbackId}:1`, evaluator_version: 'test-v1' };
     await store.persistEvaluation(base);
-    await assert.rejects(() => store.persistEvaluation({ ...base, disposition: 'suggests_new_work', summary: 'different' }), /identity conflict/);
+    await assert.rejects(
+      () => store.persistEvaluation({ ...base, disposition: 'suggests_new_work', summary: 'different' }),
+      (error) => error?.code === 'FEEDBACK_EVALUATION_CONFLICT' && /identity conflict/.test(error.message),
+    );
   } finally {
     await pool.end();
   }
