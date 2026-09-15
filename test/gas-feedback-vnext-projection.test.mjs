@@ -48,6 +48,9 @@ class FakeSheet {
   }
   getLastRow() { return Math.max(4, ...Object.keys(this.rows).map(Number)); }
   getRange(row, column, numRows, numColumns) {
+    if (row === 4 && column === 1 && numColumns === 8) return { getValues: () => [[
+      'Project (optional)','Message / objective','Status','Celestan update / question','Your reply','Last activity','Thread ID','Reply revision',
+    ]] };
     if (column === 1 && numColumns === 8) return this.rows[row] || new FakeRange(row, ['', '', '', '', '', '', '', '']);
     if (column === 3 && numColumns === 2) return {
       setValues: (values) => {
@@ -56,9 +59,6 @@ class FakeSheet {
         range.values[3] = values[0][1];
       },
     };
-    if (row === 4 && column === 1 && numColumns === 8) return { getValues: () => [[
-      'Project (optional)','Message / objective','Status','Celestan update / question','Your reply','Last activity','Thread ID','Reply revision',
-    ]] };
     throw new Error(`unexpected range ${row},${column},${numRows},${numColumns}`);
   }
 }
