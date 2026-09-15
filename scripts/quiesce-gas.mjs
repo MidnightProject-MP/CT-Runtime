@@ -8,18 +8,25 @@ if (!['quiesce-legacy-autonomy', 'assert-legacy-quiesced'].includes(operation)) 
 
 const endpoint = String(process.env.CT_GAS_ADMIN_WEB_APP_URL || '').trim();
 const secret = String(process.env.CT_GAS_DEPLOY_HMAC_SECRET || '');
+const scriptId = String(process.env.CT_GAS_SCRIPT_ID || '').trim();
+const deploymentId = String(process.env.CT_GAS_DEPLOYMENT_ID || '').trim();
+const githubBundleHash = String(process.env.CT_GAS_GITHUB_BUNDLE_HASH || '').trim();
 if (!endpoint || !secret) throw new Error('CT_GAS_ADMIN_WEB_APP_URL and CT_GAS_DEPLOY_HMAC_SECRET are required');
+if (!/^[A-Za-z0-9_-]{20,100}$/.test(scriptId)) throw new Error('CT_GAS_SCRIPT_ID is required');
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(deploymentId)) throw new Error('CT_GAS_DEPLOYMENT_ID is required');
+if (!/^[0-9a-f]{64}$/.test(githubBundleHash)) throw new Error('CT_GAS_GITHUB_BUNDLE_HASH is required');
 
 const request = {
   operation,
   correlation_id: randomUUID(),
   deployment_request_id: `ct-runtime-${operation}-${process.env.GITHUB_RUN_ID || Date.now()}`,
-  script_id: '',
-  deployment_id: '',
-  commit_sha: '',
-  github_bundle_hash: ''
+  script_id: scriptId,
+  deployment_id: deploymentId,
+  commit_sha: String(process.env.GITHUB_SHA || ''),
+  github_bundle_hash: githubBundleHash
 };
-const body = JSON.stringify({});
+if (!/^[0-9a-f]{40}$/.test(request.commit_sha)) throw new Error('GITHUB_SHA is required');
+const body = JSON.stringify(request);
 const timestamp = String(Math.floor(Date.now() / 1000));
 const nonce = randomUUID();
 const canonical = signingString(request, timestamp, nonce, body);
