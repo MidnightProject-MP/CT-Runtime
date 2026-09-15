@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 
 class FakePool {
@@ -10,13 +11,9 @@ class FakePool {
     this.ledger = new Map(ledger.map((row) => [Number(row.version), { version: Number(row.version), checksum: row.checksum }]));
     this.executed = [];
   }
-  async query(sql, params = []) {
+  async query(sql) {
     if (sql.startsWith('CREATE TABLE IF NOT EXISTS')) return { rows: [] };
     if (sql.startsWith('SELECT version, checksum FROM vnext_schema_migrations')) return { rows: [...this.ledger.values()] };
-    if (sql.startsWith('SELECT checksum FROM vnext_schema_migrations')) {
-      const row = this.ledger.get(Number(params[0]));
-      return { rows: row ? [{ checksum: row.checksum }] : [] };
-    }
     throw new Error(`unexpected pool query: ${sql}`);
   }
   async connect() {
@@ -36,15 +33,13 @@ class FakePool {
   }
 }
 
-async function fixture({ files, ledger = [], baseline = true }) {
+async function fixture({ files }) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-vnext-migration-'));
   await mkdir(directory, { recursive: true });
   for (const [name, sql] of Object.entries(files)) await writeFile(path.join(directory, name), sql);
-  if (baseline) {
-    await writeFile(path.join(directory, 'legacy-baseline.json'), JSON.stringify({
-      legacy_applied_migrations: [{ version: 3, checksum: '1dbd5813111b159b4fb93f69fd39ebf18b6a68eccc31d7ac01329c4125725b1a' }],
-    }, null, 2) + '\n');
-  }
+  await writeFile(path.join(directory, 'legacy-baseline.json'), JSON.stringify({
+    legacy_applied_migrations: [{ version: 3, checksum: '1dbd5813111b159b4fb93f69fd39ebf18b6a68eccc31d7ac01329c4125725b1a' }],
+  }, null, 2) + '\n');
   return directory;
 }
 
@@ -54,7 +49,8 @@ const files = {
   '004_immutable_events.sql': 'migration four',
 };
 
-const sha256 = (value) => import('node:crypto').then(({ createHash }) => createHash('sha256').update(value).digest('hex'));
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+const V3 = '1dbd5813111b159b4fb93f69fd39ebf18b6a68eccc31d7ac01329c4125725b1a';
 
 test('fresh repository runs 001, 002, then 004', async () => {
   const directory = await fixture({ files });
@@ -64,20 +60,16 @@ test('fresh repository runs 001, 002, then 004', async () => {
 });
 
 test('production predecessor ledger 1, 2, 3@pinned baseline accepts orphan 3 and applies only 004', async () => {
-  const directory = await fixture({ files, ledger: [
-    { version: 1, checksum: await sha256(files['001_outer_loop.sql']) },
-    { version: 2, checksum: await sha256(files['002_survivability.sql']) },
-    { version: 3, checksum: '1dbd5813111b159b4fb93f69fd39ebf18b6a68eccc31d7ac01329c4125725b1a' },
-  ] });
+  const directory = await fixture({ files });
   const pool = new FakePool([
-    { version: 1, checksum: await sha256(files['001_outer_loop.sql']) },
-    { version: 2, checksum: await sha256(files['002_survivability.sql']) },
-    { version: 3, checksum: '1dbd5813111b159b4fb93f69fd39ebf18b6a68eccc31d7ac01329c4125725b1a' },
+    { version: 1, checksum: sha256(files['001_outer_loop.sql']) },
+    { version: 2, checksum: sha256(files['002_survivability.sql']) },
+    { version: 3, checksum: V3 },
   ]);
   await migrateVNext({ pool, directory });
   assert.deepEqual(pool.executed, ['migration four']);
-  assert.equal(pool.ledger.get(3).checksum, '1dbd5813111b159b4fb93f69ebf18b6a68eccc31d7ac01329c4125725b1a');
-  assert.equal(pool.ledger.get(4).checksum, await sha256(files['004_immutable_events.sql']));
+  assert.equal(pool.ledger.get(3).checksum, V3);
+  assert.equal(pool.ledger.get(4).checksum, sha256(files['004_immutable_events.sql']));
 });
 
 test('orphaned version 3 with any other checksum remains a hard failure', async () => {
