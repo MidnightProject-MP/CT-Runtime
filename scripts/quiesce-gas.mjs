@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { signingString, signature } from '../lib/gas-deploy-contract.mjs';
 
 const operation = process.argv[2];
@@ -12,6 +12,7 @@ if (!endpoint || !secret) throw new Error('CT_GAS_ADMIN_WEB_APP_URL and CT_GAS_D
 
 const request = {
   operation,
+  correlation_id: randomUUID(),
   deployment_request_id: `ct-runtime-${operation}-${process.env.GITHUB_RUN_ID || Date.now()}`,
   script_id: '',
   deployment_id: '',
@@ -21,10 +22,14 @@ const request = {
 const body = JSON.stringify({});
 const timestamp = String(Math.floor(Date.now() / 1000));
 const nonce = randomUUID();
+const canonical = signingString(request, timestamp, nonce, body);
+const bodySha256 = createHash('sha256').update(body, 'utf8').digest('hex');
+const canonicalSha256 = createHash('sha256').update(canonical, 'utf8').digest('hex');
+const suppliedSignature = signature(request, timestamp, nonce, body, secret);
 const url = new URL(endpoint);
 url.searchParams.set('timestamp', timestamp);
 url.searchParams.set('nonce', nonce);
-url.searchParams.set('signature', signature(request, timestamp, nonce, body, secret));
+url.searchParams.set('signature', suppliedSignature);
 
 const response = await fetch(url, {
   method: 'POST',
@@ -35,6 +40,25 @@ const response = await fetch(url, {
 const text = await response.text();
 let result;
 try { result = JSON.parse(text); } catch (_) { throw new Error(`invalid GAS response: HTTP ${response.status}`); }
+
+console.log(JSON.stringify({
+  trace: 'ct-gas-auth-client',
+  diagnostic_id: request.correlation_id,
+  operation,
+  timestamp,
+  nonce,
+  body_bytes: Buffer.byteLength(body, 'utf8'),
+  body_sha256: bodySha256,
+  canonical_sha256: canonicalSha256,
+  identity_fields_present: Object.keys(request).filter((key) => key !== 'correlation_id' && request[key] !== undefined),
+  signature_present: suppliedSignature.length > 0,
+  signature_length: suppliedSignature.length,
+  http_status: response.status,
+  redirected: response.redirected,
+  final_host: (() => { try { return new URL(response.url).hostname; } catch (_) { return null; } })(),
+  response_body: text
+}));
+
 if (!response.ok) throw new Error(`GAS control-plane HTTP ${response.status}: ${JSON.stringify(result)}`);
 
 const output = { operation, ...result };
