@@ -17,6 +17,12 @@ const command = args[0];
 const values = (name) => args.flatMap((v, i) => v === name ? [args[i + 1]] : []).filter((v) => v !== undefined);
 const opt = (name, fallback) => values(name)[0] ?? fallback;
 const defined = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+const LEGACY_AUTONOMOUS_COMMANDS = new Set(['run', 'wake', 'schedule', 'scheduler', 'recover']);
+const legacyAutonomyRetired = () => {
+  if (!LEGACY_AUTONOMOUS_COMMANDS.has(command) || process.env.CT_AUTONOMY_MODE !== 'vnext') return false;
+  console.log(JSON.stringify({ status: 'RETIRED_VNEXT', command, autonomy_mode: 'vnext' }));
+  return true;
+};
 const help = () => console.log(`CT-Runtime: capability-first execution mechanics (durable_state, evidence_store, ...)
 
 Commands:
@@ -42,6 +48,7 @@ The scheduler launches due wakes once, using only its caller-supplied launch val
 Each run must write the exact CT_RUNTIME_RESULT_FILE JSON handoff. Runtime schedules
 only its validated requested_next_wake. State is retained in the selected store.`);
 if (!command || command === '--help') { help(); process.exit(command ? 0 : 2); }
+if (legacyAutonomyRetired()) process.exit(0);
 
 try {
   if (command === 'migrate') {
