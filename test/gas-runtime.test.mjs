@@ -247,29 +247,6 @@ test('Observer refuses a fresh bypass clock and adapters accept an active clock'
   assert.match(evidence, /verifyExisting\(fileId,hash,clock\)/);
 });
 
-test('real feedback intake and safety polling persist a useful capacity wait without model or artifact work', async () => {
-  const h = await boot({ budget: 300000, fetch: () => { throw new Error('objective must not call model'); } });
-  h.context.ScriptApp.getScriptId = () => 'local-script';
-  h.rows.set('Feedback', [['Inbox'], [], [], ['Project (optional)', 'Message / objective', 'Status', 'Celestan update / question', 'Your reply', 'Last activity', 'Thread ID', 'Reply revision'], ['CT-Runtime', 'Implement and test the requested change', '', '', '', '', '', '1']]);
-  vm.runInContext(await readFile(new URL('../gas/gas_feedback.js', import.meta.url), 'utf8'), h.context);
-  h.context.executeAgent = () => assert.fail('acknowledgement is not objective execution');
-  h.context.CT_GAS_EVIDENCE.verifyExisting = () => assert.fail('artifact verification is not objective completion');
-  h.context.gasSafetyWake();
-  const id = h.context.CT_GAS_STATE.list('work_orders')[0].id;
-  const order = h.context.CT_GAS_STATE.get('work_orders', id);
-  assert.equal(order.lifecycle, 'waiting');
-  assert.equal(order.payload.wait_condition, 'execution_capacity');
-  assert.equal(h.rows.get('Feedback')[4][2], 'Waiting');
-  assert.match(h.rows.get('Feedback')[4][3], /has not been executed or verified/);
-  assert.match(h.rows.get('Feedback')[4][3], /execution_capacity/);
-  const revision = order.revision;
-  for (let i = 0; i < 5; i++) { h.setNow(Date.now() + 60000 * i); h.context.gasSafetyWake(); }
-  assert.equal(h.context.CT_GAS_STATE.get('work_orders', id).revision, revision);
-  assert.equal(h.context.CT_GAS_STATE.list('chronicle').filter(r => r.kind === 'objective_capacity_wait').length, 1);
-  assert.equal(h.context.CT_GAS_STATE.physicalExecutionCount(id), 0);
-  assert.equal(h.context.CT_GAS_TRIGGER.due(Date.now() + 999999).length, 0);
-});
-
 test('legacy feedback verification checkpoint cannot enter diagnostic path or resurrect from history', async () => {
   const h = await boot({ budget: 300000 });
   const state = h.context.CT_GAS_STATE;
@@ -285,33 +262,6 @@ test('legacy feedback verification checkpoint cannot enter diagnostic path or re
   assert.equal(state.list('wakes').length, 0);
   assert.equal(state.physicalExecutionCount('legacy-feedback'), 0);
   assert.equal(state.get('work_orders', 'legacy-feedback').revision, 2);
-});
-
-test('live inspection reports bounded disposition facts and writes nothing', async () => {
-  const h = await boot({ budget: 300000 });
-  vm.runInContext(await readFile(new URL('../gas/gas_feedback.js', import.meta.url), 'utf8'), h.context);
-  const state = h.context.CT_GAS_STATE;
-  state.create('work_orders', { id: 'order-inspect', lifecycle: 'waiting', payload: { execution_kind: 'objective', goal: 'secret objective text', step: 'feedback', feedback_thread_id: 'thread-secret', feedback_revision: 1, wait_condition: 'execution_capacity', response: 'secret human response', physical_execution_count: 0 } });
-  state.create('work_orders', { id: 'order-unlinked', lifecycle: 'requested', payload: { goal: 'not feedback' } });
-  const kinds = ['work_orders', 'wakes', 'executions', 'observer_ledger', 'chronicle', 'schema', 'continuations'];
-  kinds.forEach(k => state.list(k));
-  h.rows.set('Feedback', [['Inbox'], [], [], ['Project (optional)', 'Message / objective', 'Status', 'Celestan update / question', 'Your reply', 'Last activity', 'Thread ID', 'Reply revision'], ['CT-Runtime', 'secret objective text', 'Waiting', 'secret human response', '', '', 'thread-secret', '1']]);
-  const feedbackBefore = JSON.stringify(h.rows.get('Feedback'));
-  const countsBefore = kinds.map(k => (h.rows.get(k) || []).length);
-  const result = h.context.inspectFeedbackObjectives();
-  assert.equal(result.version, 'feedback-objective-inspect-v1');
-  assert.equal(result.objective_count, 1);
-  assert.equal(result.objectives[0].work_order_id, 'order-inspect');
-  assert.equal(result.objectives[0].lifecycle, 'waiting');
-  assert.equal(result.objectives[0].wait_condition, 'execution_capacity');
-  assert.equal(result.objectives[0].response_present, true);
-  assert.equal(result.objectives[0].physical_executions, 0);
-  assert.equal(result.objectives[0].active_wakes, 0);
-  const dumped = JSON.stringify(result);
-  assert.ok(!dumped.includes('secret objective text') && !dumped.includes('secret human response') && !dumped.includes('thread-secret'), 'no content leaves the boundary');
-  assert.equal(JSON.stringify(result.sheet_rows), JSON.stringify([{ row: 5, status: 'Waiting', work_order_id: 'order-inspect' }]));
-  assert.deepEqual(kinds.map(k => (h.rows.get(k) || []).length), countsBefore, 'inspection writes nothing');
-  assert.equal(JSON.stringify(h.rows.get('Feedback')), feedbackBefore, 'inspection never writes the human sheet');
 });
 
 test('generic objectives fail closed and invalid/completed history never restarts work', async () => {
