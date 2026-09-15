@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { signingString, signature } from '../lib/gas-deploy-contract.mjs';
 
+const execFileAsync = promisify(execFile);
 const operation = process.argv[2];
 if (!['quiesce-legacy-autonomy', 'assert-legacy-quiesced'].includes(operation)) {
   throw new Error(`invalid operation: ${operation}`);
@@ -8,13 +11,16 @@ if (!['quiesce-legacy-autonomy', 'assert-legacy-quiesced'].includes(operation)) 
 
 const endpoint = String(process.env.CT_GAS_ADMIN_WEB_APP_URL || '').trim();
 const secret = String(process.env.CT_GAS_DEPLOY_HMAC_SECRET || '');
-const scriptId = String(process.env.CT_GAS_SCRIPT_ID || '').trim();
-const deploymentId = String(process.env.CT_GAS_DEPLOYMENT_ID || '').trim();
-const githubBundleHash = String(process.env.CT_GAS_GITHUB_BUNDLE_HASH || '').trim();
+const scriptId = String(process.env.CT_GAS_SCRIPT_ID || '1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri').trim();
+const deploymentId = String(process.env.CT_GAS_DEPLOYMENT_ID || 'AKfycbwyFPC55MvhCfPUmBlfm7eRp-uHr5tpZ2H9suobETGXod_hLLVDQtC9DelC7ee_WSNawg').trim();
 if (!endpoint || !secret) throw new Error('CT_GAS_ADMIN_WEB_APP_URL and CT_GAS_DEPLOY_HMAC_SECRET are required');
 if (!/^[A-Za-z0-9_-]{20,100}$/.test(scriptId)) throw new Error('CT_GAS_SCRIPT_ID is required');
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(deploymentId)) throw new Error('CT_GAS_DEPLOYMENT_ID is required');
-if (!/^[0-9a-f]{64}$/.test(githubBundleHash)) throw new Error('CT_GAS_GITHUB_BUNDLE_HASH is required');
+
+const { stdout: bundleOutput } = await execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', 'gas', '/tmp/ct-runtime-gas-bundle.json'], { encoding: 'utf8' });
+const bundleResult = JSON.parse(bundleOutput.trim().split('\n').at(-1));
+const githubBundleHash = String(bundleResult.bundleHash || '');
+if (!/^[0-9a-f]{64}$/.test(githubBundleHash)) throw new Error('failed to derive authoritative GAS bundle hash');
 
 const request = {
   operation,
