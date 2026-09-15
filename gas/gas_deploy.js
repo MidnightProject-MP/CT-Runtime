@@ -39,6 +39,7 @@ var CT_GAS_DEPLOY = (function () {
   function marker(description){var text=String(description||''),out={};text.split(/\s+/).forEach(function(part){var i=part.indexOf('=');if(i>0)out[part.slice(0,i)]=part.slice(i+1);});return text.indexOf('ct-runtime-deploy')>=0?out:null;}
   function markerDescription(request,gasDesiredHash){return 'ct-runtime-deploy request_id='+request.deployment_request_id+' commit='+request.commit_sha+' bundle='+gasDesiredHash;}
   function verifyMarker(v,request,gasDesiredHash){var m=marker(v&&v.description);return !!m&&m.request_id===request.deployment_request_id&&m.commit===request.commit_sha&&m.bundle===gasDesiredHash;}
+  function parseVersions(result){return Array.isArray(result&&result.versions)?result.versions:[];}
   function findRequestMarker(scriptId,request,gasDesiredHash){var found=null;allVersions(scriptId).forEach(function(v){var m=marker(v&&v.description);if(m&&m.request_id===request.deployment_request_id){if(m.commit!==request.commit_sha||m.bundle!==gasDesiredHash)fail('request-marker-conflict');found=v;}});return found;}
   function recoverVersion(scriptId,request,gasDesiredHash){var matches=allVersions(scriptId).filter(function(v){return verifyMarker(v,request,gasDesiredHash);});if(!matches.length)return null;matches.sort(function(a,b){return Number(b.versionNumber)-Number(a.versionNumber);});return matches[0];}
   function nonceHash(nonce){return digest(String(nonce));}
