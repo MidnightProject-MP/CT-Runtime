@@ -1,0 +1,80 @@
+name: Quiesce legacy GAS autonomy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gas-legacy-quiescence
+  cancel-in-progress: false
+
+jobs:
+  quiesce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Quiesce legacy autonomy
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.CT_GAS_DEPLOY_HMAC_SECRET }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+          OUTPUT_PATH: cutover-mutation.json
+        run: node scripts/quiesce-gas.mjs quiesce-legacy-autonomy
+
+      - name: Assert legacy quiescence
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.CT_GAS_DEPLOY_HMAC_SECRET }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+          OUTPUT_PATH: cutover-assertion.json
+        run: node scripts/quiesce-gas.mjs assert-legacy-quiesced
+
+      - name: Write cutover receipt
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const mutation = JSON.parse(await readFile('cutover-mutation.json', 'utf8'));
+          const assertion = JSON.parse(await readFile('cutover-assertion.json', 'utf8'));
+          const receipt = {
+            operation: 'quiesce-legacy-autonomy',
+            status: mutation.status,
+            autonomy_mode: mutation.autonomy_mode,
+            retired_trigger_count: mutation.retired_trigger_count,
+            verification: { assertLegacyQuiesced: assertion.status },
+            source_commit: process.env.GITHUB_SHA,
+            workflow_run_id: process.env.GITHUB_RUN_ID,
+            recorded_at: new Date().toISOString()
+          };
+          await writeFile('cutover-receipt.json', JSON.stringify(receipt, null, 2) + '\n');
+          if (mutation.status !== 'LEGACY_QUIESCED' || assertion.status !== 'LEGACY_QUIESCED') {
+            process.exitCode = 1;
+          }
+          NODE
+
+      - name: Publish cutover receipt
+        if: always()
+        run: |
+          {
+            echo '## Legacy quiescence receipt'
+            echo
+            cat cutover-receipt.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload cutover receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-quiescence-receipt-${{ github.run_id }}
+          path: |
+            cutover-mutation.json
+            cutover-assertion.json
+            cutover-receipt.json

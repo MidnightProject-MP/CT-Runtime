@@ -9,6 +9,7 @@ const DEPLOYABLE_FILES = new Set([
   'gas_bootstrap.js',
   'gas_chronicle.js',
   'gas_core.js',
+  'gas_cutover.js',
   'gas_deploy.js',
   'gas_deploy_qualify.js',
   'gas_evidence.js',
