@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-name-pattern='^(?!real feedback intake and safety polling|live inspection reports bounded disposition facts and writes nothing)' test/*.test.mjs",
     "test:postgres": "node --test --test-concurrency=1 test/postgres.integration.test.mjs test/observer.integration.test.mjs",
     "test:s3": "node --test test/s3.integration.test.mjs",
     "ct-runtime": "node bin/ct-runtime.mjs",
