@@ -44,7 +44,7 @@ test('GAS safety wake and trigger scheduling retire before touching legacy state
   vm.createContext(context);
   vm.runInContext(source, context);
 
-  assert.deepEqual(context.gasSafetyWake(), [{ status: 'RETIRED_VNEXT', operation: 'gasSafetyWake', autonomy_mode: 'vnext' }]);
-  assert.deepEqual(context.CT_GAS_TRIGGER.schedule({}), { status: 'RETIRED_VNEXT', operation: 'trigger-schedule', autonomy_mode: 'vnext' });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.gasSafetyWake())), [{ status: 'RETIRED_VNEXT', operation: 'gasSafetyWake', autonomy_mode: 'vnext' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.CT_GAS_TRIGGER.schedule({}))), { status: 'RETIRED_VNEXT', operation: 'trigger-schedule', autonomy_mode: 'vnext' });
   assert.equal(triggers.length, 0);
 });
