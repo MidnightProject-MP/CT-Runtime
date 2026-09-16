@@ -18,7 +18,7 @@ function executionPair() {
 
 test('memory store rejects an expired execution after a newer fence takes the Work Unit', async () => {
   const { workUnit, firstClaim, firstExecution } = executionPair();
-  const store = createMemoryStore();
+  const store = createMemoryStore({ workUnits: [workUnit] });
   await store.beginExecution(workUnit, firstExecution);
 
   const secondClaim = claimWorkUnit(firstClaim, {
@@ -53,7 +53,7 @@ test('memory store rejects an expired execution after a newer fence takes the Wo
 
 test('memory store requires the next claim to advance exactly one fence generation', async () => {
   const { workUnit, firstExecution } = executionPair();
-  const store = createMemoryStore();
+  const store = createMemoryStore({ workUnits: [workUnit] });
   await store.beginExecution(workUnit, firstExecution);
 
   const forged = { ...firstExecution, execution_id: 'exec-3', fence: 3, work_unit_id: workUnit.work_unit_id };
