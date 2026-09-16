@@ -1,12 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
-const dispatch = await readFile('gas/gas_zz_dispatch.js', 'utf8');
+const execFileAsync = promisify(execFile);
+const dispatch = await readFile('gas/gas_zz_a_dispatch.js', 'utf8');
 const federation = await readFile('gas/gas_federation.js', 'utf8');
 const trace = await readFile('gas/gas_zz_auth_trace.js', 'utf8');
 const quiesce = await readFile('scripts/quiesce-gas.mjs', 'utf8');
-const bundleBuilder = await readFile('scripts/build-gas-bundle.mjs', 'utf8');
+
+async function buildBundle() {
+  const output = `/tmp/ct-runtime-gas-control-plane-${process.pid}.json`;
+  try {
+    await execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', 'gas', output], { encoding: 'utf8' });
+    return JSON.parse(await readFile(output, 'utf8'));
+  } finally {
+    await rm(output, { force: true });
+  }
+}
 
 test('canonical dispatcher routes deployment operations before federation authentication', () => {
   assert.match(dispatch, /var federationDoPost = doPost/);
@@ -17,10 +29,12 @@ test('canonical dispatcher routes deployment operations before federation authen
   assert.match(federation, /function doPost\(e\)/);
 });
 
-test('bundle ordering places canonical dispatcher after federation and before diagnostic wrapper', () => {
-  const federationIndex = bundleBuilder.indexOf("  'gas_federation.js',");
-  const dispatchIndex = bundleBuilder.indexOf("  'gas_zz_dispatch.js'");
-  const traceIndex = bundleBuilder.indexOf("  'gas_zz_auth_trace.js',");
+test('built bundle orders canonical dispatcher after federation and before diagnostic wrapper', async () => {
+  const bundle = await buildBundle();
+  const names = bundle.files.map((file) => file.name);
+  const federationIndex = names.indexOf('gas_federation');
+  const dispatchIndex = names.indexOf('gas_zz_a_dispatch');
+  const traceIndex = names.indexOf('gas_zz_auth_trace');
   assert.ok(federationIndex >= 0);
   assert.ok(dispatchIndex > federationIndex);
   assert.ok(traceIndex > federationIndex);
