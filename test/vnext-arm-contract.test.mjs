@@ -8,25 +8,25 @@ const execFileAsync = promisify(execFile);
 const root = new URL('..', import.meta.url);
 const text = async (path) => readFile(new URL(path, root), 'utf8');
 
-test('vNext arm is a manual-only, narrowly scoped cutover surface', async () => {
-  const source = await text('gas/gas_vnext_arm.js');
+test('vNext arm is a manual-only, canonical control-plane cutover surface', async () => {
+  const source = await text('gas/gas_deploy.js');
   const workflow = await text('.github/workflows/gas-arm-vnext.yml');
-  const dispatcher = await text('gas/gas_zz_a_dispatch.js');
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /push:|schedule:/);
-  assert.match(source, /operation = 'arm-vnext-cutover'/);
-  assert.match(source, /setProperty\('CT_AUTONOMY_MODE', 'vnext'\)/);
+  assert.match(source, /operation!=='assert-legacy-quiesced'&&request\.operation!=='arm-vnext-cutover'/);
+  assert.match(source, /function armVnext\(request\)/);
+  assert.match(source, /setProperty\('CT_AUTONOMY_MODE','vnext'\)/);
   assert.match(source, /getProperty\('CT_AUTONOMY_MODE'\)/);
-  assert.doesNotMatch(source, /setProperty\([^,]+,\s*[^'v][^)]*\)/);
-  assert.match(dispatcher, /arm-vnext-cutover/);
-  assert.match(dispatcher, /CT_GAS_VNEXT_ARM\.authenticate/);
-  assert.match(dispatcher, /CT_GAS_VNEXT_ARM\.arm/);
+  assert.match(source, /request\.operation==='arm-vnext-cutover'\?CT_GAS_DEPLOY\.armVnext\(request\)/);
+  assert.doesNotMatch(source, /gas_vnext_arm|CT_GAS_VNEXT_ARM/);
+  assert.doesNotMatch(source, /setProperty\([^)]*request\./);
 });
 
-test('authoritative GAS bundle contains the temporary arm capability', async () => {
+test('authoritative GAS bundle contains only the canonical arm implementation', async () => {
   const { stdout } = await execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', 'gas', '/tmp/ct-runtime-arm-test-bundle.json'], { encoding: 'utf8' });
   const result = JSON.parse(stdout.trim().split('\n').at(-1));
-  assert.equal(result.fileCount, 21);
+  assert.equal(result.fileCount, 20);
   const bundle = JSON.parse(await readFile('/tmp/ct-runtime-arm-test-bundle.json', 'utf8'));
-  assert.ok(bundle.files.some((file) => file.name === 'gas_vnext_arm'));
+  assert.ok(bundle.files.some((file) => file.name === 'gas_deploy'));
+  assert.ok(!bundle.files.some((file) => file.name === 'gas_vnext_arm'));
 });
