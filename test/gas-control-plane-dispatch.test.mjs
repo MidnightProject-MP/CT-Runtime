@@ -29,7 +29,7 @@ test('canonical dispatcher routes deployment operations before federation authen
   assert.match(federation, /function doPost\(e\)/);
 });
 
-test('built bundle orders canonical dispatcher after federation and before diagnostic wrapper', async () => {
+test('built bundle contains the canonical control-plane and complete vNext Feedback paths', async () => {
   const bundle = await buildBundle();
   const names = bundle.files.map((file) => file.name);
   const federationIndex = names.indexOf('gas_federation');
@@ -39,6 +39,9 @@ test('built bundle orders canonical dispatcher after federation and before diagn
   assert.ok(dispatchIndex > federationIndex);
   assert.ok(traceIndex > federationIndex);
   assert.ok(dispatchIndex < traceIndex);
+  for (const name of ['gas_deploy_qualify', 'gas_feedback_vnext', 'gas_feedback_vnext_projection', 'gas_feedback_vnext_transport', 'gas_vnext_events']) {
+    assert.ok(names.includes(name), `missing assembled production file: ${name}`);
+  }
   assert.match(trace, /var originalDoPost = doPost/);
 });
 
@@ -49,4 +52,6 @@ test('quiescence signs and transmits the same populated request body', () => {
     assert.match(quiesce, new RegExp(`\\b${field}\\b`));
   }
   assert.match(quiesce, /signature\(request, timestamp, nonce, body, secret\)/);
+  assert.match(quiesce, /result\.status !== 'LEGACY_QUIESCED'/);
+  assert.match(quiesce, /business failure/);
 });
