@@ -53,6 +53,44 @@ test('Neon grants one mutation authority across different Work Units in one proj
   }
 });
 
+test('Neon serializes simultaneous authority acquisition across different Work Units in one project', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 8 });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const projectId = `project-race-${suffix}`;
+  const firstWork = createWorkUnit({ workUnitId: `wu-race-a-${suffix}`, objectiveRef: `objective-race-a-${suffix}`, projectId });
+  const secondWork = createWorkUnit({ workUnitId: `wu-race-b-${suffix}`, objectiveRef: `objective-race-b-${suffix}`, projectId });
+  const store = createNeonStore({ pool });
+  try {
+    await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
+    await store.createWorkUnit(firstWork);
+    await store.createWorkUnit(secondWork);
+
+    const firstClaim = claimWorkUnit(firstWork, { executionId: `exec-race-a-${suffix}`, owner: 'owner-a' });
+    const firstExecution = startExecution(createExecution(firstClaim, { executionId: firstClaim.claim.execution_id, owner: 'owner-a' }));
+    const secondClaim = claimWorkUnit(secondWork, { executionId: `exec-race-b-${suffix}`, owner: 'owner-b' });
+    const secondExecution = startExecution(createExecution(secondClaim, { executionId: secondClaim.claim.execution_id, owner: 'owner-b' }));
+
+    const results = await Promise.allSettled([
+      store.beginExecution(firstClaim, firstExecution),
+      store.beginExecution(secondClaim, secondExecution),
+    ]);
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result) => result.status === 'rejected');
+    assert.equal(fulfilled.length, 1);
+    assert.equal(rejected.length, 1);
+    assert.match(rejected[0].reason.message, /project mutation authority is already held/);
+
+    const authorities = (await pool.query('SELECT project_id,work_unit_id,execution_id,fence FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId])).rows;
+    assert.equal(authorities.length, 1);
+    assert.equal(authorities[0].project_id, projectId);
+    assert.equal(authorities[0].fence, '1');
+    assert.ok([firstWork.work_unit_id, secondWork.work_unit_id].includes(authorities[0].work_unit_id));
+  } finally {
+    await cleanup(pool, [firstWork.work_unit_id, secondWork.work_unit_id], [projectId]);
+    await pool.end();
+  }
+});
+
 test('Neon expires an old project authority before takeover by another Work Unit', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 8 });
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
