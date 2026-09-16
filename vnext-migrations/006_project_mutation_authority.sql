@@ -17,13 +17,31 @@ BEGIN
   END IF;
 END $$;
 
+-- Composite identity keys let the database enforce that project identity
+-- travels with a Work Unit and Execution rather than merely existing beside
+-- their independent primary keys.
+CREATE UNIQUE INDEX IF NOT EXISTS vnext_work_units_project_identity_idx
+  ON public.vnext_work_units(work_unit_id, project_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS vnext_executions_work_project_identity_idx
+  ON public.vnext_executions(work_unit_id, execution_id, project_id);
+
+-- An Execution may only claim a Work Unit from the same project.
+ALTER TABLE public.vnext_executions
+  ADD CONSTRAINT vnext_executions_work_project_fk
+  FOREIGN KEY (work_unit_id, project_id)
+  REFERENCES public.vnext_work_units(work_unit_id, project_id);
+
 CREATE TABLE IF NOT EXISTS public.vnext_project_mutation_authority (
   project_id text PRIMARY KEY,
-  work_unit_id text NOT NULL REFERENCES public.vnext_work_units(work_unit_id),
-  execution_id text NOT NULL REFERENCES public.vnext_executions(execution_id),
+  work_unit_id text NOT NULL,
+  execution_id text NOT NULL,
   fence bigint NOT NULL CHECK (fence >= 1),
   claim_expires_at timestamptz NOT NULL,
-  acquired_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  acquired_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT vnext_project_mutation_authority_execution_fk
+    FOREIGN KEY (work_unit_id, execution_id, project_id)
+    REFERENCES public.vnext_executions(work_unit_id, execution_id, project_id)
 );
 
 CREATE INDEX IF NOT EXISTS vnext_project_mutation_authority_execution_idx
