@@ -25,7 +25,7 @@ test('vNext arm is a manual-only, canonical control-plane cutover surface', asyn
 test('authoritative GAS bundle contains only the canonical arm implementation', async () => {
   const { stdout } = await execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', 'gas', '/tmp/ct-runtime-arm-test-bundle.json'], { encoding: 'utf8' });
   const result = JSON.parse(stdout.trim().split('\n').at(-1));
-  assert.equal(result.fileCount, 19);
+  assert.equal(result.fileCount, 23);
   const bundle = JSON.parse(await readFile('/tmp/ct-runtime-arm-test-bundle.json', 'utf8'));
   assert.ok(bundle.files.some((file) => file.name === 'gas_deploy'));
   assert.ok(!bundle.files.some((file) => file.name === 'gas_vnext_arm'));
