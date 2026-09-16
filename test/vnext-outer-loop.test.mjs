@@ -5,7 +5,7 @@ import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
 import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
 
 test('Feedback wake reconstructs one Work Unit and runs a disposable execution', async () => {
-  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-feedback-1', objectiveRef: 'objective-1' })] });
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-feedback-1', objectiveRef: 'objective-1', projectId: 'project-feedback-1' })] });
   let calls = 0;
 
   const first = await runOuterLoop({
@@ -29,7 +29,7 @@ test('Feedback wake reconstructs one Work Unit and runs a disposable execution',
 });
 
 test('a later justified wake produces a new disposable execution rather than a handoff', async () => {
-  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-repeat-1', objectiveRef: 'objective-2' })] });
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-repeat-1', objectiveRef: 'objective-2', projectId: 'project-repeat-1' })] });
   const executionIds = [];
   const executor = async ({ execution }) => {
     executionIds.push(execution.execution_id);
@@ -65,7 +65,7 @@ test('a later justified wake produces a new disposable execution rather than a h
 
 test('done remains non-authoritative without independent authorization', async () => {
   const store = createMemoryStore({
-    workUnits: [createWorkUnit({ workUnitId: 'wu-review-1', objectiveRef: 'objective-3' })],
+    workUnits: [createWorkUnit({ workUnitId: 'wu-review-1', objectiveRef: 'objective-3', projectId: 'project-review-1' })],
     executions: [{ execution_id: 'seed-execution', state: 'succeeded', work_unit_id: 'wu-review-1' }],
   });
   const result = await runOuterLoop({
@@ -81,7 +81,7 @@ test('done remains non-authoritative without independent authorization', async (
 
 test('terminal authorization is awaited and only exact true settles terminally', async () => {
   const store = createMemoryStore({
-    workUnits: [createWorkUnit({ workUnitId: 'wu-auth-1', objectiveRef: 'objective-auth' })],
+    workUnits: [createWorkUnit({ workUnitId: 'wu-auth-1', objectiveRef: 'objective-auth', projectId: 'project-auth-1' })],
     executions: [{ execution_id: 'seed-auth', state: 'succeeded', work_unit_id: 'wu-auth-1' }],
   });
   let authorized = false;
@@ -95,7 +95,7 @@ test('terminal authorization is awaited and only exact true settles terminally',
   assert.equal(result.disposition, 'needs-review');
 
   const terminalStore = createMemoryStore({
-    workUnits: [createWorkUnit({ workUnitId: 'wu-auth-true', objectiveRef: 'objective-auth-true' })],
+    workUnits: [createWorkUnit({ workUnitId: 'wu-auth-true', objectiveRef: 'objective-auth-true', projectId: 'project-auth-true' })],
     executions: [{ execution_id: 'seed-auth-true', state: 'succeeded', work_unit_id: 'wu-auth-true' }],
   });
   let authorizationInput;
@@ -110,7 +110,7 @@ test('terminal authorization is awaited and only exact true settles terminally',
   assert.equal(authorizationInput.execution.fence, 1);
   assert.equal(authorizationInput.evidence.length, 1);
 
-  const rejectedStore = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-auth-reject', objectiveRef: 'objective-auth-reject' })], executions: [{ execution_id: 'seed-auth-reject', state: 'succeeded', work_unit_id: 'wu-auth-reject' }] });
+  const rejectedStore = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-auth-reject', objectiveRef: 'objective-auth-reject', projectId: 'project-auth-reject' })], executions: [{ execution_id: 'seed-auth-reject', state: 'succeeded', work_unit_id: 'wu-auth-reject' }] });
   await assert.rejects(() => runOuterLoop({
     wake: { type: 'feedback.received', event_id: 'feedback-auth-reject', work_unit_id: 'wu-auth-reject' },
     store: rejectedStore,
@@ -121,7 +121,7 @@ test('terminal authorization is awaited and only exact true settles terminally',
 });
 
 test('objective identity mismatch is rejected before evidence verification or settlement', async () => {
-  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-identity-1', objectiveRef: 'objective-expected' })] });
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-identity-1', objectiveRef: 'objective-expected', projectId: 'project-identity-1' })] });
   let verified = false;
   const original = store.manifest;
   store.manifest = async (...args) => { verified = true; return original(...args); };
@@ -137,7 +137,7 @@ test('objective identity mismatch is rejected before evidence verification or se
 });
 
 test('concurrent wakes have a deterministic single winner at the claim barrier', async () => {
-  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-barrier-1', objectiveRef: 'objective-barrier' })] });
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-barrier-1', objectiveRef: 'objective-barrier', projectId: 'project-barrier-1' })] });
   let entered;
   let release;
   const executionEntered = new Promise((resolve) => { entered = resolve; });
@@ -160,7 +160,7 @@ test('no reconstructed work means quiescence and no execution', async () => {
 });
 
 test('stale execution cannot mutate after the fence advances', () => {
-  const work = createWorkUnit({ workUnitId: 'wu-fence-1', objectiveRef: 'objective-4' });
+  const work = createWorkUnit({ workUnitId: 'wu-fence-1', objectiveRef: 'objective-4', projectId: 'project-fence-1' });
   const first = claimWorkUnit(work, { executionId: 'exec-first', owner: 'body-a' });
   const firstExecution = startExecution(createExecution(first, { executionId: 'exec-first', owner: 'body-a' }));
   const second = claimWorkUnit({ ...first, claim: null, state: 'actionable' }, { executionId: 'exec-second', owner: 'body-b' });
@@ -169,8 +169,8 @@ test('stale execution cannot mutate after the fence advances', () => {
 
 test('an expired execution can be taken over once, and its late settlement is fenced out', async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
-  const work = { ...createWorkUnit({ workUnitId: 'wu-expired-1', objectiveRef: 'objective-expired' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-dead', owner: 'dead-owner', fence: 1, claim_expires_at: expired } };
-  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, owner: 'dead-owner', fence: 1, state: 'running', attempt: 1 }] });
+  const work = { ...createWorkUnit({ workUnitId: 'wu-expired-1', objectiveRef: 'objective-expired', projectId: 'project-expired-1' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-dead', owner: 'dead-owner', fence: 1, claim_expires_at: expired } };
+  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, owner: 'dead-owner', fence: 1, state: 'running', attempt: 1 }] });
   const result = await runOuterLoop({
     wake: { type: 'recovery.wake', event_id: 'expired-wake', work_unit_id: work.work_unit_id },
     store,
@@ -181,11 +181,11 @@ test('an expired execution can be taken over once, and its late settlement is fe
   assert.equal(snapshot.work[0].fence, 2);
   assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-dead').state, 'expired');
   assert.equal(snapshot.executions.length, 2);
-  await assert.rejects(() => store.persistTurn({ workUnit: work, execution: { execution_id: 'exec-dead', work_unit_id: work.work_unit_id, owner: 'dead-owner', fence: 1, state: 'succeeded' }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } }), /fencing conflict/);
+  await assert.rejects(() => store.persistTurn({ workUnit: work, execution: { execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, owner: 'dead-owner', fence: 1, state: 'succeeded' }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } }), /fencing conflict/);
 });
 
 test('duplicate event delivery is consumed once while a new event can create a later opportunity', async () => {
-  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-events-1', objectiveRef: 'objective-events' })] });
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-events-1', objectiveRef: 'objective-events', projectId: 'project-events-1' })] });
   let calls = 0;
   const executor = async () => { calls += 1; return { objective_id: 'objective-events', disposition: 'continue', summary: 'considered once per event', continuation: { mode: 'immediate', next_action: 'inspect again' } }; };
   const wake = { type: 'external.changed', event_id: 'event-once', work_unit_id: 'wu-events-1' };
@@ -196,7 +196,7 @@ test('duplicate event delivery is consumed once while a new event can create a l
 });
 
 test('failure becomes a bounded retry condition rather than immediate actionability', async () => {
-  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-retry-1', objectiveRef: 'objective-retry' })] });
+  const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-retry-1', objectiveRef: 'objective-retry', projectId: 'project-retry-1' })] });
   let calls = 0;
   const failing = async () => { calls += 1; throw new Error('bounded failure'); };
   await assert.rejects(() => runOuterLoop({ wake: { type: 'retry.event', event_id: 'retry-1', work_unit_id: 'wu-retry-1' }, store, executor: failing, retryDelayMs: 50, maxAttempts: 2 }), /bounded failure/);
@@ -211,7 +211,7 @@ test('failure becomes a bounded retry condition rather than immediate actionabil
 });
 
 test('an ambiguous committed settlement is not replayed for the same event', async () => {
-  const base = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-uncertain-1', objectiveRef: 'objective-uncertain' })] });
+  const base = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-uncertain-1', objectiveRef: 'objective-uncertain', projectId: 'project-uncertain-1' })] });
   let calls = 0;
   const store = new Proxy(base, { get(target, property) {
     if (property !== 'persistTurn') return Reflect.get(target, property);
