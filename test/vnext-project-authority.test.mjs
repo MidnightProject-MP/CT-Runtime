@@ -16,7 +16,7 @@ test('memory store grants at most one current mutation authority per project and
   await store.beginExecution(first.claimed, first.execution);
 
   const second = claimedExecution(secondWork, 'exec-project-b', 'owner-b');
-  await assert.rejects(() => store.beginExecution(second.claimed, second.execution), /project mutation authority is already held/);
+  await assert.rejects(() => store.beginExecution(second.claimed, second.execution), /E_PROJECT_AUTH_HELD|project mutation authority is already held/);
 
   const settled = applyTurn(first.claimed, first.execution, {
     disposition: 'waiting',
