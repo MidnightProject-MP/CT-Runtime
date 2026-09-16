@@ -15,12 +15,16 @@ const DEPLOYABLE_FILES = new Set([
   'gas_evidence.js',
   'gas_federation.js',
   'gas_feedback.js',
+  'gas_feedback_vnext.js',
+  'gas_feedback_vnext_projection.js',
+  'gas_feedback_vnext_transport.js',
   'gas_github.js',
   'gas_migrate.js',
   'gas_observer.js',
   'gas_state.js',
   'gas_trigger.js',
   'gas_v8.js',
+  'gas_vnext_events.js',
   'gas_zz_a_dispatch.js',
   'gas_zz_auth_trace.js'
 ]);
