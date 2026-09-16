@@ -13,11 +13,12 @@ const connectionString = process.env.TEST_DATABASE_URL;
 async function setup(pool, suffix) {
   await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
   const workUnitId = `wu-neon-${suffix}`;
-  await createNeonStore({ pool }).createWorkUnit(createWorkUnit({ workUnitId, objectiveRef: `objective-neon-${suffix}` }));
+  await createNeonStore({ pool }).createWorkUnit(createWorkUnit({ workUnitId, objectiveRef: `objective-neon-${suffix}`, projectId: `project-neon-${suffix}` }));
   return workUnitId;
 }
 
 async function cleanup(pool, workUnitId) {
+  await pool.query('DELETE FROM vnext_project_mutation_authority WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_evidence_refs WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_executions WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
@@ -30,10 +31,11 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const workUnitId = `wu-neon-${suffix}`;
   const objectiveRef = `objective-neon-${suffix}`;
+  const projectId = `project-neon-${suffix}`;
 
   try {
     await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
-    await store.createWorkUnit(createWorkUnit({ workUnitId, objectiveRef }));
+    await store.createWorkUnit(createWorkUnit({ workUnitId, objectiveRef, projectId }));
 
     const executions = [];
     const first = await runOuterLoop({
@@ -55,6 +57,7 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
     assert.equal(persisted.state, 'waiting');
     assert.equal(persisted.claim, null);
     assert.equal(persisted.fence, 1);
+    assert.equal(persisted.project_id, projectId);
 
     const second = await runOuterLoop({
       wake: { type: 'external.changed', event_id: `external-${suffix}`, work_unit_id: workUnitId },
@@ -82,10 +85,10 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
     assert.equal(finalWork.fence, 2);
     assert.equal(finalWork.last_execution_id, executions[1]);
 
-    const rows = await pool.query('SELECT execution_id,state,fence FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
+    const rows = await pool.query('SELECT execution_id,state,fence,project_id FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
     assert.deepEqual(rows.rows, [
-      { execution_id: executions[0], state: 'succeeded', fence: '1' },
-      { execution_id: executions[1], state: 'succeeded', fence: '2' },
+      { execution_id: executions[0], state: 'succeeded', fence: '1', project_id: projectId },
+      { execution_id: executions[1], state: 'succeeded', fence: '2', project_id: projectId },
     ]);
   } finally {
     await cleanup(pool, workUnitId);
