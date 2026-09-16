@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { bundleHash, deploymentIdFromWebAppUrl, normalizeFiles, signingString, signature, MAX_FILES } from '../lib/gas-deploy-contract.mjs';
 
-test('self-deploy client follows Apps Script web app redirects', async () => {
+ test('self-deploy client follows Apps Script web app redirects', async () => {
   const source = await readFile(new URL('../scripts/deploy-gas.mjs', import.meta.url), 'utf8');
   assert.match(source, /redirect:\s*['"]follow['"]/);
 });
@@ -46,4 +46,26 @@ test('signing binds operation, request identity, GitHub provenance hash and body
   assert.match(signed, /request-12345678/);
   assert.match(signed, /\na{40}\nb{64}\n/);
   assert.notEqual(signature(request, '1750000000', 'nonce-12345678', body, 'secret'), signature({ ...request, github_bundle_hash: 'c'.repeat(64) }, '1750000000', 'nonce-12345678', body, 'secret'));
+});
+
+test('deployment client treats HTTP-200 business rejection as failure', async () => {
+  const source = await readFile(new URL('../scripts/deploy-gas.mjs', import.meta.url), 'utf8');
+  assert.match(source, /if \(value\.status === 'rejected'\) throw new Error/);
+});
+
+test('deployment verification independently requires both LIVE and HEAD readback', async () => {
+  const source = await readFile(new URL('../scripts/deploy-gas.mjs', import.meta.url), 'utf8');
+  const readback = await readFile(new URL('../lib/gas-deploy-readback.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const readback = \(\) => post\(\{ \.\.\.base, operation: 'self-deploy-plan' \}\);/);
+  assert.match(source, /verifyWithReadback\(\{ readback, expectedBundleHash: expectedGasBundleHash \}\)/);
+  assert.match(readback, /liveBundleHash === expectedBundleHash/);
+  assert.match(readback, /headBundleHash === expectedBundleHash/);
+});
+
+test('privileged request contract exposes script and deployment identity checks', async () => {
+  const source = await readFile(new URL('../gas/gas_deploy.js', import.meta.url), 'utf8');
+  assert.match(source, /function validateRequest\(request\)/);
+  assert.match(source, /script-id-mismatch/);
+  assert.match(source, /deployment-id-mismatch/);
+  assert.match(source, /configuredDeploymentId\(\)/);
 });
