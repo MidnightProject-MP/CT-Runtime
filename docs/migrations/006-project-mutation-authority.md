@@ -4,7 +4,7 @@ Migration `006_project_mutation_authority.sql` makes `project_id` part of the du
 
 ## Upgrade rule
 
-The migration is deliberately fail-closed. It adds the columns first, then aborts if any pre-existing Work Unit or Execution has `project_id IS NULL`. Do **not** invent a project identifier, copy an identifier from an unrelated field, or run the migration repeatedly hoping the NULL rows will resolve themselves.
+The migration is deliberately fail-closed. It adds the columns first, then aborts if any pre-existing Work Unit or Execution has `project_id IS NULL`, if any Execution's project differs from its Work Unit's project, or if an Execution references a missing Work Unit. After those checks pass, the migration sets both `project_id` columns `NOT NULL`, so the invariant is enforced for direct SQL writes as well as application writes. Do **not** invent a project identifier, copy an identifier from an unrelated field, or run the migration repeatedly hoping invalid rows will resolve themselves.
 
 Before applying migration 006 to a database that already contains vNext rows:
 
@@ -69,10 +69,16 @@ Before applying migration 006 to a database that already contains vNext rows:
    FROM public.vnext_executions
    WHERE project_id IS NULL;
 
+   -- This must also return zero before COMMIT.
+   SELECT COUNT(*) AS executions_with_project_mismatch
+   FROM public.vnext_executions AS e
+   JOIN public.vnext_work_units AS w USING (work_unit_id)
+   WHERE e.project_id <> w.project_id;
+
    COMMIT;
    ```
 
-6. Apply `006_project_mutation_authority.sql`. If the migration still reports a NULL project identity, stop and reconcile the mapping rather than weakening the migration.
+6. Apply `006_project_mutation_authority.sql`. The migration independently repeats the NULL, mismatch, and orphan checks before adding the foreign key and setting `NOT NULL`. If any check reports a violation, stop and reconcile the mapping rather than weakening the migration.
 
 ## Important limitation
 
@@ -80,6 +86,6 @@ This repository does not currently define a deterministic project mapping for hi
 
 For a fresh database there is no historical backfill: all producers creating vNext Work Units must supply `project_id`, and `createExecution()` propagates that identity from the Work Unit.
 
-## Post-migration hardening
+## Post-migration invariant
 
-The migration keeps the new columns nullable because historical compatibility is handled by the explicit fail-closed precondition. A future migration may make `project_id` `NOT NULL` after production backfill has been independently qualified; that is not part of Stage 2 A7.
+After migration 006 completes, `project_id` is `NOT NULL` on both Work Units and Executions. The composite foreign key additionally requires each Execution's project to match its Work Unit, and the authority table's composite foreign key requires its Work Unit, Execution, and project identities to correspond.
