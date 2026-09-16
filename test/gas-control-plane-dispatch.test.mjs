@@ -29,6 +29,16 @@ test('canonical dispatcher routes deployment operations before federation authen
   assert.match(federation, /function doPost\(e\)/);
 });
 
+test('privileged dispatch binds requests to the receiving script and configured deployment', () => {
+  assert.match(dispatch, /function assertDeploymentIdentity\(request\)/);
+  assert.match(dispatch, /ScriptApp\.getScriptId\(\)/);
+  assert.match(dispatch, /CT_GAS_DEPLOYMENT_ID/);
+  assert.match(dispatch, /deploy-script-id-mismatch/);
+  assert.match(dispatch, /deploy-deployment-id-mismatch/);
+  assert.match(dispatch, /CT_GAS_DEPLOY\.authenticate\(raw, query\), result/);
+  assert.match(dispatch, /assertDeploymentIdentity\(request\)/);
+});
+
 test('built bundle contains the canonical control-plane and complete vNext Feedback paths', async () => {
   const bundle = await buildBundle();
   const names = bundle.files.map((file) => file.name);
