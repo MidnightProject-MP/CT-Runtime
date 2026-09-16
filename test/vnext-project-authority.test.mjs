@@ -50,6 +50,25 @@ test('memory store reconstructs project authority from an active Work Unit claim
   assert.deepEqual(reconstructed.snapshot().authorities, snapshot.authorities);
 });
 
+test('memory store rejects settlement after project authority expiry without a takeover', async () => {
+  const work = createWorkUnit({ workUnitId: 'wu-expired-settlement', objectiveRef: 'objective-expired-settlement', projectId: 'project-expired-settlement' });
+  const first = claimedExecution(work, 'exec-expired-settlement', 'owner-a', new Date('2026-09-16T12:00:00.000Z'), '2026-09-16T11:59:59.000Z');
+  const store = createMemoryStore({
+    workUnits: [first.claimed],
+    executions: [first.execution],
+  });
+
+  await assert.rejects(
+    () => store.persistTurn(applyTurn(first.claimed, first.execution, { disposition: 'done' })),
+    /project mutation authority expired/,
+  );
+
+  const snapshot = store.snapshot();
+  assert.equal(snapshot.executions[0].state, 'running');
+  assert.equal(snapshot.work[0].claim.execution_id, first.execution.execution_id);
+  assert.equal(snapshot.authorities[0].execution_id, first.execution.execution_id);
+});
+
 test('expired project authority is revoked before another Work Unit acquires the project', async () => {
   const firstWork = createWorkUnit({ workUnitId: 'wu-expired-a', objectiveRef: 'objective-expired-a', projectId: 'project-expired' });
   const secondWork = createWorkUnit({ workUnitId: 'wu-expired-b', objectiveRef: 'objective-expired-b', projectId: 'project-expired' });
