@@ -1,0 +1,45 @@
+name: Arm vNext cutover
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gas-vnext-arm
+  cancel-in-progress: false
+
+jobs:
+  arm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Arm vNext cutover
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.CT_GAS_DEPLOY_HMAC_SECRET }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+          OUTPUT_PATH: vnext-arm-receipt.json
+        run: node scripts/arm-vnext-cutover.mjs
+      - name: Publish arm receipt
+        if: always()
+        run: |
+          if [ -f vnext-arm-receipt.json ]; then
+            {
+              echo '## vNext arm receipt'
+              echo
+              cat vnext-arm-receipt.json
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload arm receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vnext-arm-receipt-${{ github.run_id }}
+          path: vnext-arm-receipt.json
+          if-no-files-found: ignore
