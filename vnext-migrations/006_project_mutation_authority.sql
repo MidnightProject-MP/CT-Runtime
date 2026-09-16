@@ -15,7 +15,31 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.vnext_executions WHERE project_id IS NULL) THEN
     RAISE EXCEPTION 'vNext migration requires project_id for existing executions; no deterministic backfill is defined';
   END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.vnext_executions AS e
+    JOIN public.vnext_work_units AS w USING (work_unit_id)
+    WHERE e.project_id <> w.project_id
+  ) THEN
+    RAISE EXCEPTION 'vNext migration requires execution project_id to match its work unit project_id';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.vnext_executions AS e
+    LEFT JOIN public.vnext_work_units AS w USING (work_unit_id)
+    WHERE w.work_unit_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'vNext migration requires every execution to reference an existing work unit';
+  END IF;
 END $$;
+
+-- The fail-closed checks above establish the precondition for making project
+-- identity a schema-level invariant. Direct SQL cannot create NULL identities.
+ALTER TABLE public.vnext_work_units
+  ALTER COLUMN project_id SET NOT NULL;
+
+ALTER TABLE public.vnext_executions
+  ALTER COLUMN project_id SET NOT NULL;
 
 -- Composite identity keys let the database enforce that project identity
 -- travels with a Work Unit and Execution rather than merely existing beside
