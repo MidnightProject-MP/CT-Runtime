@@ -50,6 +50,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS vnext_work_units_project_identity_idx
 CREATE UNIQUE INDEX IF NOT EXISTS vnext_executions_work_project_identity_idx
   ON public.vnext_executions(work_unit_id, execution_id, project_id);
 
+CREATE UNIQUE INDEX IF NOT EXISTS vnext_executions_work_project_fence_identity_idx
+  ON public.vnext_executions(work_unit_id, execution_id, project_id, fence);
+
 -- An Execution may only claim a Work Unit from the same project.
 ALTER TABLE public.vnext_executions
   ADD CONSTRAINT vnext_executions_work_project_fk
@@ -64,8 +67,8 @@ CREATE TABLE IF NOT EXISTS public.vnext_project_mutation_authority (
   claim_expires_at timestamptz NOT NULL,
   acquired_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CONSTRAINT vnext_project_mutation_authority_execution_fk
-    FOREIGN KEY (work_unit_id, execution_id, project_id)
-    REFERENCES public.vnext_executions(work_unit_id, execution_id, project_id)
+    FOREIGN KEY (work_unit_id, execution_id, project_id, fence)
+    REFERENCES public.vnext_executions(work_unit_id, execution_id, project_id, fence)
 );
 
 CREATE INDEX IF NOT EXISTS vnext_project_mutation_authority_execution_idx
