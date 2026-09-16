@@ -21,7 +21,6 @@ const DEPLOYABLE_FILES = new Set([
   'gas_state.js',
   'gas_trigger.js',
   'gas_v8.js',
-  'gas_vnext_arm.js',
   'gas_zz_a_dispatch.js',
   'gas_zz_auth_trace.js'
 ]);
