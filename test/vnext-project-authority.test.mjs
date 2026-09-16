@@ -35,6 +35,21 @@ test('memory store grants at most one current mutation authority per project and
   }]);
 });
 
+test('memory store reconstructs project authority from an active Work Unit claim', async () => {
+  const firstWork = createWorkUnit({ workUnitId: 'wu-reconstruct-a', objectiveRef: 'objective-reconstruct-a', projectId: 'project-reconstruct' });
+  const secondWork = createWorkUnit({ workUnitId: 'wu-reconstruct-b', objectiveRef: 'objective-reconstruct-b', projectId: 'project-reconstruct' });
+  const original = createMemoryStore({ workUnits: [firstWork, secondWork] });
+  const first = claimedExecution(firstWork, 'exec-reconstruct-a', 'owner-a');
+  await original.beginExecution(first.claimed, first.execution);
+
+  const snapshot = original.snapshot();
+  const reconstructed = createMemoryStore({ workUnits: snapshot.work, executions: snapshot.executions });
+  const second = claimedExecution(secondWork, 'exec-reconstruct-b', 'owner-b');
+
+  await assert.rejects(() => reconstructed.beginExecution(second.claimed, second.execution), /E_PROJECT_AUTH_HELD|project mutation authority is already held/);
+  assert.deepEqual(reconstructed.snapshot().authorities, snapshot.authorities);
+});
+
 test('expired project authority is revoked before another Work Unit acquires the project', async () => {
   const firstWork = createWorkUnit({ workUnitId: 'wu-expired-a', objectiveRef: 'objective-expired-a', projectId: 'project-expired' });
   const secondWork = createWorkUnit({ workUnitId: 'wu-expired-b', objectiveRef: 'objective-expired-b', projectId: 'project-expired' });
