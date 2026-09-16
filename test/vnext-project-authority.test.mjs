@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
 import { applyTurn, claimWorkUnit, createExecution, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
 
-function claimedExecution(workUnit, executionId, owner, now = new Date('2026-09-16T12:00:00.000Z'), claimExpiresAt) {
+function claimedExecution(workUnit, executionId, owner, now = new Date('2026-09-16T12:00:00.000Z'), claimExpiresAt = '2099-09-16T12:00:00.000Z') {
   const claimed = claimWorkUnit(workUnit, { executionId, owner, now, claimExpiresAt });
   return { claimed, execution: startExecution(createExecution(claimed, { executionId, owner, startedAt: now.toISOString() })) };
 }
@@ -43,7 +43,7 @@ test('expired project authority is revoked before another Work Unit acquires the
   const first = claimedExecution(firstWork, 'exec-expired-a', 'owner-a', new Date('2026-09-16T12:00:00.000Z'), expiredAt);
   await store.beginExecution(first.claimed, first.execution);
 
-  const second = claimedExecution(secondWork, 'exec-expired-b', 'owner-b', new Date('2026-09-16T12:00:02.000Z'), '2026-09-16T12:01:00.000Z');
+  const second = claimedExecution(secondWork, 'exec-expired-b', 'owner-b', new Date('2026-09-16T12:00:02.000Z'), '2099-09-16T12:01:00.000Z');
   await store.beginExecution(second.claimed, second.execution);
 
   const snapshot = store.snapshot();
