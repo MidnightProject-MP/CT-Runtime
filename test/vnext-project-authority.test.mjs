@@ -69,6 +69,18 @@ test('memory store rejects settlement after project authority expiry without a t
   assert.equal(snapshot.authorities[0].execution_id, first.execution.execution_id);
 });
 
+test('kernel rejects a cross-project execution during a pure Work Unit transition', () => {
+  const work = createWorkUnit({ workUnitId: 'wu-kernel-project', objectiveRef: 'objective-kernel-project', projectId: 'project-a' });
+  const claimed = claimWorkUnit(work, { executionId: 'exec-kernel-project', owner: 'owner-a' });
+  const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: claimed.claim.owner }));
+  const forged = { ...execution, project_id: 'project-b' };
+
+  assert.throws(
+    () => applyTurn(claimed, forged, { disposition: 'done' }),
+    /execution belongs to a different project/,
+  );
+});
+
 test('expired project authority is revoked before another Work Unit acquires the project', async () => {
   const firstWork = createWorkUnit({ workUnitId: 'wu-expired-a', objectiveRef: 'objective-expired-a', projectId: 'project-expired' });
   const secondWork = createWorkUnit({ workUnitId: 'wu-expired-b', objectiveRef: 'objective-expired-b', projectId: 'project-expired' });
