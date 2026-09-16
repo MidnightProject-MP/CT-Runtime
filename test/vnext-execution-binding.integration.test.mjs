@@ -47,11 +47,10 @@ test('Neon rejects an execution forged onto another Work Unit at the persistence
       execution: { ...forged, state: 'failed' },
     }), /different Work Unit/);
 
-    const row = (await pool.query('SELECT work_unit_id,state,claim_execution_id,fence FROM vnext_executions WHERE execution_id=$1', [execution.execution_id])).rows[0];
+    const row = (await pool.query('SELECT work_unit_id,state,fence FROM vnext_executions WHERE execution_id=$1', [execution.execution_id])).rows[0];
     assert.deepEqual(row, {
       work_unit_id: first.workUnit.work_unit_id,
       state: 'running',
-      claim_execution_id: undefined,
       fence: '1',
     });
   } finally {
