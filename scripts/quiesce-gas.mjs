@@ -73,6 +73,9 @@ console.log(JSON.stringify({
 }));
 
 if (!response.ok) throw new Error(`GAS control-plane HTTP ${response.status}: ${JSON.stringify(result)}`);
+if (result.status !== 'LEGACY_QUIESCED') {
+  throw new Error(`GAS control-plane business failure: ${JSON.stringify(result)}`);
+}
 
 const output = { operation, ...result };
 console.log(JSON.stringify(output));
