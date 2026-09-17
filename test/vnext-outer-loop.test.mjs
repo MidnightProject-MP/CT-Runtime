@@ -170,7 +170,7 @@ test('stale execution cannot mutate after the fence advances', () => {
 test('an expired execution can be taken over once, and its late settlement is fenced out', async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
   const work = { ...createWorkUnit({ workUnitId: 'wu-expired-1', objectiveRef: 'objective-expired', projectId: 'project-expired-1' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-dead', owner: 'dead-owner', fence: 1, claim_expires_at: expired } };
-  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, owner: 'dead-owner', fence: 1, state: 'running', attempt: 1 }] });
+  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, owner: 'dead-owner', fence: 1, state: 'running', attempt: 1, claim_expires_at: expired }] });
   const result = await runOuterLoop({
     wake: { type: 'recovery.wake', event_id: 'expired-wake', work_unit_id: work.work_unit_id },
     store,
