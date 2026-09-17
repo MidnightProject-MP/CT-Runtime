@@ -71,6 +71,62 @@ CREATE TABLE IF NOT EXISTS public.vnext_project_mutation_authority (
     REFERENCES public.vnext_executions(work_unit_id, execution_id, project_id, fence)
 );
 
+-- Authority is valid only while its Execution is the Work Unit's active claim.
+-- These are deferred constraint triggers so a legitimate settlement may update
+-- the Execution/Work Unit and delete authority in one transaction, while a
+-- direct SQL mutation that commits an orphaned authority is rejected.
+CREATE OR REPLACE FUNCTION public.vnext_assert_project_mutation_authority_active()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.vnext_project_mutation_authority AS a
+    JOIN public.vnext_executions AS e
+      ON e.work_unit_id = a.work_unit_id
+     AND e.execution_id = a.execution_id
+     AND e.project_id = a.project_id
+     AND e.fence = a.fence
+    JOIN public.vnext_work_units AS w
+      ON w.work_unit_id = a.work_unit_id
+     AND w.project_id = a.project_id
+    WHERE e.state NOT IN ('created', 'running')
+       OR w.claim_execution_id IS DISTINCT FROM a.execution_id
+       OR w.claim_fence IS DISTINCT FROM a.fence
+       OR w.claim_expires_at IS DISTINCT FROM a.claim_expires_at
+  ) THEN
+    RAISE EXCEPTION 'vNext project mutation authority must reference the Work Unit current active claim';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_insert_trg') THEN
+    CREATE CONSTRAINT TRIGGER vnext_project_authority_active_insert_trg
+      AFTER INSERT OR UPDATE ON public.vnext_project_mutation_authority
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW
+      EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_execution_trg') THEN
+    CREATE CONSTRAINT TRIGGER vnext_project_authority_active_execution_trg
+      AFTER INSERT OR UPDATE OF state, work_unit_id, execution_id, project_id, fence ON public.vnext_executions
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW
+      EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_work_unit_trg') THEN
+    CREATE CONSTRAINT TRIGGER vnext_project_authority_active_work_unit_trg
+      AFTER INSERT OR UPDATE OF claim_execution_id, claim_fence, claim_expires_at, project_id ON public.vnext_work_units
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW
+      EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS vnext_project_mutation_authority_execution_idx
   ON public.vnext_project_mutation_authority(execution_id);
 
