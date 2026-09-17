@@ -61,6 +61,11 @@ test('PostgreSQL rejects authority owner and claim-expiry drift on Execution and
       values: [new Date(Date.now() + 120000).toISOString(), executionId],
     }]);
 
+    await assertCommitRejected(pool, [{
+      sql: 'UPDATE vnext_work_units SET claim_expires_at=$1 WHERE work_unit_id=$2',
+      values: [new Date(Date.now() + 120000).toISOString(), workUnitId],
+    }]);
+
     await assertCommitRejected(pool, [
       {
         sql: 'UPDATE vnext_executions SET owner=$1 WHERE execution_id=$2',
