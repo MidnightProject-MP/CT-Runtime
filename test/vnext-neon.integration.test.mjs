@@ -175,3 +175,35 @@ test('Neon settlement rolls back all mutations when Work Unit transition fails',
     await pool.end();
   }
 });
+
+test('PostgreSQL rejects direct authority for a settled and unclaimed execution', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 5 });
+  const store = createNeonStore({ pool });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const workUnitId = await setup(pool, `orphan-${suffix}`);
+  const projectId = `project-neon-orphan-${suffix}`;
+  try {
+    const original = await store.reconstruct({ work_unit_id: workUnitId });
+    const claimed = claimWorkUnit(original, { executionId: `exec-orphan-${suffix}`, owner: 'owner-a' });
+    const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
+    await store.beginExecution(claimed, execution);
+
+    await pool.query('BEGIN');
+    await pool.query("UPDATE vnext_executions SET state='succeeded',finished_at=clock_timestamp() WHERE execution_id=$1", [execution.execution_id]);
+    await pool.query("UPDATE vnext_work_units SET state='waiting',claim_execution_id=NULL,claim_owner=NULL,claim_fence=NULL,claim_expires_at=NULL WHERE work_unit_id=$1", [workUnitId]);
+    await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId]);
+    await pool.query('COMMIT');
+
+    await assert.rejects(
+      () => pool.query(
+        'INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,claim_expires_at) VALUES ($1,$2,$3,$4,$5)',
+        [projectId, workUnitId, execution.execution_id, execution.fence, execution.claim_expires_at],
+      ),
+      /current active claim|project mutation authority/i,
+    );
+  } finally {
+    await pool.query('ROLLBACK').catch(() => {});
+    await cleanup(pool, workUnitId);
+    await pool.end();
+  }
+});
