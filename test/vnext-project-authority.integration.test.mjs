@@ -107,6 +107,7 @@ test('Neon expires an old project authority before takeover by another Work Unit
     const firstExecution = startExecution(createExecution(firstClaim, { executionId: firstClaim.claim.execution_id, owner: 'owner-a', startedAt: '2026-09-16T12:00:00.000Z' }));
     await store.beginExecution(firstClaim, firstExecution);
     await pool.query("UPDATE vnext_project_mutation_authority SET claim_expires_at='2000-01-01T00:00:00Z' WHERE project_id=$1", [projectId]);
+    await pool.query("UPDATE vnext_work_units SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id=$1", [firstWork.work_unit_id]);
 
     const secondClaim = claimWorkUnit(secondWork, { executionId: `exec-expired-b-${suffix}`, owner: 'owner-b', now: new Date('2026-09-16T12:00:02.000Z'), claimExpiresAt: '2099-09-16T12:01:00.000Z' });
     const secondExecution = startExecution(createExecution(secondClaim, { executionId: secondClaim.claim.execution_id, owner: 'owner-b', startedAt: '2026-09-16T12:00:02.000Z' }));
@@ -138,6 +139,7 @@ test('Neon rejects settlement after project authority expiry without a takeover'
     const execution = startExecution(createExecution(claim, { executionId: claim.claim.execution_id, owner: 'owner-a', startedAt: '2026-09-16T12:00:00.000Z' }));
     await store.beginExecution(claim, execution);
     await pool.query("UPDATE vnext_project_mutation_authority SET claim_expires_at='2000-01-01T00:00:00Z' WHERE project_id=$1", [projectId]);
+    await pool.query("UPDATE vnext_work_units SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id=$1", [work.work_unit_id]);
 
     await assert.rejects(
       () => store.persistTurn(applyTurn(claim, execution, { disposition: 'done' })),
