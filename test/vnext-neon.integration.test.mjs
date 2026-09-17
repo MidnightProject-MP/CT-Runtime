@@ -138,10 +138,21 @@ test('Neon rejects stale settlement and preserves a newer claim', { skip: !conne
     const claimed = claimWorkUnit(original, { executionId: `exec-stale-${suffix}`, owner: 'owner-a' });
     const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
     const begun = await store.beginExecution(claimed, execution);
-    await pool.query(`UPDATE vnext_work_units SET fence=fence+1,claim_execution_id=$2,claim_owner=$3,claim_fence=fence+1 WHERE work_unit_id=$1`, [workUnitId, `exec-new-${suffix}`, 'owner-b']);
+
+    const expired = new Date(Date.now() - 1000).toISOString();
+    await pool.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE project_id=$1', [original.project_id, expired]);
+    await pool.query('UPDATE vnext_executions SET claim_expires_at=$2 WHERE execution_id=$1', [execution.execution_id, expired]);
+    await pool.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [workUnitId, expired]);
+
+    const successorSeed = { ...begun.workUnit, state: 'actionable', claim: null, claim_expires_at: null };
+    const successor = claimWorkUnit(successorSeed, { executionId: `exec-new-${suffix}`, owner: 'owner-b' });
+    const successorExecution = startExecution(createExecution(successor, { executionId: successor.claim.execution_id, owner: 'owner-b' }));
+    await store.beginExecution(successor, successorExecution);
+
     const staleResult = { workUnit: begun.workUnit, execution: { ...begun.execution, state: 'failed', finished_at: new Date().toISOString() }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } };
     await assert.rejects(() => store.persistFailure(staleResult), /fencing conflict/);
     const row = (await pool.query('SELECT fence,claim_execution_id,claim_owner,state FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId])).rows[0];
+    assert.equal(row.fence, '2');
     assert.equal(row.claim_execution_id, `exec-new-${suffix}`);
     assert.equal(row.claim_owner, 'owner-b');
     assert.equal(row.state, 'actionable');
