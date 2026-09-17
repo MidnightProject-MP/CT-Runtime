@@ -11,13 +11,14 @@ const connectionString = process.env.TEST_DATABASE_URL;
 async function setup(pool, suffix) {
   await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
   const store = createNeonStore({ pool });
-  const workUnit = createWorkUnit({ workUnitId: `wu-binding-${suffix}`, objectiveRef: `objective-binding-${suffix}` });
+  const workUnit = createWorkUnit({ workUnitId: `wu-binding-${suffix}`, objectiveRef: `objective-binding-${suffix}`, projectId: `project-binding-${suffix}` });
   await store.createWorkUnit(workUnit);
   return { store, workUnit };
 }
 
 async function cleanup(pool, workUnitIds) {
   for (const workUnitId of workUnitIds) {
+    await pool.query('DELETE FROM vnext_project_mutation_authority WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
     await pool.query('DELETE FROM vnext_evidence_refs WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
     await pool.query('DELETE FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
     await pool.query('DELETE FROM vnext_executions WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
@@ -28,7 +29,7 @@ async function cleanup(pool, workUnitIds) {
 test('Neon rejects an execution forged onto another Work Unit at the persistence boundary', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 5 });
   const first = await setup(pool, `a-${Date.now()}`);
-  const second = createWorkUnit({ workUnitId: `wu-binding-b-${Date.now()}`, objectiveRef: `objective-binding-b-${Date.now()}` });
+  const second = createWorkUnit({ workUnitId: `wu-binding-b-${Date.now()}`, objectiveRef: `objective-binding-b-${Date.now()}`, projectId: `project-binding-b-${Date.now()}` });
   try {
     await first.store.createWorkUnit(second);
     const claimed = claimWorkUnit(first.workUnit, { executionId: `exec-binding-${Date.now()}`, owner: 'owner-a' });
