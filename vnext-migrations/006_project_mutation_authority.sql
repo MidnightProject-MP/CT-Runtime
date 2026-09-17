@@ -95,6 +95,7 @@ BEGIN
        OR w.claim_execution_id IS DISTINCT FROM a.execution_id
        OR w.claim_fence IS DISTINCT FROM a.fence
        OR w.claim_expires_at IS DISTINCT FROM a.claim_expires_at
+       OR w.claim_owner IS DISTINCT FROM e.owner
   ) THEN
     RAISE EXCEPTION 'vNext project mutation authority must reference the Work Unit current active claim';
   END IF;
@@ -113,14 +114,14 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_execution_trg') THEN
     CREATE CONSTRAINT TRIGGER vnext_project_authority_active_execution_trg
-      AFTER INSERT OR UPDATE OF state, work_unit_id, execution_id, project_id, fence ON public.vnext_executions
+      AFTER INSERT OR UPDATE OF state, work_unit_id, execution_id, project_id, fence, owner ON public.vnext_executions
       DEFERRABLE INITIALLY DEFERRED
       FOR EACH ROW
       EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_work_unit_trg') THEN
     CREATE CONSTRAINT TRIGGER vnext_project_authority_active_work_unit_trg
-      AFTER INSERT OR UPDATE OF claim_execution_id, claim_fence, claim_expires_at, project_id ON public.vnext_work_units
+      AFTER INSERT OR UPDATE OF claim_execution_id, claim_fence, claim_expires_at, claim_owner, project_id ON public.vnext_work_units
       DEFERRABLE INITIALLY DEFERRED
       FOR EACH ROW
       EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
