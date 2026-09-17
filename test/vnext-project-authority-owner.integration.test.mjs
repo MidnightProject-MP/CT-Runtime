@@ -30,7 +30,7 @@ async function assertCommitRejected(pool, statements) {
   }
 }
 
-test('PostgreSQL rejects authority owner drift on Execution and Work Unit claims', { skip: !connectionString, timeout: 60000 }, async () => {
+test('PostgreSQL rejects authority owner and claim-expiry drift on Execution and Work Unit claims', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 4 });
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const projectId = `project-owner-${suffix}`;
@@ -56,6 +56,11 @@ test('PostgreSQL rejects authority owner drift on Execution and Work Unit claims
       values: ['owner-b', workUnitId],
     }]);
 
+    await assertCommitRejected(pool, [{
+      sql: 'UPDATE vnext_executions SET claim_expires_at=$1 WHERE execution_id=$2',
+      values: [new Date(Date.now() + 120000).toISOString(), executionId],
+    }]);
+
     await assertCommitRejected(pool, [
       {
         sql: 'UPDATE vnext_executions SET owner=$1 WHERE execution_id=$2',
@@ -68,10 +73,12 @@ test('PostgreSQL rejects authority owner drift on Execution and Work Unit claims
     ]);
 
     const persisted = (await pool.query(
-      'SELECT e.owner, w.claim_owner FROM vnext_executions e JOIN vnext_work_units w USING (work_unit_id) WHERE e.execution_id=$1',
+      'SELECT e.owner, e.claim_expires_at, w.claim_owner, w.claim_expires_at AS work_claim_expires_at FROM vnext_executions e JOIN vnext_work_units w USING (work_unit_id) WHERE e.execution_id=$1',
       [executionId],
     )).rows[0];
-    assert.deepEqual(persisted, { owner: 'owner-a', claim_owner: 'owner-a' });
+    assert.equal(persisted.owner, 'owner-a');
+    assert.equal(persisted.claim_owner, 'owner-a');
+    assert.equal(persisted.claim_expires_at.getTime(), persisted.work_claim_expires_at.getTime());
   } finally {
     await cleanup(pool, workUnitId, projectId);
     await pool.end();
