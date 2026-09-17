@@ -15,10 +15,12 @@ async function cleanup(pool, workUnitId, projectId) {
   await pool.query('DELETE FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
 }
 
-async function assertCommitRejected(pool, sql, values) {
+async function assertCommitRejected(pool, statements) {
   await pool.query('BEGIN');
   try {
-    await pool.query(sql, values);
+    for (const { sql, values = [] } of statements) {
+      await pool.query(sql, values);
+    }
     await assert.rejects(
       () => pool.query('COMMIT'),
       /project mutation authority must reference the Work Unit current active claim/,
@@ -44,29 +46,26 @@ test('PostgreSQL rejects authority owner drift on Execution and Work Unit claims
     const execution = startExecution(createExecution(claim, { executionId, owner: 'owner-a' }));
     await store.beginExecution(claim, execution);
 
-    await assertCommitRejected(
-      pool,
-      'UPDATE vnext_executions SET owner=$1 WHERE execution_id=$2',
-      ['owner-b', executionId],
-    );
+    await assertCommitRejected(pool, [{
+      sql: 'UPDATE vnext_executions SET owner=$1 WHERE execution_id=$2',
+      values: ['owner-b', executionId],
+    }]);
 
-    await assertCommitRejected(
-      pool,
-      'UPDATE vnext_work_units SET claim_owner=$1 WHERE work_unit_id=$2',
-      ['owner-b', workUnitId],
-    );
+    await assertCommitRejected(pool, [{
+      sql: 'UPDATE vnext_work_units SET claim_owner=$1 WHERE work_unit_id=$2',
+      values: ['owner-b', workUnitId],
+    }]);
 
-    await assertCommitRejected(
-      pool,
-      'UPDATE vnext_executions SET owner=$1 WHERE execution_id=$2',
-      ['owner-b', executionId],
-    );
-
-    await assertCommitRejected(
-      pool,
-      'UPDATE vnext_work_units SET claim_owner=$1 WHERE work_unit_id=$2',
-      ['owner-b', workUnitId],
-    );
+    await assertCommitRejected(pool, [
+      {
+        sql: 'UPDATE vnext_executions SET owner=$1 WHERE execution_id=$2',
+        values: ['owner-b', executionId],
+      },
+      {
+        sql: 'UPDATE vnext_work_units SET claim_owner=$1 WHERE work_unit_id=$2',
+        values: ['owner-b', workUnitId],
+      },
+    ]);
 
     const persisted = (await pool.query(
       'SELECT e.owner, w.claim_owner FROM vnext_executions e JOIN vnext_work_units w USING (work_unit_id) WHERE e.execution_id=$1',
