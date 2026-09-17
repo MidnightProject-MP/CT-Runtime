@@ -50,6 +50,17 @@ test('memory store reconstructs project authority from an active Work Unit claim
   assert.deepEqual(reconstructed.snapshot().authorities, snapshot.authorities);
 });
 
+test('memory store rejects reconstructed authority when execution claim expiry diverges from Work Unit claim', () => {
+  const work = createWorkUnit({ workUnitId: 'wu-reconstruct-expiry', objectiveRef: 'objective-reconstruct-expiry', projectId: 'project-reconstruct-expiry' });
+  const first = claimedExecution(work, 'exec-reconstruct-expiry', 'owner-a');
+  const forgedExecution = { ...first.execution, claim_expires_at: '2099-09-17T12:00:00.000Z' };
+
+  assert.throws(
+    () => createMemoryStore({ workUnits: [first.claimed], executions: [forgedExecution] }),
+    /claim expiration does not match Work Unit claim/,
+  );
+});
+
 test('memory store rejects settlement after project authority expiry without a takeover', async () => {
   const work = createWorkUnit({ workUnitId: 'wu-expired-settlement', objectiveRef: 'objective-expired-settlement', projectId: 'project-expired-settlement' });
   const first = claimedExecution(work, 'exec-expired-settlement', 'owner-a', new Date('2026-09-16T12:00:00.000Z'), '2026-09-16T11:59:59.000Z');
