@@ -77,6 +77,13 @@ test('PostgreSQL rejects authority owner and claim-expiry drift on Execution and
       },
     ]);
 
+    const original = await store.reconstruct({ work_unit_id: workUnitId });
+    const forgedExecution = { ...execution, claim_expires_at: '2099-09-17T12:00:00.000Z' };
+    await assert.rejects(
+      () => store.persistTurn({ workUnit: original, execution: forgedExecution, turn: { disposition: 'done' } }),
+      /fencing conflict while persisting turn/,
+    );
+
     const persisted = (await pool.query(
       'SELECT e.owner, e.claim_expires_at, w.claim_owner, w.claim_expires_at AS work_claim_expires_at FROM vnext_executions e JOIN vnext_work_units w USING (work_unit_id) WHERE e.execution_id=$1',
       [executionId],
