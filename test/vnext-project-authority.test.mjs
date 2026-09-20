@@ -62,6 +62,17 @@ test('memory store rejects reconstructed authority when execution claim expiry d
   );
 });
 
+test('memory store rejects settlement when execution claim expiry diverges from durable claim', async () => {
+  const work = createWorkUnit({ workUnitId: 'wu-expiry-boundary', objectiveRef: 'objective-expiry-boundary', projectId: 'project-expiry-boundary' });
+  const first = claimedExecution(work, 'exec-expiry-boundary', 'owner-a');
+  const store = createMemoryStore({ workUnits: [first.claimed], executions: [first.execution] });
+  const forged = { ...first.execution, claim_expires_at: '2099-09-17T12:00:00.000Z' };
+  await assert.rejects(
+    () => store.persistTurn({ workUnit: first.claimed, execution: forged, turn: { disposition: 'done' } }),
+    /fencing conflict while persisting turn/,
+  );
+});
+
 test('memory store rejects settlement after project authority expiry without a takeover', async () => {
   const work = createWorkUnit({ workUnitId: 'wu-expired-settlement', objectiveRef: 'objective-expired-settlement', projectId: 'project-expired-settlement' });
   const first = claimedExecution(work, 'exec-expired-settlement', 'owner-a', new Date('2026-09-16T12:00:00.000Z'), '2026-09-16T11:59:59.000Z');
