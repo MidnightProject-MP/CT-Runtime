@@ -176,12 +176,12 @@ test('Neon schema rejects an authority whose project, Work Unit, and Execution i
     await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [firstProject]);
 
     await assert.rejects(
-      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,claim_expires_at) VALUES ($1,$2,$3,$4,$5)', [forgedProject, secondWork.work_unit_id, firstExecution.execution_id, 1, '2099-09-16T12:01:00Z']),
+      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at) VALUES ($1,$2,$3,$4,$5,$6)', [forgedProject, secondWork.work_unit_id, firstExecution.execution_id, 1, firstExecution.owner, '2099-09-16T12:01:00Z']),
       /foreign key|violates/i,
     );
 
     await assert.rejects(
-      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,claim_expires_at) VALUES ($1,$2,$3,$4,$5)', [firstProject, firstWork.work_unit_id, firstExecution.execution_id, 2, '2099-09-16T12:01:00Z']),
+      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at) VALUES ($1,$2,$3,$4,$5,$6)', [firstProject, firstWork.work_unit_id, firstExecution.execution_id, 2, firstExecution.owner, '2099-09-16T12:01:00Z']),
       /foreign key|violates/i,
     );
   } finally {
