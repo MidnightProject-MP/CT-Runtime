@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS public.vnext_project_mutation_authority (
   work_unit_id text NOT NULL,
   execution_id text NOT NULL,
   fence bigint NOT NULL CHECK (fence >= 1),
+  owner text NOT NULL,
   claim_expires_at timestamptz NOT NULL,
   acquired_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CONSTRAINT vnext_project_mutation_authority_execution_fk
@@ -96,6 +97,7 @@ BEGIN
        OR w.claim_fence IS DISTINCT FROM a.fence
        OR e.claim_expires_at IS DISTINCT FROM a.claim_expires_at
        OR w.claim_expires_at IS DISTINCT FROM a.claim_expires_at
+       OR a.owner IS DISTINCT FROM e.owner
        OR w.claim_owner IS DISTINCT FROM e.owner
   ) THEN
     RAISE EXCEPTION 'vNext project mutation authority must reference the Work Unit current active claim';
