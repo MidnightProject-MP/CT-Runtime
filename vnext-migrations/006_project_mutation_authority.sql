@@ -104,30 +104,29 @@ BEGIN
 END;
 $$;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_insert_trg') THEN
-    CREATE CONSTRAINT TRIGGER vnext_project_authority_active_insert_trg
-      AFTER INSERT OR UPDATE ON public.vnext_project_mutation_authority
-      DEFERRABLE INITIALLY DEFERRED
-      FOR EACH ROW
-      EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_execution_trg') THEN
-    CREATE CONSTRAINT TRIGGER vnext_project_authority_active_execution_trg
-      AFTER INSERT OR UPDATE OF state, work_unit_id, execution_id, project_id, fence, owner, claim_expires_at ON public.vnext_executions
-      DEFERRABLE INITIALLY DEFERRED
-      FOR EACH ROW
-      EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vnext_project_authority_active_work_unit_trg') THEN
-    CREATE CONSTRAINT TRIGGER vnext_project_authority_active_work_unit_trg
-      AFTER INSERT OR UPDATE OF claim_execution_id, claim_fence, claim_expires_at, claim_owner, project_id ON public.vnext_work_units
-      DEFERRABLE INITIALLY DEFERRED
-      FOR EACH ROW
-      EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
-  END IF;
-END $$;
+DROP TRIGGER IF EXISTS vnext_project_authority_active_insert_trg ON public.vnext_project_mutation_authority;
+CREATE CONSTRAINT TRIGGER vnext_project_authority_active_insert_trg
+  AFTER INSERT OR UPDATE ON public.vnext_project_mutation_authority
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW
+  EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
+
+-- The invariant is cross-row and deferred: any change to an Execution or Work
+-- Unit can invalidate an existing authority, while legitimate settlement
+-- remains valid because the authority is deleted before COMMIT.
+DROP TRIGGER IF EXISTS vnext_project_authority_active_execution_trg ON public.vnext_executions;
+CREATE CONSTRAINT TRIGGER vnext_project_authority_active_execution_trg
+  AFTER INSERT OR UPDATE ON public.vnext_executions
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW
+  EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
+
+DROP TRIGGER IF EXISTS vnext_project_authority_active_work_unit_trg ON public.vnext_work_units;
+CREATE CONSTRAINT TRIGGER vnext_project_authority_active_work_unit_trg
+  AFTER INSERT OR UPDATE ON public.vnext_work_units
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW
+  EXECUTE FUNCTION public.vnext_assert_project_mutation_authority_active();
 
 CREATE INDEX IF NOT EXISTS vnext_project_mutation_authority_execution_idx
   ON public.vnext_project_mutation_authority(execution_id);
