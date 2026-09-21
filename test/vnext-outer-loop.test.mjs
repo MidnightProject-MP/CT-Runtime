@@ -1,8 +1,13 @@
 import test from 'node:test';
+import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+
+const createMemoryStore = (options = {}) => createMemoryStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
+const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
+const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
-import { createWorkUnit, claimWorkUnit, createExecution, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
-import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
-import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
+import { createWorkUnit, claimWorkUnit, createExecution as createExecutionCore, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
+import { createMemoryStore as createMemoryStoreCore } from '../lib/vnext/memory-store.mjs';
+import { runOuterLoop as runOuterLoopCore } from '../lib/vnext/outer-loop.mjs';
 
 test('Feedback wake reconstructs one Work Unit and runs a disposable execution', async () => {
   const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-feedback-1', objectiveRef: 'objective-1', projectId: 'project-feedback-1' })] });
@@ -60,6 +65,8 @@ test('a later justified wake produces a new disposable execution rather than a h
   assert.equal(second.disposition, 'terminal');
   assert.equal(executionIds.length, 2);
   assert.notEqual(executionIds[0], executionIds[1]);
+  const executions = store.snapshot().executions;
+  assert.notEqual(executions[0].authorization_decision_ref, executions[1].authorization_decision_ref);
   assert.equal(store.snapshot().executions.length, 2);
 });
 
