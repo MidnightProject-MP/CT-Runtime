@@ -65,6 +65,8 @@ test('a later justified wake produces a new disposable execution rather than a h
   assert.equal(second.disposition, 'terminal');
   assert.equal(executionIds.length, 2);
   assert.notEqual(executionIds[0], executionIds[1]);
+  const executions = store.snapshot().executions;
+  assert.notEqual(executions[0].authorization_decision_ref, executions[1].authorization_decision_ref);
   assert.equal(store.snapshot().executions.length, 2);
 });
 
