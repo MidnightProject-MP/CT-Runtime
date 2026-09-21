@@ -38,6 +38,7 @@ test('memory store grants at most one current mutation authority per project and
     fence: 1,
     owner: 'owner-b',
     claim_expires_at: second.execution.claim_expires_at,
+    authorization_decision_ref: second.execution.authorization_decision_ref,
   }]);
 });
 
@@ -130,6 +131,7 @@ test('expired project authority is revoked before another Work Unit acquires the
     fence: 1,
     owner: 'owner-b',
     claim_expires_at: second.execution.claim_expires_at,
+    authorization_decision_ref: second.execution.authorization_decision_ref,
   }]);
 });
 
