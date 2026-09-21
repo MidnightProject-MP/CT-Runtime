@@ -5,7 +5,7 @@ const createMemoryStore = (options = {}) => createMemoryStoreCore({ ...options, 
 const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
-import { createWorkUnit, claimWorkUnit, createExecution, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
+import { createWorkUnit, claimWorkUnit, createExecution as createExecutionCore, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
 import { createMemoryStore as createMemoryStoreCore } from '../lib/vnext/memory-store.mjs';
 import { runOuterLoop as runOuterLoopCore } from '../lib/vnext/outer-loop.mjs';
 
