@@ -8,7 +8,7 @@ ALTER TABLE public.vnext_project_mutation_authority
   ADD COLUMN IF NOT EXISTS authorization_decision_ref text;
 
 -- Every newly-written Execution must carry an authorization reference. Existing
--- historical rows may remain NULL because they predate this invariant.
+-- historical rows may remain NULL because they predate this invariant; see the legacy-recovery test.
 CREATE OR REPLACE FUNCTION public.vnext_assert_execution_authorization_ref()
 RETURNS trigger
 LANGUAGE plpgsql
