@@ -91,3 +91,51 @@ test('A8 preserves a pre-migration NULL authorization reference during legacy re
     await admin.end();
   }
 });
+
+
+test('A8 rejects authorization provenance rewrites during and after an Execution authority lifecycle', { skip: !connectionString, timeout: 60000 }, async () => {
+  const admin = new Pool({ connectionString });
+  const name = `authority_immutability_${randomUUID().replaceAll('-', '')}`;
+  let pool;
+  let created = false;
+  try {
+    await admin.query(`CREATE DATABASE ${name}`);
+    created = true;
+    const url = new URL(connectionString);
+    url.pathname = `/${name}`;
+    pool = new Pool({ connectionString: url.href });
+    for (const file of ['001_outer_loop.sql', '002_survivability.sql']) {
+      await pool.query(await readFile(new URL(`../vnext-migrations/${file}`, import.meta.url), 'utf8'));
+    }
+    await pool.query('ALTER TABLE vnext_work_units ADD COLUMN project_id text; ALTER TABLE vnext_executions ADD COLUMN project_id text');
+    await pool.query(await readFile(new URL('../vnext-migrations/006_project_mutation_authority.sql', import.meta.url), 'utf8'));
+    await pool.query("INSERT INTO vnext_work_units(work_unit_id,objective_ref,project_id,state,fence,claim_execution_id,claim_owner,claim_fence,claim_expires_at) VALUES ('a8-wu','objective','a8-project','actionable',1,'a8-exec','owner',1,'2099-01-01')");
+    await pool.query("INSERT INTO vnext_executions(execution_id,work_unit_id,project_id,owner,fence,state,started_at,claim_expires_at) VALUES ('a8-exec','a8-wu','a8-project','owner',1,'running',clock_timestamp(),'2099-01-01')");
+    await pool.query(await readFile(new URL('../vnext-migrations/007_authorization_provenance.sql', import.meta.url), 'utf8'));
+    await pool.query("UPDATE vnext_executions SET authorization_decision_ref='decision-a' WHERE execution_id='a8-exec'");
+    await pool.query("INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at,authorization_decision_ref) VALUES ('a8-project','a8-wu','a8-exec',1,'owner','2099-01-01','decision-a')");
+
+    await assert.rejects(
+      () => pool.query("UPDATE vnext_executions SET authorization_decision_ref='decision-b' WHERE execution_id='a8-exec'"),
+      /authorization decision reference is immutable once established/,
+    );
+    assert.equal((await pool.query("SELECT authorization_decision_ref FROM vnext_executions WHERE execution_id='a8-exec'")).rows[0].authorization_decision_ref, 'decision-a');
+    assert.equal((await pool.query("SELECT authorization_decision_ref FROM vnext_project_mutation_authority WHERE project_id='a8-project'")).rows[0].authorization_decision_ref, 'decision-a');
+
+    await pool.query('BEGIN');
+    await pool.query("UPDATE vnext_work_units SET claim_execution_id=NULL, claim_owner=NULL, claim_fence=NULL, claim_expires_at=NULL, state='terminal' WHERE work_unit_id='a8-wu'");
+    await pool.query("UPDATE vnext_executions SET state='succeeded', finished_at=clock_timestamp() WHERE execution_id='a8-exec'");
+    await pool.query("DELETE FROM vnext_project_mutation_authority WHERE project_id='a8-project'");
+    await pool.query('COMMIT');
+
+    await assert.rejects(
+      () => pool.query("UPDATE vnext_executions SET authorization_decision_ref='decision-c' WHERE execution_id='a8-exec'"),
+      /authorization decision reference is immutable once established/,
+    );
+    assert.equal((await pool.query("SELECT authorization_decision_ref FROM vnext_executions WHERE execution_id='a8-exec'")).rows[0].authorization_decision_ref, 'decision-a');
+  } finally {
+    if (pool) await pool.end();
+    if (created) await admin.query(`DROP DATABASE ${name}`);
+    await admin.end();
+  }
+});
