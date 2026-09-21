@@ -119,6 +119,17 @@ test('memory reconstruction preserves an expired pre-A8 claim and permits an ind
   }]);
 });
 
+test('memory store rejects an expired non-legacy Execution during authority reconstruction', () => {
+  const work = createWorkUnit({ workUnitId: 'wu-reconstruct-expired', objectiveRef: 'objective-reconstruct-expired', projectId: 'project-reconstruct-expired' });
+  const first = claimedExecution(work, 'exec-reconstruct-expired', 'owner-a');
+  const expiredExecution = { ...first.execution, state: 'expired', authorization_decision_ref: 'test-auth:exec-reconstruct-expired' };
+
+  assert.throws(
+    () => createMemoryStore({ workUnits: [first.claimed], executions: [expiredExecution] }),
+    /invalid reconstructed authority: execution exec-reconstruct-expired does not match Work Unit claim/,
+  );
+});
+
 test('memory store rejects reconstructed authority when execution claim expiry diverges from Work Unit claim', () => {
   const work = createWorkUnit({ workUnitId: 'wu-reconstruct-expiry', objectiveRef: 'objective-reconstruct-expiry', projectId: 'project-reconstruct-expiry' });
   const first = claimedExecution(work, 'exec-reconstruct-expiry', 'owner-a');
