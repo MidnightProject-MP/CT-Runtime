@@ -18,7 +18,7 @@ test('A9 admission requires the complete transactional contract and launches no 
       store,
       authorizeExecution: authorize,
       executor: async () => { launched = true; return { objective_id: 'objective', disposition: 'continue', summary: 'must not run', continuation: { mode: 'immediate' } }; },
-    }), new RegExp(`transactional store requires ${missing}`));
+    }), missing === 'beginExecution' ? /durable beginExecution support/ : new RegExp(`transactional store requires ${missing}`));
     assert.equal(launched, false);
     assert.equal(base.snapshot().executions.length, 0);
   }
@@ -65,7 +65,7 @@ test('failed takeover preserves the expired predecessor and commits no successor
   const predecessor = { execution_id: 'exec-predecessor', work_unit_id: work.work_unit_id, project_id: work.project_id, authorization_decision_ref: 'test-auth:exec-predecessor', owner: 'old-owner', fence: 1, state: 'running', attempt: 1, claim_expires_at: expired };
   const store = makeStore({ workUnits: [work], executions: [predecessor] });
   const before = store.snapshot();
-  const successorClaim = claimWorkUnit({ ...work, claim: null, claim_expires_at: null, state: 'waiting' }, { executionId: 'exec-successor', owner: 'new-owner' });
+  const successorClaim = claimWorkUnit({ ...work, claim: null, claim_expires_at: null, state: 'actionable' }, { executionId: 'exec-successor', owner: 'new-owner' });
   const successor = startExecution(createExecution(successorClaim, { executionId: 'exec-successor', owner: 'new-owner', authorizationDecisionRef: 'test-auth:exec-successor' }));
   await assert.rejects(() => store.beginExecution(successorClaim, { ...successor, invalid: () => {} }, { ref: successor.authorization_decision_ref }), /could not be cloned|DataCloneError|structuredClone/i);
   assert.deepEqual(store.snapshot(), before);
