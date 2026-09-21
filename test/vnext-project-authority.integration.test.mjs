@@ -1,15 +1,11 @@
 import test from 'node:test';
-import { testAuthorizationVerifier } from './vnext-test-authorization.mjs';
-
-const createNeonStore = (options = {}) => createNeonStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
-const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
-import { claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution, applyTurn, failExecution } from '../lib/vnext/kernel.mjs';
-import { createNeonStore as createNeonStoreCore } from '../lib/vnext/neon-store.mjs';
+import { claimWorkUnit, createExecution, createWorkUnit, startExecution, applyTurn, failExecution } from '../lib/vnext/kernel.mjs';
+import { createNeonStore } from '../lib/vnext/neon-store.mjs';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 
@@ -197,7 +193,7 @@ test('Neon schema rejects an authority whose project, Work Unit, and Execution i
     await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [firstProject]);
 
     await assert.rejects(
-      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at,authorization_decision_ref) VALUES ($1,$2,$3,$4,$5,$6,$7)', [forgedProject, secondWork.work_unit_id, firstExecution.execution_id, 1, firstExecution.owner, '2099-09-16T12:01:00Z', firstExecution.authorization_decision_ref]),
+      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at) VALUES ($1,$2,$3,$4,$5,$6)', [forgedProject, secondWork.work_unit_id, firstExecution.execution_id, 1, firstExecution.owner, '2099-09-16T12:01:00Z']),
       /foreign key|violates/i,
     );
 
