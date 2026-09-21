@@ -90,10 +90,10 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
     assert.equal(finalWork.fence, 2);
     assert.equal(finalWork.last_execution_id, executions[1]);
 
-    const rows = await pool.query('SELECT execution_id,state,fence,project_id FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
+    const rows = await pool.query('SELECT execution_id,state,fence,project_id,authorization_decision_ref FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
     assert.deepEqual(rows.rows, [
-      { execution_id: executions[0], state: 'succeeded', fence: '1', project_id: projectId },
-      { execution_id: executions[1], state: 'succeeded', fence: '2', project_id: projectId },
+      { execution_id: executions[0], state: 'succeeded', fence: '1', project_id: projectId, authorization_decision_ref: `test-auth:${executions[0]}` },
+      { execution_id: executions[1], state: 'succeeded', fence: '2', project_id: projectId, authorization_decision_ref: `test-auth:${executions[1]}` },
     ]);
   } finally {
     await cleanup(pool, workUnitId);
