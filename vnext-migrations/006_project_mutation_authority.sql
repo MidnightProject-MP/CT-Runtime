@@ -7,8 +7,15 @@ ALTER TABLE public.vnext_work_units
 ALTER TABLE public.vnext_executions
   ADD COLUMN IF NOT EXISTS project_id text;
 
-DO $$
+DO $
 BEGIN
+  -- Do not introduce an empty authority table over unresolved ownership.
+  -- Operators must reconcile/drain existing workers before this upgrade;
+  -- elapsed lease time alone does not prove that external effects stopped.
+  IF EXISTS (SELECT 1 FROM public.vnext_work_units WHERE claim_execution_id IS NOT NULL)
+     OR EXISTS (SELECT 1 FROM public.vnext_executions WHERE state IN ('created', 'running')) THEN
+    RAISE EXCEPTION 'vNext migration requires all existing execution claims and active executions to be reconciled before project authority upgrade';
+  END IF;
   IF EXISTS (SELECT 1 FROM public.vnext_work_units WHERE project_id IS NULL) THEN
     RAISE EXCEPTION 'vNext migration requires project_id for existing work units; no deterministic backfill is defined';
   END IF;
