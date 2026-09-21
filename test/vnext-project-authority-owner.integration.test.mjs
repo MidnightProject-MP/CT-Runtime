@@ -16,17 +16,19 @@ async function cleanup(pool, workUnitId, projectId) {
 }
 
 async function assertCommitRejected(pool, statements) {
-  await pool.query('BEGIN');
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     for (const { sql, values = [] } of statements) {
-      await pool.query(sql, values);
+      await client.query(sql, values);
     }
     await assert.rejects(
-      () => pool.query('COMMIT'),
+      () => client.query('COMMIT'),
       /project mutation authority must reference the Work Unit current active claim/,
     );
   } finally {
-    await pool.query('ROLLBACK').catch(() => {});
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
   }
 }
 
