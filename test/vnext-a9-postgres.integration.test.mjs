@@ -142,7 +142,7 @@ test('A9 PostgreSQL takeover rollback restores the expired predecessor and commi
     const expired = new Date(Date.now() - 1000).toISOString();
     await pool.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE project_id=$1', [work.project_id, expired]);
     await pool.query('UPDATE vnext_executions SET claim_expires_at=$2 WHERE execution_id=$1', [predecessorExecution.execution_id, expired]);
-    await pool.query('UPDATE vnext_work_units SET claim_expires_at=$2,claim_expires_at=$2 WHERE work_unit_id=$1', [work.work_unit_id, expired]).catch(async () => {
+    await pool.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [work.work_unit_id, expired]).catch(async () => {
       await pool.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [work.work_unit_id, expired]);
     });
     const predecessorBefore = await pool.query('SELECT state,claim_execution_id,claim_owner,claim_fence,claim_expires_at,fence FROM vnext_work_units WHERE work_unit_id=$1', [work.work_unit_id]);
