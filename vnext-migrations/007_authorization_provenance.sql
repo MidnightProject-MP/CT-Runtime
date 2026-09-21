@@ -14,7 +14,15 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $vnext$
 BEGIN
-  IF NEW.authorization_decision_ref IS NULL OR btrim(NEW.authorization_decision_ref) = '' THEN
+  -- Rows that predate A8 may remain NULL while being retired or recovered.
+  -- Once a legacy row receives a reference, the normal non-empty invariant applies.
+  IF NEW.authorization_decision_ref IS NULL THEN
+    IF TG_OP = 'UPDATE' AND OLD.authorization_decision_ref IS NULL THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'vNext Execution requires an authorization decision reference';
+  END IF;
+  IF btrim(NEW.authorization_decision_ref) = '' THEN
     RAISE EXCEPTION 'vNext Execution requires an authorization decision reference';
   END IF;
   RETURN NEW;
