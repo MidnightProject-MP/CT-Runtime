@@ -4,7 +4,7 @@ import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
 import { claimWorkUnit, createExecution, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
 
 function executionPair() {
-  const workUnit = createWorkUnit({ workUnitId: 'wu-fence', objectiveRef: 'objective-fence', createdAt: '2026-09-16T12:00:00.000Z' });
+  const workUnit = createWorkUnit({ workUnitId: 'wu-fence', objectiveRef: 'objective-fence', projectId: 'project-fence', createdAt: '2026-09-16T12:00:00.000Z' });
   const firstClaim = claimWorkUnit(workUnit, {
     executionId: 'exec-1', owner: 'owner-1',
     claimExpiresAt: '2026-09-16T12:00:01.000Z',

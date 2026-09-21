@@ -13,11 +13,12 @@ const connectionString = process.env.TEST_DATABASE_URL;
 async function setup(pool, suffix) {
   await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
   const workUnitId = `wu-neon-${suffix}`;
-  await createNeonStore({ pool }).createWorkUnit(createWorkUnit({ workUnitId, objectiveRef: `objective-neon-${suffix}` }));
+  await createNeonStore({ pool }).createWorkUnit(createWorkUnit({ workUnitId, objectiveRef: `objective-neon-${suffix}`, projectId: `project-neon-${suffix}` }));
   return workUnitId;
 }
 
 async function cleanup(pool, workUnitId) {
+  await pool.query('DELETE FROM vnext_project_mutation_authority WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_evidence_refs WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_executions WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
@@ -30,10 +31,11 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const workUnitId = `wu-neon-${suffix}`;
   const objectiveRef = `objective-neon-${suffix}`;
+  const projectId = `project-neon-${suffix}`;
 
   try {
     await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
-    await store.createWorkUnit(createWorkUnit({ workUnitId, objectiveRef }));
+    await store.createWorkUnit(createWorkUnit({ workUnitId, objectiveRef, projectId }));
 
     const executions = [];
     const first = await runOuterLoop({
@@ -55,6 +57,7 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
     assert.equal(persisted.state, 'waiting');
     assert.equal(persisted.claim, null);
     assert.equal(persisted.fence, 1);
+    assert.equal(persisted.project_id, projectId);
 
     const second = await runOuterLoop({
       wake: { type: 'external.changed', event_id: `external-${suffix}`, work_unit_id: workUnitId },
@@ -82,10 +85,10 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
     assert.equal(finalWork.fence, 2);
     assert.equal(finalWork.last_execution_id, executions[1]);
 
-    const rows = await pool.query('SELECT execution_id,state,fence FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
+    const rows = await pool.query('SELECT execution_id,state,fence,project_id FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
     assert.deepEqual(rows.rows, [
-      { execution_id: executions[0], state: 'succeeded', fence: '1' },
-      { execution_id: executions[1], state: 'succeeded', fence: '2' },
+      { execution_id: executions[0], state: 'succeeded', fence: '1', project_id: projectId },
+      { execution_id: executions[1], state: 'succeeded', fence: '2', project_id: projectId },
     ]);
   } finally {
     await cleanup(pool, workUnitId);
@@ -135,10 +138,28 @@ test('Neon rejects stale settlement and preserves a newer claim', { skip: !conne
     const claimed = claimWorkUnit(original, { executionId: `exec-stale-${suffix}`, owner: 'owner-a' });
     const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
     const begun = await store.beginExecution(claimed, execution);
-    await pool.query(`UPDATE vnext_work_units SET fence=fence+1,claim_execution_id=$2,claim_owner=$3,claim_fence=fence+1 WHERE work_unit_id=$1`, [workUnitId, `exec-new-${suffix}`, 'owner-b']);
+
+    const expired = new Date(Date.now() - 1000).toISOString();
+    await pool.query('BEGIN');
+    try {
+      await pool.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE project_id=$1', [original.project_id, expired]);
+      await pool.query('UPDATE vnext_executions SET claim_expires_at=$2 WHERE execution_id=$1', [execution.execution_id, expired]);
+      await pool.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [workUnitId, expired]);
+      await pool.query('COMMIT');
+    } catch (error) {
+      await pool.query('ROLLBACK').catch(() => {});
+      throw error;
+    }
+
+    const successorSeed = { ...begun.workUnit, state: 'actionable', claim: null, claim_expires_at: null };
+    const successor = claimWorkUnit(successorSeed, { executionId: `exec-new-${suffix}`, owner: 'owner-b' });
+    const successorExecution = startExecution(createExecution(successor, { executionId: successor.claim.execution_id, owner: 'owner-b' }));
+    await store.beginExecution(successor, successorExecution);
+
     const staleResult = { workUnit: begun.workUnit, execution: { ...begun.execution, state: 'failed', finished_at: new Date().toISOString() }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } };
     await assert.rejects(() => store.persistFailure(staleResult), /fencing conflict/);
     const row = (await pool.query('SELECT fence,claim_execution_id,claim_owner,state FROM vnext_work_units WHERE work_unit_id=$1', [workUnitId])).rows[0];
+    assert.equal(row.fence, '2');
     assert.equal(row.claim_execution_id, `exec-new-${suffix}`);
     assert.equal(row.claim_owner, 'owner-b');
     assert.equal(row.state, 'actionable');
@@ -168,6 +189,38 @@ test('Neon settlement rolls back all mutations when Work Unit transition fails',
     assert.deepEqual(state.rows[0], { state: 'actionable', claim_execution_id: execution.execution_id, execution_state: 'running' });
     assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId])).rows[0].count, 0);
   } finally {
+    await cleanup(pool, workUnitId);
+    await pool.end();
+  }
+});
+
+test('PostgreSQL rejects direct authority for a settled and unclaimed execution', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 5 });
+  const store = createNeonStore({ pool });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const workUnitId = await setup(pool, `orphan-${suffix}`);
+  const projectId = `project-neon-orphan-${suffix}`;
+  try {
+    const original = await store.reconstruct({ work_unit_id: workUnitId });
+    const claimed = claimWorkUnit(original, { executionId: `exec-orphan-${suffix}`, owner: 'owner-a' });
+    const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
+    await store.beginExecution(claimed, execution);
+
+    await pool.query('BEGIN');
+    await pool.query("UPDATE vnext_executions SET state='succeeded',finished_at=clock_timestamp() WHERE execution_id=$1", [execution.execution_id]);
+    await pool.query("UPDATE vnext_work_units SET state='waiting',claim_execution_id=NULL,claim_owner=NULL,claim_fence=NULL,claim_expires_at=NULL WHERE work_unit_id=$1", [workUnitId]);
+    await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId]);
+    await pool.query('COMMIT');
+
+    await assert.rejects(
+      () => pool.query(
+        'INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at) VALUES ($1,$2,$3,$4,$5,$6)',
+        [original.project_id, workUnitId, execution.execution_id, execution.fence, execution.owner, execution.claim_expires_at],
+      ),
+      /current active claim|project mutation authority/i,
+    );
+  } finally {
+    await pool.query('ROLLBACK').catch(() => {});
     await cleanup(pool, workUnitId);
     await pool.end();
   }
