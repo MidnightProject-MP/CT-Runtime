@@ -8,6 +8,33 @@ The migration is deliberately fail-closed. It adds the columns first, then abort
 
 For a database that already contains vNext rows, the historical backfill is a **two-phase upgrade** because migration 006 owns creation of the new columns:
 
+### Ownership precondition: reconcile existing executions
+
+Before either phase, stop admission through every pre-upgrade writer and inspect
+all existing claims and active executions. Do not allow those writers to resume
+between preparation and migration. These queries must return no rows before
+migration 006 can commit:
+
+```sql
+SELECT work_unit_id, claim_execution_id, claim_expires_at
+FROM public.vnext_work_units WHERE claim_execution_id IS NOT NULL;
+
+SELECT execution_id, work_unit_id, state
+FROM public.vnext_executions WHERE state IN ('created', 'running');
+```
+
+For each result, inspect the authoritative worker/effect state and use the
+existing legitimate settlement or reconciliation procedure. Do not clear claims
+or mark executions finished merely to satisfy the migration. An expired lease
+alone does not prove an external worker stopped. If the outcome cannot be
+reconciled, the upgrade remains blocked.
+
+Migration 006 independently rejects any remaining claim or active Execution,
+including expired claims and active Executions without a claim. It intentionally
+does not silently adopt, discard, or choose among historical owners. After this
+precondition holds, the empty authority table represents the verified absence of
+active ownership. Only upgraded writers may resume after the migration.
+
 ### Phase 1: add nullable columns and backfill historical rows
 
 Run this preparation manually, or as an equivalent controlled preflight migration, **before** applying `006_project_mutation_authority.sql`:
