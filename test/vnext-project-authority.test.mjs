@@ -13,6 +13,20 @@ function claimedExecution(workUnit, executionId, owner, now = new Date('2026-09-
   return { claimed, execution: startExecution(createExecution(claimed, { executionId, owner, startedAt: now.toISOString() })) };
 }
 
+test('memory acquisition requires a verifier to bind authorization scope to the Execution', async () => {
+  const work = createWorkUnit({ workUnitId: 'wu-auth-scope', objectiveRef: 'objective-auth-scope', projectId: 'project-auth-scope' });
+  const claimed = claimedExecution(work, 'exec-auth-scope', 'owner-a');
+  const store = createMemoryStore({
+    workUnits: [work],
+    authorizationVerifier: async (decision, { execution }) => decision.scope?.project_id === execution.project_id,
+  });
+  await assert.rejects(
+    () => store.beginExecution(claimed.claimed, claimed.execution, { ref: claimed.execution.authorization_decision_ref, scope: { project_id: 'wrong-project' } }),
+    /authorization decision is not valid/,
+  );
+  assert.equal(store.snapshot().executions.length, 0);
+});
+
 test('memory store grants at most one current mutation authority per project and releases it on settlement', async () => {
   const firstWork = createWorkUnit({ workUnitId: 'wu-project-a', objectiveRef: 'objective-a', projectId: 'project-shared' });
   const secondWork = createWorkUnit({ workUnitId: 'wu-project-b', objectiveRef: 'objective-b', projectId: 'project-shared' });
