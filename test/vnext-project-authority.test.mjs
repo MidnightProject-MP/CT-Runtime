@@ -79,7 +79,7 @@ test('memory reconstruction preserves an expired pre-A8 claim and permits an ind
     now: new Date('2026-09-16T12:00:00.000Z'),
     claimExpiresAt: '2026-09-16T11:59:59.000Z',
   });
-  const legacyExecution = createExecution(legacyClaimed, {
+  const legacyExecution = createExecutionCore(legacyClaimed, {
     executionId: 'exec-legacy-recovery',
     owner: 'legacy-owner',
     authorizationDecisionRef: null,
