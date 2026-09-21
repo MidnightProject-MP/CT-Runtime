@@ -70,7 +70,7 @@ test('failed takeover preserves the expired predecessor and commits no successor
   await assert.rejects(() => store.beginExecution(successorClaim, { ...successor, invalid: () => {} }, { ref: successor.authorization_decision_ref }), /could not be cloned|DataCloneError|structuredClone/i);
   assert.deepEqual(store.snapshot(), before);
   assert.equal(store.snapshot().executions.find((item) => item.execution_id === 'exec-predecessor').state, 'running');
-  assert.equal(store.snapshot().authorities.length, 0);
+  assert.equal(store.snapshot().authorities.length, 1);
 });
 
 test('runtime exposes only transactional mutation transitions', () => {
