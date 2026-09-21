@@ -82,7 +82,7 @@ test('A8 preserves a pre-migration NULL authorization reference during legacy re
     await pool.query(await readFile(new URL('../vnext-migrations/006_project_mutation_authority.sql', import.meta.url), 'utf8'));
     await pool.query("INSERT INTO vnext_work_units(work_unit_id,objective_ref,project_id,state,fence,claim_execution_id,claim_owner,claim_fence,claim_expires_at) VALUES ('legacy-wu','objective','legacy-project','actionable',1,'legacy-exec','legacy-owner',1,'2000-01-01')");
     await pool.query("INSERT INTO vnext_executions(execution_id,work_unit_id,project_id,owner,fence,state,started_at,claim_expires_at) VALUES ('legacy-exec','legacy-wu','legacy-project','legacy-owner',1,'expired',clock_timestamp(),'2000-01-01')");
-    await pool.query(await readFile(new URL('../vnext-migrations/007-authorization-provenance.sql', import.meta.url), 'utf8'));
+    await pool.query(await readFile(new URL('../vnext-migrations/007_authorization_provenance.sql', import.meta.url), 'utf8'));
     await pool.query("UPDATE vnext_executions SET finished_at=clock_timestamp() WHERE execution_id='legacy-exec'");
     assert.equal((await pool.query("SELECT authorization_decision_ref FROM vnext_executions WHERE execution_id='legacy-exec'")).rows[0].authorization_decision_ref, null);
   } finally {
