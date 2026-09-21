@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
 
-const createNeonStore = (options = {}) => createNeonStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
+const createNeonStore = (options = {}) => createNeonStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
 const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
