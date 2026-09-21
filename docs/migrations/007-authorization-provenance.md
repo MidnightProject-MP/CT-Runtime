@@ -15,6 +15,8 @@ Authorization belongs to the Execution, not permanently to the Work Unit. A succ
 ## Database enforcement
 
 - New Execution writes require a non-empty authorization decision reference.
+- A non-NULL Execution authorization reference is immutable for the lifetime of that Execution.
+- A historical pre-A8 NULL may remain NULL during retirement/recovery, or be populated once during explicit recovery; once populated, it is immutable.
 - Project mutation authority must carry the same reference as its Execution.
 - Continuation and evidence rows retain their existing Work Unit and Execution identities, but PostgreSQL additionally enforces that the pair names the same Execution/Work Unit relationship.
 - Existing historical Executions may remain NULL because they predate this invariant; new and updated Executions are fail-closed.
@@ -28,6 +30,8 @@ A8 is not closed until tests demonstrate:
 3. a successor Execution can carry a different decision reference;
 4. a forged authority reference cannot diverge from its Execution;
 5. continuation/evidence cannot pair one Work Unit with another Work Unit's Execution;
-6. reconstruction and recovery preserve the per-Execution authorization reference.
+6. reconstruction and recovery preserve the per-Execution authorization reference;
+7. an established authorization reference cannot be rewritten during an active authority lifecycle or after settlement;
+8. reconstruction of an expired pre-A8 NULL claim preserves the historical row without reconstructing mutation authority, and an independently authorized successor can acquire the next fence.
 
 Thread/conversation identity remains a deferred vertical-slice dependency and is not introduced into the Stage-2 kernel by this migration.
