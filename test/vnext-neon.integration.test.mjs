@@ -1,12 +1,17 @@
 import test from 'node:test';
+import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+
+const createNeonStore = (options = {}) => createNeonStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
+const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
+const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
-import { claimWorkUnit, createExecution, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
-import { createNeonStore } from '../lib/vnext/neon-store.mjs';
-import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
+import { claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
+import { createNeonStore as createNeonStoreCore } from '../lib/vnext/neon-store.mjs';
+import { runOuterLoop as runOuterLoopCore } from '../lib/vnext/outer-loop.mjs';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 
@@ -85,10 +90,10 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
     assert.equal(finalWork.fence, 2);
     assert.equal(finalWork.last_execution_id, executions[1]);
 
-    const rows = await pool.query('SELECT execution_id,state,fence,project_id FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
+    const rows = await pool.query('SELECT execution_id,state,fence,project_id,authorization_decision_ref FROM vnext_executions WHERE work_unit_id=$1 ORDER BY fence', [workUnitId]);
     assert.deepEqual(rows.rows, [
-      { execution_id: executions[0], state: 'succeeded', fence: '1', project_id: projectId },
-      { execution_id: executions[1], state: 'succeeded', fence: '2', project_id: projectId },
+      { execution_id: executions[0], state: 'succeeded', fence: '1', project_id: projectId, authorization_decision_ref: `test-auth:${executions[0]}` },
+      { execution_id: executions[1], state: 'succeeded', fence: '2', project_id: projectId, authorization_decision_ref: `test-auth:${executions[1]}` },
     ]);
   } finally {
     await cleanup(pool, workUnitId);
@@ -214,8 +219,8 @@ test('PostgreSQL rejects direct authority for a settled and unclaimed execution'
 
     await assert.rejects(
       () => pool.query(
-        'INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at) VALUES ($1,$2,$3,$4,$5,$6)',
-        [original.project_id, workUnitId, execution.execution_id, execution.fence, execution.owner, execution.claim_expires_at],
+        'INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at,authorization_decision_ref) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [original.project_id, workUnitId, execution.execution_id, execution.fence, execution.owner, execution.claim_expires_at, execution.authorization_decision_ref],
       ),
       /current active claim|project mutation authority/i,
     );

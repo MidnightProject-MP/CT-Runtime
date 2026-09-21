@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import path from 'node:path';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
-import { claimWorkUnit, createExecution, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
-import { createNeonStore } from '../lib/vnext/neon-store.mjs';
+import { claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
+import { createNeonStore as createNeonStoreCore } from '../lib/vnext/neon-store.mjs';
+import { testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+
+const createNeonStore = (options = {}) => createNeonStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
+const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 
 const connectionString = process.env.TEST_DATABASE_URL;
 
@@ -34,7 +38,7 @@ test('Neon rejects an execution forged onto another Work Unit at the persistence
     await first.store.createWorkUnit(second);
     const claimed = claimWorkUnit(first.workUnit, { executionId: `exec-binding-${Date.now()}`, owner: 'owner-a' });
     const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: claimed.claim.owner }));
-    const begun = await first.store.beginExecution(claimed, execution);
+    const begun = await first.store.beginExecution(claimed, execution, { ref: execution.authorization_decision_ref });
     const forged = { ...begun.execution, work_unit_id: second.work_unit_id };
 
     await assert.rejects(() => first.store.persistTurn({
