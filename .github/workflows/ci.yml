@@ -85,4 +85,6 @@ jobs:
           TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-neon.integration.test.mjs
           TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-feedback-evaluation.integration.test.mjs
           TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-project-authority-owner.integration.test.mjs
+          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-project-authority.integration.test.mjs
+          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-project-authority-upgrade.integration.test.mjs
       - run: npm audit --audit-level=high
