@@ -7,7 +7,7 @@ ALTER TABLE public.vnext_work_units
 ALTER TABLE public.vnext_executions
   ADD COLUMN IF NOT EXISTS project_id text;
 
-DO $
+DO $vnext$
 BEGIN
   -- Do not introduce an empty authority table over unresolved ownership.
   -- Operators must reconcile/drain existing workers before this upgrade;
@@ -38,7 +38,7 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'vNext migration requires every execution to reference an existing work unit';
   END IF;
-END $$;
+END $vnext$;
 
 -- The fail-closed checks above establish the precondition for making project
 -- identity a schema-level invariant. Direct SQL cannot create NULL identities.
