@@ -6,7 +6,7 @@ const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
 import { createMemoryStore as createMemoryStoreCore } from '../lib/vnext/memory-store.mjs';
-import { applyTurn, claimWorkUnit, createExecution, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
+import { applyTurn, claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
 
 function claimedExecution(workUnit, executionId, owner, now = new Date('2026-09-16T12:00:00.000Z'), claimExpiresAt = '2099-09-16T12:00:00.000Z') {
   const claimed = claimWorkUnit(workUnit, { executionId, owner, now, claimExpiresAt });
