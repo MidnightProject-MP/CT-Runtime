@@ -1,15 +1,14 @@
 import test from 'node:test';
-import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
-
-const createMemoryStore = (options = {}) => createMemoryStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
-const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
-const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import path from 'node:path';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 import { claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
-import { createNeonStore } from '../lib/vnext/neon-store.mjs';
+import { createNeonStore as createNeonStoreCore } from '../lib/vnext/neon-store.mjs';
+import { testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+
+const createNeonStore = (options = {}) => createNeonStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
+const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 
 const connectionString = process.env.TEST_DATABASE_URL;
 
