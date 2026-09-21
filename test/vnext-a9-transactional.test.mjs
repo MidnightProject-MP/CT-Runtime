@@ -79,3 +79,32 @@ test('runtime exposes only transactional mutation transitions', () => {
     assert.equal(method in store, false, method);
   }
 });
+
+test('memory acquisition serializes overlapping transitions and admits only one successor', async () => {
+  const work = createWorkUnit({ workUnitId: 'wu-concurrent-acquire', objectiveRef: 'objective', projectId: 'project' });
+  let releaseVerifier;
+  const verifierGate = new Promise((resolve) => { releaseVerifier = resolve; });
+  let verifierCalls = 0;
+  const store = createMemoryStore({
+    authorizationVerifier: async (decision, context) => {
+      verifierCalls += 1;
+      if (verifierCalls === 1) await verifierGate;
+      return decision?.ref === context.execution.authorization_decision_ref;
+    },
+    workUnits: [work],
+  });
+  const claimA = claimWorkUnit(work, { executionId: 'exec-concurrent-a', owner: 'owner-a' });
+  const executionA = startExecution(createExecution(claimA, { executionId: claimA.claim.execution_id, owner: claimA.claim.owner, authorizationDecisionRef: 'test-auth:exec-concurrent-a' }));
+  const claimB = claimWorkUnit(work, { executionId: 'exec-concurrent-b', owner: 'owner-b' });
+  const executionB = startExecution(createExecution(claimB, { executionId: claimB.claim.execution_id, owner: claimB.claim.owner, authorizationDecisionRef: 'test-auth:exec-concurrent-b' }));
+  const first = store.beginExecution(claimA, executionA, { ref: executionA.authorization_decision_ref });
+  const second = store.beginExecution(claimB, executionB, { ref: executionB.authorization_decision_ref });
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseVerifier();
+  await first;
+  await assert.rejects(second, /E_PROJECT_AUTH_HELD|Work Unit changed before execution could be claimed/);
+  const snapshot = store.snapshot();
+  assert.equal(snapshot.authorities.length, 1);
+  assert.equal(snapshot.authorities[0].execution_id, 'exec-concurrent-a');
+  assert.deepEqual(snapshot.executions.map((item) => item.execution_id), ['exec-concurrent-a']);
+});
