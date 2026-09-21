@@ -15,7 +15,13 @@ LANGUAGE plpgsql
 AS $vnext$
 BEGIN
   -- Rows that predate A8 may remain NULL while being retired or recovered.
-  -- Once a legacy row receives a reference, the normal non-empty invariant applies.
+  -- A historical NULL may stay NULL, or receive its first reference during
+  -- explicit recovery. Once a reference exists, it is immutable forever.
+  IF TG_OP = 'UPDATE'
+     AND OLD.authorization_decision_ref IS NOT NULL
+     AND NEW.authorization_decision_ref IS DISTINCT FROM OLD.authorization_decision_ref THEN
+    RAISE EXCEPTION 'vNext Execution authorization decision reference is immutable once established';
+  END IF;
   IF NEW.authorization_decision_ref IS NULL THEN
     IF TG_OP = 'UPDATE' AND OLD.authorization_decision_ref IS NULL THEN
       RETURN NEW;
