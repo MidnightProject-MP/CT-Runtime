@@ -71,6 +71,54 @@ test('memory store reconstructs project authority from an active Work Unit claim
   assert.deepEqual(reconstructed.snapshot().authorities, snapshot.authorities);
 });
 
+test('memory reconstruction preserves an expired pre-A8 claim and permits an independently authorized successor', async () => {
+  const work = createWorkUnit({ workUnitId: 'wu-legacy-recovery', objectiveRef: 'objective-legacy-recovery', projectId: 'project-legacy-recovery' });
+  const legacyClaimed = claimWorkUnit(work, {
+    executionId: 'exec-legacy-recovery',
+    owner: 'legacy-owner',
+    now: new Date('2026-09-16T12:00:00.000Z'),
+    claimExpiresAt: '2026-09-16T11:59:59.000Z',
+  });
+  const legacyExecution = createExecution(legacyClaimed, {
+    executionId: 'exec-legacy-recovery',
+    owner: 'legacy-owner',
+    authorizationDecisionRef: null,
+  });
+  const legacy = { ...legacyExecution, state: 'expired', finished_at: '2026-09-16T12:00:01.000Z' };
+
+  const reconstructed = createMemoryStore({
+    workUnits: [legacyClaimed],
+    executions: [legacy],
+  });
+  assert.deepEqual(reconstructed.snapshot().authorities, []);
+
+  const successorClaimed = claimWorkUnit(legacyClaimed, {
+    executionId: 'exec-legacy-successor',
+    owner: 'successor-owner',
+    now: new Date('2026-09-16T12:00:02.000Z'),
+    claimExpiresAt: '2099-09-16T12:05:00.000Z',
+  });
+  const successor = startExecution(createExecution(successorClaimed, {
+    executionId: 'exec-legacy-successor',
+    owner: 'successor-owner',
+    authorizationDecisionRef: 'test-auth:exec-legacy-successor',
+  }));
+
+  await reconstructed.beginExecution(successorClaimed, successor, { ref: successor.authorization_decision_ref });
+  const snapshot = reconstructed.snapshot();
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-legacy-recovery').authorization_decision_ref, null);
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-legacy-successor').authorization_decision_ref, 'test-auth:exec-legacy-successor');
+  assert.deepEqual(snapshot.authorities, [{
+    project_id: 'project-legacy-recovery',
+    work_unit_id: 'wu-legacy-recovery',
+    execution_id: 'exec-legacy-successor',
+    fence: 2,
+    owner: 'successor-owner',
+    claim_expires_at: successor.claim_expires_at,
+    authorization_decision_ref: successor.authorization_decision_ref,
+  }]);
+});
+
 test('memory store rejects reconstructed authority when execution claim expiry diverges from Work Unit claim', () => {
   const work = createWorkUnit({ workUnitId: 'wu-reconstruct-expiry', objectiveRef: 'objective-reconstruct-expiry', projectId: 'project-reconstruct-expiry' });
   const first = claimedExecution(work, 'exec-reconstruct-expiry', 'owner-a');
