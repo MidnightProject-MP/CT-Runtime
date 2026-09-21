@@ -1,11 +1,6 @@
 import test from 'node:test';
-import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
-
-const createMemoryStore = (options = {}) => createMemoryStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
-const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
-const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
-import { createMemoryStore as createMemoryStoreCore } from '../lib/vnext/memory-store.mjs';
+import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
 import { applyTurn, claimWorkUnit, createExecution, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
 
 function claimedExecution(workUnit, executionId, owner, now = new Date('2026-09-16T12:00:00.000Z'), claimExpiresAt = '2099-09-16T12:00:00.000Z') {
@@ -18,10 +13,10 @@ test('memory store grants at most one current mutation authority per project and
   const secondWork = createWorkUnit({ workUnitId: 'wu-project-b', objectiveRef: 'objective-b', projectId: 'project-shared' });
   const store = createMemoryStore({ workUnits: [firstWork, secondWork] });
   const first = claimedExecution(firstWork, 'exec-project-a', 'owner-a');
-  await store.beginExecution(first.claimed, first.execution, { ref: first.execution.authorization_decision_ref });
+  await store.beginExecution(first.claimed, first.execution);
 
   const second = claimedExecution(secondWork, 'exec-project-b', 'owner-b');
-  await assert.rejects(() => store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref }), /E_PROJECT_AUTH_HELD|project mutation authority is already held/);
+  await assert.rejects(() => store.beginExecution(second.claimed, second.execution), /E_PROJECT_AUTH_HELD|project mutation authority is already held/);
 
   const settled = applyTurn(first.claimed, first.execution, {
     disposition: 'waiting',
@@ -30,7 +25,7 @@ test('memory store grants at most one current mutation authority per project and
   await store.persistTurn(settled);
   assert.deepEqual(store.snapshot().authorities, []);
 
-  await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
+  await store.beginExecution(second.claimed, second.execution);
   assert.deepEqual(store.snapshot().authorities, [{
     project_id: 'project-shared',
     work_unit_id: 'wu-project-b',
@@ -38,7 +33,6 @@ test('memory store grants at most one current mutation authority per project and
     fence: 1,
     owner: 'owner-b',
     claim_expires_at: second.execution.claim_expires_at,
-    authorization_decision_ref: second.execution.authorization_decision_ref,
   }]);
 });
 
@@ -116,10 +110,10 @@ test('expired project authority is revoked before another Work Unit acquires the
   const store = createMemoryStore({ workUnits: [firstWork, secondWork] });
   const expiredAt = '2026-09-16T11:59:59.000Z';
   const first = claimedExecution(firstWork, 'exec-expired-a', 'owner-a', new Date('2026-09-16T12:00:00.000Z'), expiredAt);
-  await store.beginExecution(first.claimed, first.execution, { ref: first.execution.authorization_decision_ref });
+  await store.beginExecution(first.claimed, first.execution);
 
   const second = claimedExecution(secondWork, 'exec-expired-b', 'owner-b', new Date('2026-09-16T12:00:02.000Z'), '2099-09-16T12:01:00.000Z');
-  await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
+  await store.beginExecution(second.claimed, second.execution);
 
   const snapshot = store.snapshot();
   assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-expired-a').state, 'expired');
@@ -131,7 +125,6 @@ test('expired project authority is revoked before another Work Unit acquires the
     fence: 1,
     owner: 'owner-b',
     claim_expires_at: second.execution.claim_expires_at,
-    authorization_decision_ref: second.execution.authorization_decision_ref,
   }]);
 });
 
@@ -140,9 +133,9 @@ test('memory acquisition rejects a consistently forged project without changing 
   const second = createWorkUnit({ workUnitId: 'binding-b', objectiveRef: 'objective-b', projectId: 'project-a' });
   const store = createMemoryStore({ workUnits: [first, second] });
   const active = claimedExecution(first, 'binding-active', 'owner-a');
-  await store.beginExecution(active.claimed, active.execution, { ref: active.execution.authorization_decision_ref });
+  await store.beginExecution(active.claimed, active.execution);
   const before = store.snapshot();
   const forged = claimedExecution({ ...second, project_id: 'project-b' }, 'binding-forged', 'owner-b');
-  await assert.rejects(() => store.beginExecution(forged.claimed, forged.execution, { ref: forged.execution.authorization_decision_ref }), /different stored project/);
+  await assert.rejects(() => store.beginExecution(forged.claimed, forged.execution), /different stored project/);
   assert.deepEqual(store.snapshot(), before);
 });
