@@ -18,7 +18,7 @@ test('A9 admission requires the complete transactional contract and launches no 
       store,
       authorizeExecution: authorize,
       executor: async () => { launched = true; return { objective_id: 'objective', disposition: 'continue', summary: 'must not run', continuation: { mode: 'immediate' } }; },
-    }), missing === 'beginExecution' ? /durable beginExecution support/ : new RegExp(`transactional store requires ${missing}`));
+    }), new RegExp(`transactional store requires ${missing}`));
     assert.equal(launched, false);
     assert.equal(base.snapshot().executions.length, 0);
   }
