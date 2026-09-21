@@ -127,3 +127,16 @@ test('expired project authority is revoked before another Work Unit acquires the
     claim_expires_at: second.execution.claim_expires_at,
   }]);
 });
+
+
+test('memory acquisition rejects a consistently forged project without changing durable state', async () => {
+  const first = createWorkUnit({ workUnitId: 'binding-a', objectiveRef: 'objective-a', projectId: 'project-a' });
+  const second = createWorkUnit({ workUnitId: 'binding-b', objectiveRef: 'objective-b', projectId: 'project-a' });
+  const store = createMemoryStore({ workUnits: [first, second] });
+  const active = claimedExecution(first, 'binding-active', 'owner-a');
+  await store.beginExecution(active.claimed, active.execution);
+  const before = store.snapshot();
+  const forged = claimedExecution({ ...second, project_id: 'project-b' }, 'binding-forged', 'owner-b');
+  await assert.rejects(() => store.beginExecution(forged.claimed, forged.execution), /different stored project/);
+  assert.deepEqual(store.snapshot(), before);
+});
