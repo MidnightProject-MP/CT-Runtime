@@ -243,6 +243,37 @@ test('Neon acquisition rejects a consistently forged project and failure settlem
   }
 });
 
+
+test('Neon rejects continuation and evidence references that pair one Work Unit with another Execution', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 5 });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const projectA = `project-provenance-a-${suffix}`;
+  const projectB = `project-provenance-b-${suffix}`;
+  const first = createWorkUnit({ workUnitId: `wu-provenance-a-${suffix}`, objectiveRef: 'objective-a', projectId: projectA });
+  const second = createWorkUnit({ workUnitId: `wu-provenance-b-${suffix}`, objectiveRef: 'objective-b', projectId: projectB });
+  const store = createNeonStore({ pool });
+  try {
+    await migrateVNext({ pool });
+    await store.createWorkUnit(first);
+    await store.createWorkUnit(second);
+    const claim = claimWorkUnit(first, { executionId: `exec-provenance-${suffix}`, owner: 'owner-a' });
+    const execution = startExecution(createExecution(claim, { executionId: claim.claim.execution_id, owner: claim.claim.owner }));
+    await store.beginExecution(claim, execution);
+
+    await assert.rejects(
+      () => pool.query('INSERT INTO vnext_continuations(work_unit_id,execution_id,continuation) VALUES ($1,$2,$3::jsonb)', [second.work_unit_id, execution.execution_id, JSON.stringify({ forged: true })]),
+      /foreign key|violates/i,
+    );
+    await assert.rejects(
+      () => pool.query('INSERT INTO vnext_evidence_refs(work_unit_id,execution_id,evidence) VALUES ($1,$2,$3::jsonb)', [second.work_unit_id, execution.execution_id, JSON.stringify({ forged: true })]),
+      /foreign key|violates/i,
+    );
+  } finally {
+    await cleanup(pool, [first.work_unit_id, second.work_unit_id], [projectA, projectB]);
+    await pool.end();
+  }
+});
+
 for (const settlement of ['turn', 'failure']) {
   test(`Neon cross-WU takeover does not deadlock with expired-holder ${settlement}`, { skip: !connectionString, timeout: 30000 }, async () => {
     const pool = new Pool({ connectionString, max: 6 });
