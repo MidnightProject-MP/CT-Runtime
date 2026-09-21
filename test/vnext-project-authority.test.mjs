@@ -128,7 +128,6 @@ test('expired project authority is revoked before another Work Unit acquires the
   }]);
 });
 
-
 test('memory acquisition rejects a consistently forged project without changing durable state', async () => {
   const first = createWorkUnit({ workUnitId: 'binding-a', objectiveRef: 'objective-a', projectId: 'project-a' });
   const second = createWorkUnit({ workUnitId: 'binding-b', objectiveRef: 'objective-b', projectId: 'project-a' });
