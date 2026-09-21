@@ -219,8 +219,8 @@ test('PostgreSQL rejects direct authority for a settled and unclaimed execution'
 
     await assert.rejects(
       () => pool.query(
-        'INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at) VALUES ($1,$2,$3,$4,$5,$6)',
-        [original.project_id, workUnitId, execution.execution_id, execution.fence, execution.owner, execution.claim_expires_at],
+        'INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at,authorization_decision_ref) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [original.project_id, workUnitId, execution.execution_id, execution.fence, execution.owner, execution.claim_expires_at, execution.authorization_decision_ref],
       ),
       /current active claim|project mutation authority/i,
     );
