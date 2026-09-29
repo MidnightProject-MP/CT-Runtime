@@ -28,7 +28,7 @@ test('email intake → durable execution → fenced reply, retries and thread co
     await writeFile(path.join(dir,'identity.md'),'Reconstruct, execute and check.');
     const email=createEmailPilot(config);fixture.add('m1');
     // Crash after pilot submission but before email receipt INSERT.
-    const interrupted=createEmailPilot({...config,pool:{...pool,query:async(sql,args)=>{if(sql.startsWith('INSERT INTO vnext_email_receipts'))throw new Error('injected crash');return pool.query(sql,args);}}});
+    const interrupted=createEmailPilot({...config,pool:{connect:()=>pool.connect(),query:async(sql,args)=>{if(sql.startsWith('INSERT INTO vnext_email_receipts'))throw new Error('injected crash');return pool.query(sql,args);}}});
     await assert.rejects(interrupted.poll(transport),/injected crash/);
     assert.ok(fixture.messages.get('m1').labelIds.includes('queue'));
     assert.equal((await email.poll(transport)).received,1);
