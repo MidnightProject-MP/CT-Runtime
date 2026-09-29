@@ -76,17 +76,18 @@ jobs:
         run: npm test
       - name: Apply migrations explicitly
         run: npm run migrate -- --database-url "$POSTGRES_URL"
-      - name: Run PostgreSQL integration suites in isolated databases
+      - name: Run native PostgreSQL integration suites in isolated databases
         run: |
-          PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE ctruntime_postgres_tests'
-          PGPASSWORD=test psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE ctruntime_observer_tests'
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/postgres.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_observer_tests node --test test/observer.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-neon.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-a9-postgres.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-pilot.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-feedback-evaluation.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-project-authority-owner.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-project-authority.integration.test.mjs
-          TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/ctruntime_postgres_tests node --test test/vnext-project-authority-upgrade.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/postgres.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/observer.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-neon.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-a9-postgres.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-pilot.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-feedback-evaluation.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-project-authority-owner.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-project-authority.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-project-authority-upgrade.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-execution-binding.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-event-rpc.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-postgres-isolation.integration.test.mjs
       - run: npm audit --audit-level=high
