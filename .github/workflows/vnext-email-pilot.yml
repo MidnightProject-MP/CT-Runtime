@@ -1,0 +1,30 @@
+name: vNext email pilot
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
+permissions: { contents: read }
+concurrency:
+  group: vnext-email-pilot
+  cancel-in-progress: false
+jobs:
+  poll:
+    if: vars.CT_EMAIL_PILOT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22.14.0' }
+      - run: npm ci
+      - run: node bin/vnext-email.mjs poll
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          CT_GAS_FEDERATION_HMAC_SECRET: ${{ secrets.CT_GAS_FEDERATION_HMAC_SECRET }}
+          CT_EMAIL_LABEL: ${{ vars.CT_EMAIL_LABEL }}
+          CT_EMAIL_PILOT_ENABLED: 'true'
+          CT_PILOT_DATABASE_URL: ${{ secrets.CT_PILOT_DATABASE_URL }}
+          CT_EMAIL_MAILBOX_ID: ${{ vars.CT_EMAIL_MAILBOX_ID }}
+          CT_EMAIL_MAILBOX_ADDRESS: ${{ vars.CT_EMAIL_MAILBOX_ADDRESS }}
+          CT_EMAIL_ALLOWED_SENDER: ${{ vars.CT_EMAIL_ALLOWED_SENDER }}
+          CT_EMAIL_PROJECT_ID: ${{ vars.CT_EMAIL_PROJECT_ID }}

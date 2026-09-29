@@ -1,4 +1,4 @@
-# Delivery — 2026-09-27
+# Delivery — 2026-09-29 (corrected Gmail integration)
 
 This is the full CT-Runtime source snapshot with the new minimum-loop pilot, not a patch-only archive. Start with `docs/VNEXT-PILOT.md`.
 
@@ -12,12 +12,13 @@ New implementation: durable pilot inbox and input watermark; atomic result/conti
 
 Core fixes made while connecting the path: do not turn uncertain settlement into an asserted failure; verify optional evidence on nonterminal turns; retain new input arriving during completion; disallow expired external-effect takeover on the pilot path.
 
-The selected human interface is the new CLI inbox/status pair. Existing GAS Feedback remains unchanged and is not connected to this new inbox by this delivery. Runtime state and credentials stay outside the repository.
+The selected human interface is the new CLI inbox/status pair. This snapshot additionally contains the Gmail pilot bridge: `vnext-migrations/009_email_pilot.sql`, `lib/vnext/email-message.mjs`, `lib/vnext/email-pilot.mjs`, `lib/vnext/gmail-transport.mjs`, `gas/gas_zzz_email.js`, and the disabled-by-default `.github/workflows/vnext-email-pilot.yml`. It reuses the existing web-app URL and federation HMAC names. Runtime state and credentials stay outside the repository.
 
 ## Verification
 
 - Node v24.19.0, Linux.
-- Full `npm test`: **360 tests; 329 pass; 0 fail; 31 skip**.
+- Full verification results are recorded in `EMAIL-VERIFICATION.md` for the corrected archive.
+- Email integration now exercises real SQL migrations, pilot execution, GAS routing and simulated Gmail delivery including uncertain sends. No live mailbox was read and no email was sent during this validation.
 - New SQL integration suite exercises actual migrations and adapter queries using PGlite/PostgreSQL WASM locally. It can run against native PostgreSQL via TEST_DATABASE_URL, and the CI workflow includes that explicit invocation.
 - Command-executor tests verify structured result delivery, no inherited runtime database credentials, timeout rejection, and ordinary descendant-process termination.
 - Separate-process disk-backed proof: first invocation continued, second invocation reconstructed the same objective and completed it under a distinct execution ID; a later invocation was quiescent. This is a deterministic fixture, not an autonomous model/project qualification.
@@ -27,5 +28,7 @@ The selected human interface is the new CLI inbox/status pair. Existing GAS Feed
 ## Remaining activation work
 
 Configure the real project and identity paths, backend model/agent and credentials, existing execution authority, project acceptance policy and durable host. Verify native DB invariants and actual legacy exclusion; then activate one qualified path and run the multi-day pilot. The scheduler and sample authority grant are deliberately inactive/unconfigured. Automatic backend-specific reconciliation of uncertain external effects is not implemented; such work is durably blocked for evidence-based reconciliation rather than blindly retried.
+
+For Gmail activation, apply migrations through 010 and follow `docs/VNEXT-EMAIL-PILOT.md` for both GAS and GitHub settings, consent, deployment and controlled acceptance. The runtime host remains a separate prerequisite. This corrected package supersedes the earlier incomplete email ZIP.
 
 Do not replace a newer checkout blindly: compare these baseline SHAs and preserve subsequent changes. Install dependencies with `npm ci`. The ZIP excludes `.git`, `node_modules`, credentials, runtime state, and test databases.
