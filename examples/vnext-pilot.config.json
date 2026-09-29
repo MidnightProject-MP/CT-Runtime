@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "legacyExcluded": false,
+  "projectId": "CT-SuperSimpleGames",
+  "workspaceRoot": "/srv/celestan/CT-SuperSimpleGames",
+  "identityFiles": ["/srv/celestan/identity/CELESTAN.md", "/srv/celestan/identity/AUTHORITY.md", "/srv/celestan/CT-SuperSimpleGames/AGENTS.md"],
+  "authorityModule": "/etc/celestan/pilot-authority.mjs",
+  "intervalMs": 60000,
+  "timeoutMs": 120000,
+  "executor": {
+    "command": "/usr/bin/node",
+    "args": ["/opt/CT-Runtime/scripts/vnext-opencode-worker.mjs", "REPLACE_WITH_EXPLICIT_MODEL", "REPLACE_WITH_EXPLICIT_AGENT"],
+    "stateDirectory": "/var/lib/celestan/pilot",
+    "envNames": []
+  }
+}
