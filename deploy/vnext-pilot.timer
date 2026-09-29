@@ -1,0 +1,8 @@
+[Unit]
+Description=Inspect durable Celestan work once per minute
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+Unit=vnext-pilot.service
+[Install]
+WantedBy=timers.target
