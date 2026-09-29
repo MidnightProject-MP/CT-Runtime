@@ -1,0 +1,7 @@
+{
+  "authorityRef": "REPLACE_WITH_EXISTING_ENTRUSTMENT_REFERENCE",
+  "projectId": "CT-SuperSimpleGames",
+  "scope": "REPLACE_WITH_ACTUAL_SCOPE_AND_TOOL_LIMITS",
+  "expiresAt": "REPLACE_WITH_UTC_EXPIRY",
+  "acceptanceModule": "/etc/celestan/supersimplegames-acceptance.mjs"
+}
