@@ -157,7 +157,7 @@ test('A9 PostgreSQL takeover rollback restores the expired predecessor and commi
     const executionBefore = await pool.query('SELECT state,claim_expires_at,fence FROM vnext_executions WHERE execution_id=$1', [predecessorExecution.execution_id]);
     const authorityBefore = await pool.query('SELECT * FROM vnext_project_mutation_authority WHERE project_id=$1', [work.project_id]);
 
-    const successorClaim = claimWorkUnit({ ...begun.workUnit, state: 'waiting', claim: null, claim_expires_at: null }, { executionId: `exec-new-${suffix}`, owner: 'new-owner' });
+    const successorClaim = claimWorkUnit({ ...begun.workUnit, state: 'actionable', claim: null, claim_expires_at: null }, { executionId: `exec-new-${suffix}`, owner: 'new-owner' });
     const successorExecution = startExecution(createExecution(successorClaim, { executionId: successorClaim.claim.execution_id, owner: successorClaim.claim.owner, authorizationDecisionRef: `test-auth:${successorClaim.claim.execution_id}` }));
     await assert.rejects(() => withInjectedFailure(pool, sql => sql.startsWith("UPDATE vnext_work_units SET state='actionable'"), wrappedPool =>
       createNeonStore({ pool: wrappedPool, authorizationVerifier: verifier }).beginExecution(successorClaim, successorExecution, authorize(successorExecution))
