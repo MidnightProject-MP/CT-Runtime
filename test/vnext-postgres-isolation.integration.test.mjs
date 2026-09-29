@@ -23,7 +23,7 @@ test('native PostgreSQL test database is isolated from another database', { skip
 
     const migration = await readFile(path.join(import.meta.dirname, '..', 'vnext-migrations', '001_outer_loop.sql'), 'utf8');
     await first.query(migration);
-    await first.query(`INSERT INTO vnext_work_units(work_unit_id,objective_ref,state,fence,claim_execution_id,claim_owner,claim_fence,claim_expires_at) VALUES ('isolated-wu','objective','actionable',1,'isolated-exec','owner',1,'2099-01-01')`);
+    await first.query(`INSERT INTO vnext_work_units(work_unit_id,objective_ref,state,fence,claim_execution_id,claim_owner,claim_fence) VALUES ('isolated-wu','objective','actionable',1,'isolated-exec' ,'owner',1)`);
     assert.equal((await first.query('SELECT count(*)::int AS count FROM vnext_work_units')).rows[0].count, 1);
     assert.equal((await second.query("SELECT to_regclass('public.vnext_work_units') AS relation")).rows[0].relation, null);
   } finally {
