@@ -11,6 +11,7 @@ import { createEmailPilot } from '../lib/vnext/email-pilot.mjs';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
 import { createGmailTransport } from '../lib/vnext/gmail-transport.mjs';
 import { runPilotOnce } from '../lib/vnext/pilot.mjs';
+import { createExecution as createExecutionCore, claimWorkUnit, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
 import { bridgeFixture } from './email-bridge-fixture.mjs';
 
 test('email intake → durable execution → fenced reply, retries and thread continuity',{timeout:60000},async()=>{
@@ -77,4 +78,86 @@ test('bridge authentication, sender/recipient checks, immutable send identity an
   let count=0;
   for(let i=0;i<2;i++){const batch=await transport('email-poll',payload);count+=batch.messages.length;for(const m of batch.messages)await transport('email-ack',{...payload,messageId:m.id});}
   assert.equal(count,15);assert.equal((await transport('email-poll',payload)).messages.length,0);
+});
+
+ 
+test('reconciliation blocks Gmail delivery at the durable admission boundary and explicit reconciliation restores it',{timeout:60000},async()=>{
+  const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-reconcile-'));
+  const fixture=bridgeFixture(),transport=createGmailTransport({url:'https://example.test/exec',secret:'test-secret',fetch:fixture.fetch});
+  const projectId='email-reconcile-'+randomUUID(),mailboxId='reconcile-mailbox';
+  const config={pool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'};
+  const authority={authorizeExecution:async({execution})=>({ref:'test:'+execution.execution_id}),verifyExecution:async(d,{execution})=>d.ref==='test:'+execution.execution_id,authorizeTerminal:async()=>true};
+  const store=createPilotStore({pool,authorizationVerifier:authority.verifyExecution});
+  const run=executor=>runPilotOnce({store,projectId,workspaceRoot:dir,identityFiles:[path.join(dir,'identity.md')],authority,executor});
+  try {
+    await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
+    await writeFile(path.join(dir,'identity.md'),'Reconstruct, execute and check.');
+    const email=createEmailPilot(config);
+    await email.configure();
+    fixture.add('r1');
+    await email.poll(transport);
+    await run(async({workUnit})=>({objective_id:workUnit.objective_ref,disposition:'waiting',summary:'Prepared a reply.',continuation:{mode:'condition',condition:{kind:'human',condition:'Reply arrives.'}}}));
+    await email.queueResults();
+    const outboxBefore=(await pool.query("SELECT state,attempt FROM vnext_email_outbox WHERE mailbox_id=$1",[mailboxId])).rows[0];
+    assert.deepEqual(outboxBefore,{state:'pending',attempt:0});
+
+    fixture.add('r2');
+    await email.poll(transport);
+    await assert.rejects(
+      () => run(async()=>{ throw new Error('simulated external uncertainty'); }),
+      /simulated external uncertainty/,
+    );
+    const block=(await pool.query("SELECT project_id,work_unit_id,execution_id,fence FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0];
+    assert.ok(block);
+
+    const blocked=await email.deliver(transport);
+    assert.equal(blocked.sent,0);
+    assert.equal(blocked.blocked,1);
+    assert.equal(fixture.sends,0);
+    assert.deepEqual((await pool.query("SELECT state,attempt,provider_message_id FROM vnext_email_outbox WHERE mailbox_id=$1",[mailboxId])).rows[0],{state:'pending',attempt:0,provider_message_id:null});
+
+    const reconciled=await store.reconcileFailure({
+      projectId,
+      workUnitId:block.work_unit_id,
+      executionId:block.execution_id,
+      fence:Number(block.fence),
+      resolution:'no_effect',
+    });
+    assert.equal(reconciled.state,'actionable');
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,0);
+
+    const delivered=await email.deliver(transport);
+    assert.equal(delivered.sent,1);
+    assert.equal(delivered.blocked,0);
+    assert.equal(fixture.sends,1);
+    assert.deepEqual((await pool.query("SELECT state,attempt FROM vnext_email_outbox WHERE mailbox_id=$1",[mailboxId])).rows[0],{state:'sent',attempt:1});
+  } finally { await pool.end(); await rm(dir,{recursive:true,force:true}); }
+});
+
+test('Gmail admission and reconciliation share the project serialization boundary',{timeout:60000},async()=>{
+  const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-race-'));
+  const projectId='email-race-'+randomUUID(),mailboxId='race-mailbox';
+  try {
+    await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
+    const email=createEmailPilot({pool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
+    await email.configure();
+    await pool.query("INSERT INTO vnext_email_outbox(outbox_id,mailbox_id,to_address,subject,body) VALUES ($1,$2,$3,$4,$5)",['race-outbox',mailboxId,'human@example.com','Re: Check','Checked.']);
+
+    const holder=await pool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['ct-runtime:vnext-project:'+projectId]);
+      const admission=email.deliver(async()=>({status:'sent',messageId:'must-not-send'}));
+      await new Promise(resolve=>setTimeout(resolve,50));
+      await holder.query(
+        "INSERT INTO vnext_project_reconciliation_blocks(project_id,work_unit_id,execution_id,fence,reason) VALUES ($1,$2,$3,$4,'external-effect-uncertain')",
+        [projectId,'race-work','race-execution',1],
+      );
+      await holder.query('COMMIT');
+      const result=await admission;
+      assert.equal(result.sent,0);
+      assert.equal(result.blocked,1);
+      assert.deepEqual((await pool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='race-outbox'")).rows[0],{state:'pending',attempt:0});
+    } finally { await holder.query('ROLLBACK').catch(()=>{}); holder.release(); }
+  } finally { await pool.end(); await rm(dir,{recursive:true,force:true}); }
 });
