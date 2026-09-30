@@ -88,4 +88,6 @@ jobs:
           node scripts/run-postgres-suite.mjs test/vnext-project-authority.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-project-authority-upgrade.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-postgres-isolation.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-email.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-email-migration-upgrade.integration.test.mjs
       - run: npm audit --audit-level=high
