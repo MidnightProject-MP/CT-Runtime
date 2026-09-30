@@ -152,7 +152,7 @@ test('Gmail admission and reconciliation share the project serialization boundar
     const holder=await pool.connect();
     try {
       await holder.query('BEGIN');
-      await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['ct-runtime:vnext-project:'+projectId]);
+      await holder.query(`SELECT pg_advisory_xact_lock(hashtextextended('ct-runtime:vnext-project:${projectId}',0))`);
       const admission=email.deliver(async()=>({status:'sent',messageId:'must-not-send'}));
       await new Promise(resolve=>setTimeout(resolve,50));
       await holder.query(
