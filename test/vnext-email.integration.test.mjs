@@ -11,7 +11,7 @@ import { createEmailPilot } from '../lib/vnext/email-pilot.mjs';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
 import { createGmailTransport } from '../lib/vnext/gmail-transport.mjs';
 import { runPilotOnce } from '../lib/vnext/pilot.mjs';
-import { createExecution as createExecutionCore, claimWorkUnit, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
+import { createWorkUnit, createExecution as createExecutionCore, claimWorkUnit, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
 import { bridgeFixture } from './email-bridge-fixture.mjs';
 
 test('email intake → durable execution → fenced reply, retries and thread continuity',{timeout:60000},async()=>{
@@ -102,8 +102,7 @@ test('reconciliation blocks Gmail delivery at the durable admission boundary and
     const outboxBefore=(await pool.query("SELECT state,attempt FROM vnext_email_outbox WHERE mailbox_id=$1",[mailboxId])).rows[0];
     assert.deepEqual(outboxBefore,{state:'pending',attempt:0});
 
-    fixture.add('r2');
-    await email.poll(transport);
+    await email.ingest({id:'r2',threadId:'r1-thread',from:'human@example.com',to:'bot@example.com',subject:'Re: Check',body:'Second request'});
     await assert.rejects(
       () => run(async()=>{ throw new Error('simulated external uncertainty'); }),
       /simulated external uncertainty/,
