@@ -236,9 +236,10 @@ test('delivery-first ordering commits uncertain admission before reconciliation 
     const failed=failExecution(begun.workUnit,begun.execution,{failure:{message:'simulated external uncertainty'},reconciliationRequired:true,maxAttempts:1});
 
     const email=createEmailPilot({pool:instrumentedPool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
-    let transportCalls=0,transportRelease;
+    let transportCalls=0,transportCalledResolve,transportRelease;
+    const transportCalled=new Promise(resolve=>{transportCalledResolve=resolve;});
     const transportReady=new Promise(resolve=>{transportRelease=resolve;});
-    const transport=async()=>{transportCalls++;await transportReady;return {status:'sent',messageId:'delivery-first-message'};};
+    const transport=async()=>{transportCalls++;transportCalledResolve();await transportReady;return {status:'sent',messageId:'delivery-first-message'};};
 
     const delivery=email.deliver(transport);
     await admissionLockAcquired;
@@ -251,7 +252,8 @@ test('delivery-first ordering commits uncertain admission before reconciliation 
     admissionLockRelease();
     await admissionCommitted;
     assert.deepEqual((await basePool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'uncertain',attempt:1});
-    assert.equal(transportCalls,0);
+    await transportCalled;
+    assert.equal(transportCalls,1);
 
     await reconciliation;
     assert.equal((await basePool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,1);
