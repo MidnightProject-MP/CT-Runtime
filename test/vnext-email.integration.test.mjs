@@ -14,6 +14,15 @@ import { runPilotOnce } from '../lib/vnext/pilot.mjs';
 import { createWorkUnit, createExecution as createExecutionCore, claimWorkUnit, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
 import { bridgeFixture } from './email-bridge-fixture.mjs';
 
+async function within(promise, label) {
+  let timer;
+  try {
+    return await Promise.race([promise,new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(new Error(`Timed out waiting for ${label}`)),10000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 test('email intake → durable execution → fenced reply, retries and thread continuity',{timeout:60000},async()=>{
   const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-proof-'));
   const fixture=bridgeFixture(),transport=createGmailTransport({url:'https://example.test/exec',secret:'test-secret',fetch:fixture.fetch});
@@ -141,6 +150,7 @@ test('reconciliation-first ordering blocks Gmail admission without sending',{tim
   const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-block-first-'));
   const suffix=randomUUID(),projectId='email-block-first-'+suffix,mailboxId='block-first-mailbox-'+suffix;
   const store=createPilotStore({pool,authorizationVerifier:async()=>true});
+  let admission;
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
     await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
@@ -157,18 +167,23 @@ test('reconciliation-first ordering blocks Gmail admission without sending',{tim
     try {
       await holder.query('BEGIN');
       await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['ct-runtime:vnext-project:'+projectId]);
-      const admission=email.deliver(async()=>({status:'sent',messageId:'must-not-send'}));
+      admission=email.deliver(async()=>{assert.fail('blocked admission must not call transport');});
+      admission.catch(()=>{});
       await holder.query(
         "INSERT INTO vnext_project_reconciliation_blocks(project_id,work_unit_id,execution_id,fence,reason) VALUES ($1,$2,$3,$4,'external-effect-uncertain')",
         [projectId,raceWork.work_unit_id,raceExecution.execution_id,1],
       );
       await holder.query('COMMIT');
-      const result=await admission;
+      const result=await within(admission,'blocked admission');
       assert.equal(result.sent,0);
       assert.equal(result.blocked,1);
       assert.deepEqual((await pool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='block-first-outbox'")).rows[0],{state:'pending',attempt:0});
       assert.equal((await pool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,1);
-    } finally { await holder.query('ROLLBACK').catch(()=>{}); holder.release(); }
+    } finally {
+      await holder.query('ROLLBACK').catch(()=>{});
+      holder.release();
+      await Promise.allSettled([admission]);
+    }
   } finally { await pool.end(); await rm(dir,{recursive:true,force:true}); }
 });
 
@@ -182,16 +197,22 @@ test('delivery-first ordering commits uncertain admission before reconciliation 
   const admissionCommitted=new Promise(resolve=>{admissionCommitResolve=resolve;});
   const secondLockRequested=new Promise(resolve=>{secondLockRequestedResolve=resolve;});
   let lockCount=0;
+  let instrumentLocks=false,transportRelease;
+  const operations=[];
+  const track=promise=>{operations.push(promise);promise.catch(()=>{});return promise;};
   const instrumentedPool=new Proxy(basePool,{
     get(target,property){
       if(property==='connect') return async()=>{
         const raw=await target.connect();
         return new Proxy(raw,{
           get(clientTarget,clientProperty){
-            if(clientProperty!=='query') return Reflect.get(clientTarget,clientProperty).bind(clientTarget);
+            if(clientProperty!=='query') {
+              const value=Reflect.get(clientTarget,clientProperty);
+              return typeof value==='function'?value.bind(clientTarget):value;
+            }
             return async(sql,args)=>{
               const text=String(sql);
-              const isProjectLock=text.includes('pg_advisory_xact_lock(hashtextextended($1,0))') && args?.[0]===('ct-runtime:vnext-project:'+projectId);
+              const isProjectLock=instrumentLocks && text.replace(/\s+/g,'').includes('pg_advisory_xact_lock(hashtextextended($1,0))') && args?.[0]===('ct-runtime:vnext-project:'+projectId);
               if(isProjectLock){
                 lockCount++;
                 if(lockCount===1){
@@ -206,7 +227,7 @@ test('delivery-first ordering commits uncertain admission before reconciliation 
                   return clientTarget.query(sql,args);
                 }
               }
-              if(clientTarget===admissionClient && /^\\s*COMMIT\\s*;?\\s*$/i.test(text)){
+              if(clientTarget===admissionClient && /^\s*COMMIT\s*;?\s*$/i.test(text)){
                 const result=await clientTarget.query(sql,args);
                 admissionCommitResolve();
                 return result;
@@ -236,35 +257,42 @@ test('delivery-first ordering commits uncertain admission before reconciliation 
     const failed=failExecution(begun.workUnit,begun.execution,{failure:{message:'simulated external uncertainty'},reconciliationRequired:true,maxAttempts:1});
 
     const email=createEmailPilot({pool:instrumentedPool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
-    let transportCalls=0,transportCalledResolve,transportRelease;
+    let transportCalls=0,transportCalledResolve;
     const transportCalled=new Promise(resolve=>{transportCalledResolve=resolve;});
     const transportReady=new Promise(resolve=>{transportRelease=resolve;});
     const transport=async()=>{transportCalls++;transportCalledResolve();await transportReady;return {status:'sent',messageId:'delivery-first-message'};};
 
-    const delivery=email.deliver(transport);
-    await admissionLockAcquired;
+    // Arm only after setup: beginExecution also takes the project lock.
+    instrumentLocks=true;
+    const delivery=track(email.deliver(transport));
+    await within(admissionLockAcquired,'admission lock');
 
-    const reconciliation=store.persistFailure(failed);
-    await secondLockRequested;
+    const reconciliation=track(store.persistFailure(failed));
+    await within(secondLockRequested,'reconciliation lock request');
     assert.deepEqual((await basePool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'pending',attempt:0});
     assert.equal((await basePool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,0);
 
     admissionLockRelease();
-    await admissionCommitted;
+    await within(admissionCommitted,'admission commit');
     assert.deepEqual((await basePool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'uncertain',attempt:1});
-    await transportCalled;
+    await within(transportCalled,'transport call');
     assert.equal(transportCalls,1);
 
-    await reconciliation;
+    await within(reconciliation,'reconciliation');
     assert.equal((await basePool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,1);
     assert.deepEqual((await basePool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'uncertain',attempt:1});
 
     transportRelease();
-    const result=await delivery;
+    const result=await within(delivery,'delivery');
     assert.deepEqual(result,{sent:1,uncertain:0,blocked:0});
     assert.equal(transportCalls,1);
     assert.deepEqual((await basePool.query("SELECT state,attempt,provider_message_id FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'sent',attempt:1,provider_message_id:'delivery-first-message'});
   } finally {
+    // Release JS barriers before draining operations/pool, including on assertion
+    // failure. Otherwise an open transaction can keep CI alive after timeout.
+    admissionLockRelease();
+    transportRelease?.();
+    await Promise.allSettled(operations);
     await basePool.end();
     await rm(dir,{recursive:true,force:true});
   }
