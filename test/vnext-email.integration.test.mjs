@@ -139,7 +139,7 @@ test('reconciliation blocks Gmail delivery at the durable admission boundary and
 test('Gmail admission and reconciliation share the project serialization boundary',{timeout:60000},async()=>{
   const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-race-'));
   const suffix=randomUUID(),projectId='email-race-'+suffix,mailboxId='race-mailbox-'+suffix;
-  const store=createPilotStore({pool});
+  const store=createPilotStore({pool,authorizationVerifier:async()=>true});
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
     await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
