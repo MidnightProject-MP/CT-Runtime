@@ -25,6 +25,7 @@ test('email intake → durable execution → fenced reply, retries and thread co
   const waiting=w=>({objective_id:w.objective_ref,disposition:'waiting',summary:'Checked; waiting for your choice.',continuation:{mode:'condition',condition:{kind:'human',condition:'Human replies.'}}});
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
+    await pool.query("DO $ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $");
     await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
     await writeFile(path.join(dir,'identity.md'),'Reconstruct, execute and check.');
     const email=createEmailPilot(config);fixture.add('m1');
