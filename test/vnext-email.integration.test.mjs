@@ -18,6 +18,7 @@ test('email intake → durable execution → fenced reply, retries and thread co
   const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-proof-'));
   const fixture=bridgeFixture(),transport=createGmailTransport({url:'https://example.test/exec',secret:'test-secret',fetch:fixture.fetch});
   const projectId='email-'+randomUUID(),mailboxId='test-mailbox';
+  fixture.values.CT_EMAIL_MAILBOX_ID=mailboxId;
   const config={pool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'};
   const authority={authorizeExecution:async({execution})=>({ref:'test:'+execution.execution_id}),verifyExecution:async(d,{execution})=>d.ref==='test:'+execution.execution_id,authorizeTerminal:async()=>true};
   const store=createPilotStore({pool,authorizationVerifier:authority.verifyExecution});
