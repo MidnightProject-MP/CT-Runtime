@@ -15,10 +15,11 @@ test('Gmail migrations upgrade cleanly from canonical state through 009', { skip
   await Promise.all([writeFile(path.join(temp, '.keep'), ''), import('node:fs/promises').then(({ mkdir }) => Promise.all([mkdir(pre), mkdir(full)]))]);
   try {
     const files = (await readdir(root)).filter(file => /^\d+_.*\.sql$/.test(file)).sort();
+    const versionsThrough011 = files.filter(file => Number(file.match(/^\d+/)[0]) <= 11).map(file => Number(file.match(/^\d+/)[0]));
     assert.ok(files.some(file => file.startsWith('009_')));
     for (const file of files) {
       const source = await readFile(path.join(root, file));
-      await writeFile(path.join(full, file), source);
+      if (Number(file.match(/^\d+/)[0]) <= 11) await writeFile(path.join(full, file), source);
       if (Number(file.match(/^\d+/)[0]) <= 9) await writeFile(path.join(pre, file), source);
     }
     await migrateVNext({ pool, directory: pre });
@@ -27,7 +28,7 @@ test('Gmail migrations upgrade cleanly from canonical state through 009', { skip
     assert.equal((await pool.query("SELECT to_regclass('public.vnext_project_reconciliation_blocks') AS relation")).rows[0].relation, 'vnext_project_reconciliation_blocks');
     await migrateVNext({ pool, directory: full });
     const versions = (await pool.query('SELECT version::int FROM vnext_schema_migrations ORDER BY version')).rows.map(row => row.version);
-    assert.deepEqual(versions, Array.from({ length: 11 }, (_, i) => i + 1));
+    assert.deepEqual(versions, versionsThrough011);
     const columns = (await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='vnext_email_mailboxes' ORDER BY column_name")).rows.map(row => row.column_name);
     assert.deepEqual(columns.sort(), ['allowed_sender','enabled','label_name','mailbox_address','mailbox_id','project_id','updated_at'].sort());
     assert.equal((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='vnext_pilot_results' AND column_name='input_seq'")).rows.length, 1);
