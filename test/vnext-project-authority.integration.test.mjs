@@ -1,16 +1,21 @@
 import test from 'node:test';
+import { testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+
+const createNeonStore = (options = {}) => createNeonStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
+const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
-import { claimWorkUnit, createExecution, createWorkUnit, startExecution, applyTurn, failExecution } from '../lib/vnext/kernel.mjs';
-import { createNeonStore } from '../lib/vnext/neon-store.mjs';
+import { claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution, applyTurn, failExecution } from '../lib/vnext/kernel.mjs';
+import { createNeonStore as createNeonStoreCore } from '../lib/vnext/neon-store.mjs';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 
 async function cleanup(pool, workUnitIds, projectIds) {
   for (const projectId of projectIds) {
+    await pool.query('DELETE FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId]).catch(() => {});
     await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId]).catch(() => {});
   }
   for (const workUnitId of workUnitIds) {
@@ -193,7 +198,7 @@ test('Neon schema rejects an authority whose project, Work Unit, and Execution i
     await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [firstProject]);
 
     await assert.rejects(
-      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at) VALUES ($1,$2,$3,$4,$5,$6)', [forgedProject, secondWork.work_unit_id, firstExecution.execution_id, 1, firstExecution.owner, '2099-09-16T12:01:00Z']),
+      () => pool.query('INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at,authorization_decision_ref) VALUES ($1,$2,$3,$4,$5,$6,$7)', [forgedProject, secondWork.work_unit_id, firstExecution.execution_id, 1, firstExecution.owner, '2099-09-16T12:01:00Z', firstExecution.authorization_decision_ref]),
       /foreign key|violates/i,
     );
 
@@ -235,6 +240,37 @@ test('Neon acquisition rejects a consistently forged project and failure settlem
     await store.beginExecution(next, startExecution(createExecution(next, { executionId: next.claim.execution_id, owner: 'owner-b' })));
   } finally {
     await cleanup(pool, [first.work_unit_id, second.work_unit_id], [projectId]);
+    await pool.end();
+  }
+});
+
+
+test('Neon rejects continuation and evidence references that pair one Work Unit with another Execution', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 5 });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const projectA = `project-provenance-a-${suffix}`;
+  const projectB = `project-provenance-b-${suffix}`;
+  const first = createWorkUnit({ workUnitId: `wu-provenance-a-${suffix}`, objectiveRef: 'objective-a', projectId: projectA });
+  const second = createWorkUnit({ workUnitId: `wu-provenance-b-${suffix}`, objectiveRef: 'objective-b', projectId: projectB });
+  const store = createNeonStore({ pool });
+  try {
+    await migrateVNext({ pool });
+    await store.createWorkUnit(first);
+    await store.createWorkUnit(second);
+    const claim = claimWorkUnit(first, { executionId: `exec-provenance-${suffix}`, owner: 'owner-a' });
+    const execution = startExecution(createExecution(claim, { executionId: claim.claim.execution_id, owner: claim.claim.owner }));
+    await store.beginExecution(claim, execution);
+
+    await assert.rejects(
+      () => pool.query('INSERT INTO vnext_continuations(work_unit_id,execution_id,continuation) VALUES ($1,$2,$3::jsonb)', [second.work_unit_id, execution.execution_id, JSON.stringify({ forged: true })]),
+      /foreign key|violates/i,
+    );
+    await assert.rejects(
+      () => pool.query('INSERT INTO vnext_evidence_refs(work_unit_id,execution_id,evidence) VALUES ($1,$2,$3::jsonb)', [second.work_unit_id, execution.execution_id, JSON.stringify({ forged: true })]),
+      /foreign key|violates/i,
+    );
+  } finally {
+    await cleanup(pool, [first.work_unit_id, second.work_unit_id], [projectA, projectB]);
     await pool.end();
   }
 });
@@ -311,3 +347,65 @@ for (const settlement of ['turn', 'failure']) {
     }
   });
 }
+
+test('Neon uncertain failure blocks another Work Unit until exact reconciliation', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 8 });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const projectId = `project-reconcile-${suffix}`;
+  const firstWork = createWorkUnit({ workUnitId: `wu-reconcile-a-${suffix}`, objectiveRef: 'objective-a', projectId });
+  const secondWork = createWorkUnit({ workUnitId: `wu-reconcile-b-${suffix}`, objectiveRef: 'objective-b', projectId });
+  const store = createNeonStore({ pool });
+  try {
+    await migrateVNext({ pool });
+    await store.createWorkUnit(firstWork);
+    await store.createWorkUnit(secondWork);
+    const first = claimWorkUnit(firstWork, { executionId: `exec-reconcile-a-${suffix}`, owner: 'owner-a' });
+    const firstExecution = startExecution(createExecution(first, { executionId: first.claim.execution_id, owner: first.claim.owner }));
+    await store.beginExecution(first, firstExecution);
+    await store.persistFailure(failExecution(first, firstExecution, { maxAttempts: 1, failure: { message: 'worker outcome uncertain' }, reconciliationRequired: true }));
+
+    const blocked = claimWorkUnit(secondWork, { executionId: `exec-reconcile-b-${suffix}`, owner: 'owner-b' });
+    const blockedExecution = startExecution(createExecution(blocked, { executionId: blocked.claim.execution_id, owner: blocked.claim.owner }));
+    await assert.rejects(() => store.beginExecution(blocked, blockedExecution), /E_RECONCILIATION_REQUIRED/);
+    assert.deepEqual((await pool.query('SELECT project_id,work_unit_id,execution_id,fence::int AS fence,reason FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows, [{
+      project_id: projectId, work_unit_id: firstWork.work_unit_id, execution_id: firstExecution.execution_id, fence: 1, reason: 'external-effect-uncertain',
+    }]);
+
+    await assert.rejects(() => store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: firstExecution.execution_id, fence: 2, resolution: 'no_effect' }), /does not match durable project block/);
+    const reconciled = await store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: firstExecution.execution_id, fence: 1, resolution: 'no_effect' });
+    assert.equal(reconciled.state, 'actionable');
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows[0].count, 0);
+
+    await store.beginExecution(blocked, blockedExecution);
+    const authority = (await pool.query('SELECT work_unit_id,execution_id,fence FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId])).rows[0];
+    assert.deepEqual(authority, { work_unit_id: secondWork.work_unit_id, execution_id: blockedExecution.execution_id, fence: '1' });
+  } finally {
+    await cleanup(pool, [firstWork.work_unit_id, secondWork.work_unit_id], [projectId]);
+    await pool.end();
+  }
+});
+
+test('Neon known-safe failure releases project authority without reconciliation block', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 8 });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const projectId = `project-safe-failure-${suffix}`;
+  const firstWork = createWorkUnit({ workUnitId: `wu-safe-a-${suffix}`, objectiveRef: 'objective-a', projectId });
+  const secondWork = createWorkUnit({ workUnitId: `wu-safe-b-${suffix}`, objectiveRef: 'objective-b', projectId });
+  const store = createNeonStore({ pool });
+  try {
+    await migrateVNext({ pool });
+    await store.createWorkUnit(firstWork);
+    await store.createWorkUnit(secondWork);
+    const first = claimWorkUnit(firstWork, { executionId: `exec-safe-a-${suffix}`, owner: 'owner-a' });
+    const firstExecution = startExecution(createExecution(first, { executionId: first.claim.execution_id, owner: first.claim.owner }));
+    await store.beginExecution(first, firstExecution);
+    await store.persistFailure(failExecution(first, firstExecution, { maxAttempts: 3, failure: { message: 'known-safe failure', no_external_effect: true } }));
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows[0].count, 0);
+    const second = claimWorkUnit(secondWork, { executionId: `exec-safe-b-${suffix}`, owner: 'owner-b' });
+    const secondExecution = startExecution(createExecution(second, { executionId: second.claim.execution_id, owner: second.claim.owner }));
+    await store.beginExecution(second, secondExecution);
+  } finally {
+    await cleanup(pool, [firstWork.work_unit_id, secondWork.work_unit_id], [projectId]);
+    await pool.end();
+  }
+});

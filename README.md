@@ -1,5 +1,7 @@
 # CT-Runtime — capability-first
 
+> 2026-09-27: The minimum-loop scope is defined in [docs/VNEXT-MINIMUM-LOOP-PLAN.md](docs/VNEXT-MINIMUM-LOOP-PLAN.md). The executable pilot and its activation limits are documented in [docs/VNEXT-PILOT.md](docs/VNEXT-PILOT.md). Earlier stage plans below are historical; they do not add launch requirements to the revised MVP.
+
 CT-Runtime provides execution mechanics for Celestan behind **purpose-level capabilities**. Celestan requests `durable_state` (not Neon), `evidence_store` (not an object-storage provider), `knowledge_publishing` (not Confluence), `project_system` (not Jira) — bindings select the adapter. Production bindings default to `durable_state:postgres` (standard Postgres — Neon/Supabase/pg) + `evidence_store:s3` (S3-compatible — AWS S3/Backblaze B2/R2/MinIO); filesystem adapters remain for local/test. Celestan code is unchanged when Neon→Supabase or Jira→Linear.
 
 ```js

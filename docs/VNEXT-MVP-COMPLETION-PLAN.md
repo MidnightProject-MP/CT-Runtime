@@ -1,5 +1,7 @@
 # Celestan vNext MVP — Authoritative Completion Plan
 
+> 2026-09-27: The minimum-loop scope is defined in [VNEXT-MINIMUM-LOOP-PLAN.md](VNEXT-MINIMUM-LOOP-PLAN.md). The executable pilot and its activation limits are documented in [VNEXT-PILOT.md](VNEXT-PILOT.md). Earlier stage plans below are historical; they do not add launch requirements to the revised MVP.
+
 **Status:** authoritative implementation and qualification plan
 
 **Purpose:** provide the repository-tracked sequence for completing and activating the Celestan vNext MVP.

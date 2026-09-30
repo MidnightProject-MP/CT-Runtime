@@ -1,8 +1,13 @@
 import test from 'node:test';
+import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+
+const createMemoryStore = (options = {}) => createMemoryStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
+const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
+const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
-import { createWorkUnit, claimWorkUnit, createExecution, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
-import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
-import { runOuterLoop } from '../lib/vnext/outer-loop.mjs';
+import { createWorkUnit, claimWorkUnit, createExecution as createExecutionCore, startExecution, applyTurn } from '../lib/vnext/kernel.mjs';
+import { createMemoryStore as createMemoryStoreCore } from '../lib/vnext/memory-store.mjs';
+import { runOuterLoop as runOuterLoopCore } from '../lib/vnext/outer-loop.mjs';
 
 test('Feedback wake reconstructs one Work Unit and runs a disposable execution', async () => {
   const store = createMemoryStore({ workUnits: [createWorkUnit({ workUnitId: 'wu-feedback-1', objectiveRef: 'objective-1', projectId: 'project-feedback-1' })] });
@@ -60,6 +65,8 @@ test('a later justified wake produces a new disposable execution rather than a h
   assert.equal(second.disposition, 'terminal');
   assert.equal(executionIds.length, 2);
   assert.notEqual(executionIds[0], executionIds[1]);
+  const executions = store.snapshot().executions;
+  assert.notEqual(executions[0].authorization_decision_ref, executions[1].authorization_decision_ref);
   assert.equal(store.snapshot().executions.length, 2);
 });
 
@@ -170,7 +177,7 @@ test('stale execution cannot mutate after the fence advances', () => {
 test('an expired execution can be taken over once, and its late settlement is fenced out', async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
   const work = { ...createWorkUnit({ workUnitId: 'wu-expired-1', objectiveRef: 'objective-expired', projectId: 'project-expired-1' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-dead', owner: 'dead-owner', fence: 1, claim_expires_at: expired } };
-  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, owner: 'dead-owner', fence: 1, state: 'running', attempt: 1, claim_expires_at: expired }] });
+  const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, authorization_decision_ref: 'test-auth:exec-dead', owner: 'dead-owner', fence: 1, state: 'running', attempt: 1, claim_expires_at: expired }] });
   const result = await runOuterLoop({
     wake: { type: 'recovery.wake', event_id: 'expired-wake', work_unit_id: work.work_unit_id },
     store,

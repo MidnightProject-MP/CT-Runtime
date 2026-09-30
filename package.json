@@ -10,7 +10,8 @@
     "migrate": "node bin/ct-runtime.mjs migrate",
     "doctor": "node bin/ct-runtime.mjs doctor",
     "reconstruct": "node bin/ct-runtime.mjs reconstruct",
-    "export-observer": "node bin/ct-runtime.mjs export-observer"
+    "export-observer": "node bin/ct-runtime.mjs export-observer",
+    "vnext:pilot": "node bin/vnext-pilot.mjs"
   },
   "engines": {
     "node": ">=22 <25"
@@ -18,5 +19,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",
     "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

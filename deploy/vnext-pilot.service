@@ -1,0 +1,13 @@
+[Unit]
+Description=One bounded Celestan vNext wake
+After=network-online.target
+[Service]
+Type=oneshot
+User=celestan-runtime
+WorkingDirectory=/opt/CT-Runtime
+EnvironmentFile=/etc/celestan/pilot.env
+ExecStart=/usr/bin/node /opt/CT-Runtime/bin/vnext-pilot.mjs tick --config /etc/celestan/pilot.json
+TimeoutStartSec=240
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
