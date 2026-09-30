@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -22,11 +24,14 @@ test('vNext arm is a manual-only, canonical control-plane cutover surface', asyn
   assert.doesNotMatch(source, /setProperty\([^)]*request\./);
 });
 
-test('authoritative GAS bundle contains only the canonical arm implementation', async () => {
-  const { stdout } = await execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', 'gas', '/tmp/ct-runtime-arm-test-bundle.json'], { encoding: 'utf8' });
+test('authoritative GAS bundle contains only the canonical arm implementation', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ct-runtime-arm-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const output = path.join(dir, 'bundle.json');
+  const { stdout } = await execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', 'gas', output], { encoding: 'utf8' });
   const result = JSON.parse(stdout.trim().split('\n').at(-1));
-  assert.equal(result.fileCount, 23);
-  const bundle = JSON.parse(await readFile('/tmp/ct-runtime-arm-test-bundle.json', 'utf8'));
+  assert.equal(result.fileCount, 24);
+  const bundle = JSON.parse(await readFile(output, 'utf8'));
   assert.ok(bundle.files.some((file) => file.name === 'gas_deploy'));
   assert.ok(!bundle.files.some((file) => file.name === 'gas_vnext_arm'));
 });
