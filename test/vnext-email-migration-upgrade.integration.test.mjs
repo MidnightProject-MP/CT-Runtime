@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { testPool } from './pilot-test-pool.mjs';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 
-test('Gmail migrations upgrade cleanly from canonical state through 009', { timeout: 60000 }, async () => {
+test('Gmail migrations upgrade cleanly from canonical state through 009', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async () => {
   const pool = await testPool();
   const root = fileURLToPath(new URL('../vnext-migrations', import.meta.url));
   const temp = await mkdtemp(path.join(process.cwd(), '.email-migration-'));
