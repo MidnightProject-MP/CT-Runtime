@@ -136,28 +136,28 @@ test('reconciliation blocks Gmail delivery at the durable admission boundary and
   } finally { await pool.end(); await rm(dir,{recursive:true,force:true}); }
 });
 
-test('Gmail admission and reconciliation share the project serialization boundary',{timeout:60000,skip:!process.env.TEST_DATABASE_URL},async()=>{
-  const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-race-'));
-  const suffix=randomUUID(),projectId='email-race-'+suffix,mailboxId='race-mailbox-'+suffix;
+
+test('reconciliation-first ordering blocks Gmail admission without sending',{timeout:60000,skip:!process.env.TEST_DATABASE_URL},async()=>{
+  const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-block-first-'));
+  const suffix=randomUUID(),projectId='email-block-first-'+suffix,mailboxId='block-first-mailbox-'+suffix;
   const store=createPilotStore({pool,authorizationVerifier:async()=>true});
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
     await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
     const email=createEmailPilot({pool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
     await email.configure();
-    await pool.query("INSERT INTO vnext_email_outbox(outbox_id,mailbox_id,to_address,subject,body) VALUES ($1,$2,$3,$4,$5)",['race-outbox',mailboxId,'human@example.com','Re: Check','Checked.']);
-    const raceWork=createWorkUnit({workUnitId:'race-work-'+suffix,objectiveRef:'race-objective-'+suffix,projectId});
+    await pool.query("INSERT INTO vnext_email_outbox(outbox_id,mailbox_id,to_address,subject,body) VALUES ($1,$2,$3,$4,$5)",['block-first-outbox',mailboxId,'human@example.com','Re: Check','Checked.']);
+    const raceWork=createWorkUnit({workUnitId:'block-first-work-'+suffix,objectiveRef:'block-first-objective-'+suffix,projectId});
     await pool.query("INSERT INTO vnext_work_units(work_unit_id,objective_ref,project_id,state,fence,created_at,updated_at) VALUES ($1,$2,$3,'actionable',0,clock_timestamp(),clock_timestamp())",[raceWork.work_unit_id,raceWork.objective_ref,projectId]);
-    const raceClaim=claimWorkUnit(raceWork,{executionId:'race-execution-'+suffix,owner:'race-owner'});
-    const raceExecution=startExecution(createExecutionCore(raceClaim,{executionId:'race-execution-'+suffix,owner:'race-owner',authorizationDecisionRef:'test-auth:race-execution-'+suffix}));
+    const raceClaim=claimWorkUnit(raceWork,{executionId:'block-first-execution-'+suffix,owner:'block-first-owner'});
+    const raceExecution=startExecution(createExecutionCore(raceClaim,{executionId:'block-first-execution-'+suffix,owner:'block-first-owner',authorizationDecisionRef:'test-auth:block-first-'+suffix}));
     await store.beginExecution(raceClaim,raceExecution);
 
     const holder=await pool.connect();
     try {
       await holder.query('BEGIN');
-      await holder.query(`SELECT pg_advisory_xact_lock(hashtextextended('ct-runtime:vnext-project:${projectId}',0))`);
+      await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['ct-runtime:vnext-project:'+projectId]);
       const admission=email.deliver(async()=>({status:'sent',messageId:'must-not-send'}));
-      await new Promise(resolve=>setTimeout(resolve,50));
       await holder.query(
         "INSERT INTO vnext_project_reconciliation_blocks(project_id,work_unit_id,execution_id,fence,reason) VALUES ($1,$2,$3,$4,'external-effect-uncertain')",
         [projectId,raceWork.work_unit_id,raceExecution.execution_id,1],
@@ -166,7 +166,104 @@ test('Gmail admission and reconciliation share the project serialization boundar
       const result=await admission;
       assert.equal(result.sent,0);
       assert.equal(result.blocked,1);
-      assert.deepEqual((await pool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='race-outbox'")).rows[0],{state:'pending',attempt:0});
+      assert.deepEqual((await pool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='block-first-outbox'")).rows[0],{state:'pending',attempt:0});
+      assert.equal((await pool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,1);
     } finally { await holder.query('ROLLBACK').catch(()=>{}); holder.release(); }
   } finally { await pool.end(); await rm(dir,{recursive:true,force:true}); }
+});
+
+test('delivery-first ordering commits uncertain admission before reconciliation crosses the boundary',{timeout:60000,skip:!process.env.TEST_DATABASE_URL},async()=>{
+  const basePool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-delivery-first-'));
+  const suffix=randomUUID(),projectId='email-delivery-first-'+suffix,mailboxId='delivery-first-mailbox-'+suffix;
+  let admissionLockAcquiredResolve,admissionLockRelease;
+  const admissionLockAcquired=new Promise(resolve=>{admissionLockAcquiredResolve=resolve;});
+  const admissionRelease=new Promise(resolve=>{admissionLockRelease=resolve;});
+  let admissionClient=null,admissionCommitResolve,secondLockRequestedResolve;
+  const admissionCommitted=new Promise(resolve=>{admissionCommitResolve=resolve;});
+  const secondLockRequested=new Promise(resolve=>{secondLockRequestedResolve=resolve;});
+  let lockCount=0;
+  const instrumentedPool=new Proxy(basePool,{
+    get(target,property){
+      if(property==='connect') return async()=>{
+        const raw=await target.connect();
+        return new Proxy(raw,{
+          get(clientTarget,clientProperty){
+            if(clientProperty!=='query') return Reflect.get(clientTarget,clientProperty).bind(clientTarget);
+            return async(sql,args)=>{
+              const text=String(sql);
+              const isProjectLock=text.includes('pg_advisory_xact_lock(hashtextextended($1,0))') && args?.[0]===('ct-runtime:vnext-project:'+projectId);
+              if(isProjectLock){
+                lockCount++;
+                if(lockCount===1){
+                  admissionClient=clientTarget;
+                  const result=await clientTarget.query(sql,args);
+                  admissionLockAcquiredResolve();
+                  await admissionRelease;
+                  return result;
+                }
+                if(lockCount===2){
+                  secondLockRequestedResolve();
+                  return clientTarget.query(sql,args);
+                }
+              }
+              if(clientTarget===admissionClient && /^\\s*COMMIT\\s*;?\\s*$/i.test(text)){
+                const result=await clientTarget.query(sql,args);
+                admissionCommitResolve();
+                return result;
+              }
+              return clientTarget.query(sql,args);
+            };
+          },
+        });
+      };
+      const value=Reflect.get(target,property);
+      return typeof value==='function'?value.bind(target):value;
+    },
+  });
+  const store=createPilotStore({pool:instrumentedPool,authorizationVerifier:async()=>true});
+  try {
+    await basePool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
+    await migrateVNext({pool:basePool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
+    const setupEmail=createEmailPilot({pool:basePool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
+    await setupEmail.configure();
+    await basePool.query("INSERT INTO vnext_email_outbox(outbox_id,mailbox_id,to_address,subject,body) VALUES ($1,$2,$3,$4,$5)",['delivery-first-outbox',mailboxId,'human@example.com','Re: Check','Checked.']);
+
+    const failedWork=createWorkUnit({workUnitId:'delivery-first-work-'+suffix,objectiveRef:'delivery-first-objective-'+suffix,projectId});
+    await basePool.query("INSERT INTO vnext_work_units(work_unit_id,objective_ref,project_id,state,fence,created_at,updated_at) VALUES ($1,$2,$3,'actionable',0,clock_timestamp(),clock_timestamp())",[failedWork.work_unit_id,failedWork.objective_ref,projectId]);
+    const failedClaim=claimWorkUnit(failedWork,{executionId:'delivery-first-execution-'+suffix,owner:'delivery-first-owner'});
+    const failedExecution=startExecution(createExecutionCore(failedClaim,{executionId:'delivery-first-execution-'+suffix,owner:'delivery-first-owner',authorizationDecisionRef:'test-auth:delivery-first-'+suffix}));
+    const begun=await store.beginExecution(failedClaim,failedExecution);
+    const failed=failExecution(begun.workUnit,begun.execution,{failure:{message:'simulated external uncertainty'},reconciliationRequired:true,maxAttempts:1});
+
+    const email=createEmailPilot({pool:instrumentedPool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
+    let transportCalls=0,transportRelease;
+    const transportReady=new Promise(resolve=>{transportRelease=resolve;});
+    const transport=async()=>{transportCalls++;await transportReady;return {status:'sent',messageId:'delivery-first-message'};};
+
+    const delivery=email.deliver(transport);
+    await admissionLockAcquired;
+
+    const reconciliation=store.persistFailure(failed);
+    await secondLockRequested;
+    assert.deepEqual((await basePool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'pending',attempt:0});
+    assert.equal((await basePool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,0);
+
+    admissionLockRelease();
+    await admissionCommitted;
+    assert.deepEqual((await basePool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'uncertain',attempt:1});
+    assert.equal(transportCalls,0);
+
+    await reconciliation;
+    assert.equal((await basePool.query("SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1",[projectId])).rows[0].count,1);
+    assert.deepEqual((await basePool.query("SELECT state,attempt FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'uncertain',attempt:1});
+
+    transportRelease();
+    const result=await delivery;
+    assert.deepEqual(result,{sent:1,uncertain:0,blocked:0});
+    assert.equal(transportCalls,1);
+    assert.deepEqual((await basePool.query("SELECT state,attempt,provider_message_id FROM vnext_email_outbox WHERE outbox_id='delivery-first-outbox'")).rows[0],{state:'sent',attempt:1,provider_message_id:'delivery-first-message'});
+  } finally {
+    await basePool.end();
+    await rm(dir,{recursive:true,force:true});
+  }
 });
