@@ -367,7 +367,7 @@ test('Neon uncertain failure blocks another Work Unit until exact reconciliation
     const blocked = claimWorkUnit(secondWork, { executionId: `exec-reconcile-b-${suffix}`, owner: 'owner-b' });
     const blockedExecution = startExecution(createExecution(blocked, { executionId: blocked.claim.execution_id, owner: blocked.claim.owner }));
     await assert.rejects(() => store.beginExecution(blocked, blockedExecution), /E_RECONCILIATION_REQUIRED/);
-    assert.deepEqual((await pool.query('SELECT project_id,work_unit_id,execution_id,fence,reason FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows, [{
+    assert.deepEqual((await pool.query('SELECT project_id,work_unit_id,execution_id,fence::int AS fence,reason FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows, [{
       project_id: projectId, work_unit_id: firstWork.work_unit_id, execution_id: firstExecution.execution_id, fence: 1, reason: 'external-effect-uncertain',
     }]);
 
