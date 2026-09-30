@@ -136,16 +136,16 @@ test('reconciliation blocks Gmail delivery at the durable admission boundary and
 
 test('Gmail admission and reconciliation share the project serialization boundary',{timeout:60000},async()=>{
   const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-race-'));
-  const projectId='email-race-'+randomUUID(),mailboxId='race-mailbox';
+  const suffix=randomUUID(),projectId='email-race-'+suffix,mailboxId='race-mailbox-'+suffix;
   try {
     await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
     const email=createEmailPilot({pool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
     await email.configure();
     await pool.query("INSERT INTO vnext_email_outbox(outbox_id,mailbox_id,to_address,subject,body) VALUES ($1,$2,$3,$4,$5)",['race-outbox',mailboxId,'human@example.com','Re: Check','Checked.']);
-    const raceWork=createWorkUnit({workUnitId:'race-work',objectiveRef:'race-objective',projectId});
+    const raceWork=createWorkUnit({workUnitId:'race-work-'+suffix,objectiveRef:'race-objective-'+suffix,projectId});
     await pool.query("INSERT INTO vnext_work_units(work_unit_id,objective_ref,project_id,state,fence,created_at,updated_at) VALUES ($1,$2,$3,'actionable',0,clock_timestamp(),clock_timestamp())",[raceWork.work_unit_id,raceWork.objective_ref,projectId]);
-    const raceClaim=claimWorkUnit(raceWork,{executionId:'race-execution',owner:'race-owner'});
-    const raceExecution=startExecution(createExecutionCore(raceClaim,{executionId:'race-execution',owner:'race-owner',authorizationDecisionRef:'test-auth:race-execution'}));
+    const raceClaim=claimWorkUnit(raceWork,{executionId:'race-execution-'+suffix,owner:'race-owner'});
+    const raceExecution=startExecution(createExecutionCore(raceClaim,{executionId:'race-execution-'+suffix,owner:'race-owner',authorizationDecisionRef:'test-auth:race-execution-'+suffix}));
     await store.beginExecution(raceClaim,raceExecution);
 
     const holder=await pool.connect();
@@ -156,7 +156,7 @@ test('Gmail admission and reconciliation share the project serialization boundar
       await new Promise(resolve=>setTimeout(resolve,50));
       await holder.query(
         "INSERT INTO vnext_project_reconciliation_blocks(project_id,work_unit_id,execution_id,fence,reason) VALUES ($1,$2,$3,$4,'external-effect-uncertain')",
-        [projectId,'race-work','race-execution',1],
+        [projectId,raceWork.work_unit_id,raceExecution.execution_id,1],
       );
       await holder.query('COMMIT');
       const result=await admission;
