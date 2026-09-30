@@ -12,7 +12,7 @@ New implementation: durable pilot inbox and input watermark; atomic result/conti
 
 Core fixes made while connecting the path: do not turn uncertain settlement into an asserted failure; verify optional evidence on nonterminal turns; retain new input arriving during completion; disallow expired external-effect takeover on the pilot path.
 
-The selected human interface is the new CLI inbox/status pair. Existing GAS Feedback remains unchanged and is not connected to this new inbox by this delivery. Runtime state and credentials stay outside the repository.
+The selected human interface is the new CLI inbox/status pair. This delivery additionally contains the Gmail pilot bridge, authenticated Apps Script routing, durable email receipts/outbox, and the disabled-by-default email workflow. Runtime state and credentials stay outside the repository.
 
 ## Verification
 
@@ -22,10 +22,13 @@ The selected human interface is the new CLI inbox/status pair. Existing GAS Feed
 - Command-executor tests verify structured result delivery, no inherited runtime database credentials, timeout rejection, and ordinary descendant-process termination.
 - Separate-process disk-backed proof: first invocation continued, second invocation reconstructed the same objective and completed it under a distinct execution ID; a later invocation was quiescent. This is a deterministic fixture, not an autonomous model/project qualification.
 - `git diff --check` passed.
+- Email integration exercises the canonical 009/010/011 migration sequence, simulated Gmail routing, authenticated transport, uncertain-send handling, and input provenance.
 - Existing tests requiring native PostgreSQL, S3 or other external service configuration were skipped locally. Native concurrent transactions, actual OpenCode/provider authentication, deployed timer/host restart behavior, GAS/Neon production, legacy exclusion, and the multi-day real-project acceptance test are not claimed as verified.
 
 ## Remaining activation work
 
 Configure the real project and identity paths, backend model/agent and credentials, existing execution authority, project acceptance policy and durable host. Verify native DB invariants and actual legacy exclusion; then activate one qualified path and run the multi-day pilot. The scheduler and sample authority grant are deliberately inactive/unconfigured. Automatic backend-specific reconciliation of uncertain external effects is not implemented; such work is durably blocked for evidence-based reconciliation rather than blindly retried.
+
+For Gmail activation, apply migrations through 011 and follow `docs/VNEXT-EMAIL-PILOT.md` for GAS and GitHub settings, consent, deployment and controlled acceptance. No live mailbox access or email sending is part of repository qualification.
 
 Do not replace a newer checkout blindly: compare these baseline SHAs and preserve subsequent changes. Install dependencies with `npm ci`. The ZIP excludes `.git`, `node_modules`, credentials, runtime state, and test databases.
