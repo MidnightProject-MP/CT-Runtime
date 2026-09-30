@@ -6,7 +6,7 @@ const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
 import { createMemoryStore as createMemoryStoreCore } from '../lib/vnext/memory-store.mjs';
-import { applyTurn, claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution } from '../lib/vnext/kernel.mjs';
+import { applyTurn, claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
 
 function claimedExecution(workUnit, executionId, owner, now = new Date('2026-09-16T12:00:00.000Z'), claimExpiresAt = '2099-09-16T12:00:00.000Z') {
   const claimed = claimWorkUnit(workUnit, { executionId, owner, now, claimExpiresAt });
@@ -218,4 +218,37 @@ test('memory acquisition rejects a consistently forged project without changing 
   const forged = claimedExecution({ ...second, project_id: 'project-b' }, 'binding-forged', 'owner-b');
   await assert.rejects(() => store.beginExecution(forged.claimed, forged.execution, { ref: forged.execution.authorization_decision_ref }), /different stored project/);
   assert.deepEqual(store.snapshot(), before);
+});
+
+test('memory uncertain failure blocks another Work Unit until exact reconciliation', async () => {
+  const projectId = 'project-reconcile';
+  const firstWork = createWorkUnit({ workUnitId: 'wu-reconcile-a', objectiveRef: 'objective-a', projectId });
+  const secondWork = createWorkUnit({ workUnitId: 'wu-reconcile-b', objectiveRef: 'objective-b', projectId });
+  const store = createMemoryStore({ workUnits: [firstWork, secondWork] });
+  const first = claimedExecution(firstWork, 'exec-reconcile-a', 'owner-a');
+  await store.beginExecution(first.claimed, first.execution, { ref: first.execution.authorization_decision_ref });
+  const failed = failExecution(first.claimed, first.execution, { maxAttempts: 1, failure: { message: 'worker outcome uncertain' }, reconciliationRequired: true });
+  await store.persistFailure(failed);
+  assert.equal(store.snapshot().work.find(w => w.work_unit_id === firstWork.work_unit_id).state, 'review');
+  assert.deepEqual(store.snapshot().reconciliationBlocks, [{ project_id: projectId, work_unit_id: firstWork.work_unit_id, execution_id: first.execution.execution_id, fence: 1, reason: 'external-effect-uncertain' }]);
+  const second = claimedExecution(secondWork, 'exec-reconcile-b', 'owner-b');
+  await assert.rejects(() => store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref }), /E_RECONCILIATION_REQUIRED/);
+  await assert.rejects(() => store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 2, resolution: 'no_effect' }), /does not match durable project block/);
+  const reconciled = await store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  assert.equal(reconciled.state, 'actionable');
+  assert.deepEqual(store.snapshot().reconciliationBlocks, []);
+  await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
+});
+
+test('memory ordinary known-safe failure releases project authority without reconciliation block', async () => {
+  const projectId = 'project-safe-failure';
+  const firstWork = createWorkUnit({ workUnitId: 'wu-safe-a', objectiveRef: 'objective-a', projectId });
+  const secondWork = createWorkUnit({ workUnitId: 'wu-safe-b', objectiveRef: 'objective-b', projectId });
+  const store = createMemoryStore({ workUnits: [firstWork, secondWork] });
+  const first = claimedExecution(firstWork, 'exec-safe-a', 'owner-a');
+  await store.beginExecution(first.claimed, first.execution, { ref: first.execution.authorization_decision_ref });
+  await store.persistFailure(failExecution(first.claimed, first.execution, { maxAttempts: 3, failure: { message: 'known-safe failure', no_external_effect: true } }));
+  assert.deepEqual(store.snapshot().reconciliationBlocks, []);
+  const second = claimedExecution(secondWork, 'exec-safe-b', 'owner-b');
+  await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
 });
