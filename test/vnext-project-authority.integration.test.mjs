@@ -15,6 +15,7 @@ const connectionString = process.env.TEST_DATABASE_URL;
 
 async function cleanup(pool, workUnitIds, projectIds) {
   for (const projectId of projectIds) {
+    await pool.query('DELETE FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId]).catch(() => {});
     await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId]).catch(() => {});
   }
   for (const workUnitId of workUnitIds) {
