@@ -142,6 +142,11 @@ test('Gmail admission and reconciliation share the project serialization boundar
     const email=createEmailPilot({pool,mailboxId,projectId,allowedSender:'human@example.com',mailboxAddress:'bot@example.com',labelName:'CT-Runtime'});
     await email.configure();
     await pool.query("INSERT INTO vnext_email_outbox(outbox_id,mailbox_id,to_address,subject,body) VALUES ($1,$2,$3,$4,$5)",['race-outbox',mailboxId,'human@example.com','Re: Check','Checked.']);
+    const raceWork=createWorkUnit({workUnitId:'race-work',objectiveRef:'race-objective',projectId});
+    await pool.query("INSERT INTO vnext_work_units(work_unit_id,objective_ref,project_id,state,fence,created_at,updated_at) VALUES ($1,$2,$3,'actionable',0,clock_timestamp(),clock_timestamp())",[raceWork.work_unit_id,raceWork.objective_ref,projectId]);
+    const raceClaim=claimWorkUnit(raceWork,{executionId:'race-execution',owner:'race-owner'});
+    const raceExecution=startExecution(createExecutionCore(raceClaim,{executionId:'race-execution',owner:'race-owner',authorizationDecisionRef:'test-auth:race-execution'}));
+    await store.beginExecution(raceClaim,raceExecution);
 
     const holder=await pool.connect();
     try {
