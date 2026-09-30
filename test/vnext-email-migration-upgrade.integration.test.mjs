@@ -14,12 +14,12 @@ test('Gmail migrations upgrade cleanly from canonical state through 009', { time
   const full = path.join(temp, 'full');
   await Promise.all([writeFile(path.join(temp, '.keep'), ''), import('node:fs/promises').then(({ mkdir }) => Promise.all([mkdir(pre), mkdir(full)]))]);
   try {
-    const files = (await readdir(root)).filter(file => /^\\d+_.*\\.sql$/.test(file)).sort();
+    const files = (await readdir(root)).filter(file => /^\d+_.*\.sql$/.test(file)).sort();
     assert.ok(files.some(file => file.startsWith('009_')));
     for (const file of files) {
       const source = await readFile(path.join(root, file));
       await writeFile(path.join(full, file), source);
-      if (Number(file.match(/^\\d+/)[0]) <= 9) await writeFile(path.join(pre, file), source);
+      if (Number(file.match(/^\d+/)[0]) <= 9) await writeFile(path.join(pre, file), source);
     }
     await migrateVNext({ pool, directory: pre });
     assert.equal((await pool.query("SELECT count(*)::int AS count FROM vnext_schema_migrations WHERE version=9")).rows[0].count, 1);
