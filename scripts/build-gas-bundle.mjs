@@ -26,7 +26,8 @@ const DEPLOYABLE_FILES = new Set([
   'gas_v8.js',
   'gas_vnext_events.js',
   'gas_zz_a_dispatch.js',
-  'gas_zz_auth_trace.js'
+  'gas_zz_auth_trace.js',
+  'gas_zzz_email.js'
 ]);
 
 const root = process.argv[2] ?? 'gas';
