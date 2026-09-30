@@ -18,3 +18,8 @@ The archive includes all tracked and non-ignored source files, including tests a
 - The six email tests passed, including actual offline SQL migrations through 010, pilot execution, simulated Gmail routing, authenticated transport, uncertain-send readback, and result/input provenance. The existing pilot SQL integration suite also passed.
 - Focused regression command passed all 35 tests with no skips: `node --test test/vnext-email.test.mjs test/vnext-email.integration.test.mjs test/vnext-email-package.test.mjs test/vnext-arm-contract.test.mjs test/gas-bundle-builder.test.mjs test/gas-federation.test.mjs test/gas-control-plane-dispatch.test.mjs test/vnext-pilot.integration.test.mjs`. `git diff --check` passed.
 - No production database migrations, mailbox access, email sending, deployment, or timer activation was performed. Native PostgreSQL, Linux process-group execution, and live mailbox/host qualification remain CI/operator verification requirements.
+
+
+## Retargeting lineage
+
+After minimum-loop PR #65, canonical migrations are `009_project_reconciliation.sql`, `010_email_pilot.sql`, and `011_email_pilot_integrity.sql`.
