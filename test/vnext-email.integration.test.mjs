@@ -24,7 +24,6 @@ test('email intake → durable execution → fenced reply, retries and thread co
   const run=executor=>runPilotOnce({store,projectId,workspaceRoot:dir,identityFiles:[path.join(dir,'identity.md')],authority,executor});
   const waiting=w=>({objective_id:w.objective_ref,disposition:'waiting',summary:'Checked; waiting for your choice.',continuation:{mode:'condition',condition:{kind:'human',condition:'Human replies.'}}});
   try {
-    await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
     await pool.query("DO $ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $");
     await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
     await writeFile(path.join(dir,'identity.md'),'Reconstruct, execute and check.');
@@ -91,6 +90,7 @@ test('reconciliation blocks Gmail delivery at the durable admission boundary and
   const store=createPilotStore({pool,authorizationVerifier:authority.verifyExecution});
   const run=executor=>runPilotOnce({store,projectId,workspaceRoot:dir,identityFiles:[path.join(dir,'identity.md')],authority,executor});
   try {
+    await pool.query("DO $ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $");
     await migrateVNext({pool,directory:fileURLToPath(new URL('../vnext-migrations',import.meta.url))});
     await writeFile(path.join(dir,'identity.md'),'Reconstruct, execute and check.');
     const email=createEmailPilot(config);
