@@ -136,7 +136,7 @@ test('reconciliation blocks Gmail delivery at the durable admission boundary and
   } finally { await pool.end(); await rm(dir,{recursive:true,force:true}); }
 });
 
-test('Gmail admission and reconciliation share the project serialization boundary',{timeout:60000},async()=>{
+test('Gmail admission and reconciliation share the project serialization boundary',{timeout:60000,skip:!process.env.TEST_DATABASE_URL},async()=>{
   const pool=await testPool(),dir=await mkdtemp(path.join(tmpdir(),'email-admission-race-'));
   const suffix=randomUUID(),projectId='email-race-'+suffix,mailboxId='race-mailbox-'+suffix;
   const store=createPilotStore({pool,authorizationVerifier:async()=>true});
