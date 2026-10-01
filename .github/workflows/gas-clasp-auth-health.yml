@@ -2,6 +2,14 @@ name: GAS clasp auth health
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Read-only diagnostic or existing authentication health check
+        type: choice
+        options:
+          - inspect-readonly
+          - auth-health
+        default: inspect-readonly
   schedule:
     # Periodic early-warning check. UTC; does not keep OAuth grants alive.
     - cron: "17 13 1 * *"
@@ -10,7 +18,24 @@ permissions:
   contents: read
 
 jobs:
+  inspect-readonly:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect-readonly'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - name: Verify diagnostic redaction and read-only contract
+        run: node --test test/gas-readonly-diagnostic.test.mjs
+      - name: Inspect allowlisted deployment metadata and source presence only
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: node scripts/inspect-gas-readonly.mjs
+
   auth-health:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode == 'auth-health'
     runs-on: ubuntu-latest
 
     env:
