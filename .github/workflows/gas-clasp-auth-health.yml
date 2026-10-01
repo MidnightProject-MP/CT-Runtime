@@ -32,6 +32,7 @@ jobs:
       - name: Inspect allowlisted deployment metadata and source presence only
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
         run: node scripts/inspect-gas-readonly.mjs
 
   auth-health:

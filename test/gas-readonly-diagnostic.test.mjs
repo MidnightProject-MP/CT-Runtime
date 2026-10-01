@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { gasDiagnosticProperties } from '../scripts/gas-diagnostic-properties.cjs';
-import { inspectGas, inspectSource, SCRIPT_ID, DEPLOYMENT_ID } from '../scripts/inspect-gas-readonly.mjs';
+import { inspectGas, inspectSource, inspectEntryPoints, probeEndpoint, sourceHash, urlIdentity, SCRIPT_ID, DEPLOYMENT_ID } from '../scripts/inspect-gas-readonly.mjs';
 
 test('property helper reads exactly three keys; strips credentials, query and fragment', () => {
   const read = [];
@@ -79,4 +79,69 @@ test('target mismatch stops before source reads', async () => {
   await assert.rejects(inspectGas({ credentials, fetchImpl: async () => ({ ok: true, json: async () => ++calls === 1
     ? { access_token: 'SECRET' } : { deploymentId: 'other', deploymentConfig: { versionNumber: 100 } } }) }), { message: 'target-mismatch' });
   assert.equal(calls, 2);
+});
+
+const endpoint = `https://script.google.com/macros/s/${DEPLOYMENT_ID}/exec`;
+test('actual entrypoint config overrides no manifest assumptions; identical targets probe once without auth', async () => {
+  let calls = 0, cancelled = false;
+  const result = await inspectEntryPoints({ entryPoints: [
+    { entryPointType: 'WEB_APP', webApp: { url: endpoint, entryPointConfig: { access: 'MYSELF', executeAs: 'USER_ACCESSING', secret: 'SECRET' } } },
+    { entryPointType: 'EXECUTION_API', executionApi: { secret: 'SECRET' } }
+  ] }, endpoint.replace('script.google.com', 'SCRIPT.GOOGLE.COM'), async (url, options) => {
+    calls++;
+    assert.equal(url, endpoint);
+    assert.equal(options.method, 'GET');
+    assert.equal(options.redirect, 'manual');
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.headers, undefined);
+    assert.equal(options.body, undefined);
+    return { status: 302, headers: { get(key) { assert.equal(key, 'content-type'); return 'text/html; secret=SECRET'; } },
+      body: { cancel() { cancelled = true; } }, text() { throw Error('body read'); } };
+  }, true);
+  assert.equal(calls, 1);
+  assert.equal(cancelled, true);
+  assert.equal(result.access, 'MYSELF');
+  assert.equal(result.executeAs, 'USER_ACCESSING');
+  assert.equal(result.executionApiPresent, true);
+  assert.equal(result.normalizedUrlsEqual, true);
+  assert.deepEqual(result.canonicalProbe, { status: 302, contentType: 'text/html' });
+  assert.equal(result.configuredProbe.reusedCanonicalProbe, true);
+  assert.ok(!JSON.stringify(result).includes('SECRET'));
+});
+
+test('unsafe, mismatched, encoded and decorated URLs are never probed or disclosed', async () => {
+  for (const raw of [endpoint + '?token=SECRET', endpoint + '#SECRET', endpoint + '?', endpoint + '#',
+    endpoint.replace('https://', 'https://user:SECRET@'), endpoint.replace('script.google.com', 'SECRET.example'),
+    endpoint.replace(DEPLOYMENT_ID, 'SECRET'), endpoint.replace('/exec', '/dev'), endpoint.replace('https:', 'http:'),
+    endpoint.replace('/exec', '/%65xec'), endpoint.replace('/exec', '/a/../exec'), endpoint.replace('.com/', '.com:443/'),
+    endpoint + '\n', 'https://script.google.com\\@SECRET.example/', undefined]) {
+    const result = await probeEndpoint(raw, () => { throw Error('must not fetch'); });
+    assert.equal(result.status, 'skipped-not-pinned-url');
+    assert.ok(!JSON.stringify(urlIdentity(raw)).includes('SECRET'));
+  }
+  const result = await inspectEntryPoints({ entryPoints: [{ entryPointType: 'WEB_APP', webApp: { url: endpoint } }] },
+    endpoint + '?SECRET', undefined, false);
+  assert.equal(result.normalizedUrlsEqual, false);
+  assert.equal(result.executionApiPresent, false);
+  assert.ok(!JSON.stringify(result).includes('SECRET'));
+});
+
+test('probes redact network errors and unknown content types', async () => {
+  assert.deepEqual(await probeEndpoint(endpoint, async () => { throw Error('SECRET'); }), { status: 'probe-failed' });
+  assert.deepEqual(await probeEndpoint(endpoint, async () => ({ status: 403,
+    headers: { get: () => 'SECRET' } })), { status: 403, contentType: null });
+});
+
+test('content hashes ignore file ordering/metadata but detect any source, type or name change', () => {
+  const a = { name: 'a', type: 'SERVER_JS', source: 'SECRET' };
+  const b = { name: 'b', type: 'JSON', source: '{}' };
+  const hash = sourceHash({ files: [a, b] });
+  assert.match(hash, /^[a-f0-9]{64}$/);
+  assert.equal(hash, sourceHash({ files: [{ ...b, functionSet: 'ignored' }, a] }));
+  for (const change of [{ source: 'different' }, { name: 'c' }, { type: 'HTML' }]) {
+    assert.notEqual(hash, sourceHash({ files: [{ ...a, ...change }, b] }));
+  }
+  for (const content of [{}, { files: [] }, { files: [a, a] }, { files: [{ name: 'a' }] }]) {
+    assert.throws(() => sourceHash(content), /invalid-content/);
+  }
 });

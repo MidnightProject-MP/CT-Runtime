@@ -13,6 +13,24 @@ Source stays in memory; no source snapshot, artifact, raw error response, OAuth
 token, property dump, file names, or deployment description is logged or saved.
 Source presence is not evidence of a live property's value or handler reachability.
 
+The extended diagnostic also reads actual deployment `entryPoints`: WEB_APP
+access/executeAs enums and canonical URL identity, and EXECUTION_API presence
+only (never invocation). CT_GAS_ADMIN_WEB_APP_URL is supplied as a secret environment
+variable and compared to the canonical URL after URL normalization entirely in
+memory. Only equality and allowlisted identity components are emitted; unknown
+hosts/IDs become null, and credentials/query/fragment/full URLs are never printed.
+HEAD/live equality uses SHA-256 over sorted exact `{name,type,source}` objects,
+excluding API metadata. These diagnostic hashes are not deployment-protocol hashes.
+
+The CLI additionally permits one unauthenticated GET per distinct strictly pinned
+HTTPS `script.google.com/macros/s/<pinned deployment ID>/exec` target. Credentials,
+queries, fragments, ports, encoded paths and other targets are rejected, not
+rewritten into probeable URLs. Redirects are manual and never followed. Only
+HTTP status and allowlisted base content type are retained; body streams are
+cancelled and Location/cookies are not inspected. Identical canonical/configured
+targets reuse one probe result. GET status is not proof of POST functionality or
+live property access. No self-deploy POST, GAS execution API, or deployment occurs.
+
 ## Invocation
 
 ```text
