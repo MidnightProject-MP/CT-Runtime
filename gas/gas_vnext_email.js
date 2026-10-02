@@ -26,7 +26,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     options.followRedirects=false; // Never forward bearer credentials to redirects.
     var r=UrlFetchApp.fetch(url,options), code=r.getResponseCode();
     if(code<200||code>=300)throw new Error('email transport unavailable');
-    var raw=String(r.getContentText());if(raw.length>250000)throw new Error('email response too large');
+    var raw=String(r.getContentText());if(raw.length>250000){var oversized=new Error('email response too large');oversized.emailOversized=true;throw oversized;}
     return JSON.parse(raw);
   }
   function rpc(c,operation,input) {
@@ -75,16 +75,27 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     for(var n=0;n<refs.length&&Date.now()<deadline;n++){
       var id=refs[n].id;
       try{
-        var m=api('messages/'+encodeURIComponent(id)+'?format=full'), envelope=incoming(m);
-        if(envelope.subject.indexOf(c.key)>=0||envelope.reference.indexOf(c.key)>=0)throw new Error('unsafe header');
+        var m,envelope,rejected=false;
+        try{m=api('messages/'+encodeURIComponent(id)+'?format=full');}
+        catch(fetchError){if(fetchError.emailOversized)rejected=true;else throw fetchError;}
+        if(!rejected){
+          try{envelope=incoming(m);if(envelope.subject.indexOf(c.key)>=0||envelope.reference.indexOf(c.key)>=0)rejected=true;}
+          catch(validationError){rejected=true;}
+        }
+        if(rejected){
+          // Only deterministic unsupported/malformed content is quarantined.
+          if(rpc(c,'quarantine',{id:id}).status!=='quarantined')throw new Error('quarantine not acknowledged');
+          api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});
+          continue;
+        }
         envelope.body=envelope.body.split(c.key).join('[REDACTED]');
         var result=rpc(c,'ingest',envelope);
         if(result.status!=='inserted'&&result.status!=='duplicate')throw new Error('email ingest not acknowledged');
         api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});
       }catch(_){
-        // Durable rejection first; no property cursor, raw body, or error text.
-        // A transient rejection is recoverable by deliberately reapplying the label.
-        try{if(rpc(c,'quarantine',{id:id}).status==='quarantined')api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});else complete=false;}catch(ignore){complete=false;}
+        // Transport/ingest/unclassified failures retain the queue label. The next
+        // bounded tick retries; incomplete intake cannot authorize a NEW send.
+        complete=false;
       }
     }
     return complete&&n===refs.length;

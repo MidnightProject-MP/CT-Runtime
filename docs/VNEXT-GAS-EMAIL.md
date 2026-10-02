@@ -199,13 +199,17 @@ Gmail and Neon. Do not clear the reconciliation block or reset its state merely
 because search is empty. No automatic retry, unsafe cleanup apply, or manual
 "mark unsent" RPC is provided. Positive exact readback can settle on the next
 tick. Truly unresolved effects require a separately reviewed recovery decision.
-Intake examines at most three queued messages per tick. Oversized, malformed,
-NUL-containing, unavailable, wrong-sender, or ingest-failing messages are isolated
-per message: first record only instance/message ID and a fixed rejection reason in
+Intake examines at most three queued messages per tick. Deterministically oversized,
+malformed, NUL-containing or wrong-sender messages are isolated per message:
+first record only instance/message ID and a fixed rejection reason in
 Neon, then remove the queue label (never delete the email). This prevents three
-poison messages from permanently hiding the fourth valid one. Even transient
-failures are quarantined; an operator can inspect the durable ID and deliberately
-reapply the label to retry. The quarantine audit row remains. If quarantine or
+poison messages from permanently hiding the fourth valid one. Transport, unavailable
+message, ingest, and unclassified failures instead **retain the queue label** and
+mark intake incomplete. The next bounded trigger retries without manual relabeling;
+no new send is admitted while a correction may remain unconsumed. Persistent
+outages may block intake rather than silently discard valid mail. An operator can
+inspect a deterministic rejection's durable ID and deliberately reapply its label
+after addressing the cause; the quarantine audit row remains. If quarantine or
 label removal cannot be confirmed, no new send is admitted that tick. An intake
 listing failure likewise prevents new sends, **but already-admitted effects still
 attempt readback reconciliation**. A persistent Gmail/Neon outage can require

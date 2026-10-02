@@ -78,18 +78,36 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.doesNotMatch(JSON.stringify(sql('SELECT * FROM gas_email_receipts')),/test-openrouter-secret/);
       assert.doesNotMatch(JSON.stringify(sql('SELECT * FROM vnext_pilot_results')),/test-openrouter-secret/);
     });
-    await t.test('three poison messages cannot starve valid intake; fetch/ingest failures quarantine individually',()=>{
+    await t.test('three deterministic poison messages cannot starve valid intake',()=>{
       reset();const f=fixture();
       f.add('huge');f.messages.get('huge').padding='x'.repeat(250001);
-      f.add('missing');f.unavailable.add('missing');
+      f.add('wrong','thread1','unsupported','attacker@example.com');
       f.add('nul','thread1','invalid\u0000body');f.add('valid','validThread');
       assert.equal(f.tick().status,'idle');assert.equal(rpc('health').quarantined,3);
-      for(const id of ['huge','missing','nul'])assert.ok(!f.messages.get(id).labelIds.includes('queue'));
+      for(const id of ['huge','wrong','nul'])assert.ok(!f.messages.get(id).labelIds.includes('queue'));
       assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
       assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_receipts')[0].n),1);
-      reset();let failed=false;const g=gasEmailFixture((op,data)=>{if(op==='ingest'&&data.id==='ingestFail'&&!failed){failed=true;throw new Error('ingest unavailable');}return rawRpc(op,data);});
-      g.add('ingestFail');g.add('good','goodThread');assert.equal(g.tick().status,'sent');
-      assert.equal(rpc('health').quarantined,1);assert.equal(g.sends,1);
+    });
+    await t.test('transient fetch and before-commit ingest failures retry next tick without relabeling',()=>{
+      for(const mode of ['fetch','ingest']){
+        reset();let fail=true;const f=gasEmailFixture((op,data)=>{if(mode==='ingest'&&op==='ingest'&&fail)throw new Error('before-commit outage');return rawRpc(op,data);});
+        f.add('retry');if(mode==='fetch')f.unavailable.add('retry');
+        f.tick();assert.equal(f.sends,0);assert.equal(rpc('health').quarantined,0);
+        assert.ok(f.messages.get('retry').labelIds.includes('queue'));
+        assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_receipts')[0].n),0);
+        fail=false;f.unavailable.clear();assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
+      }
+    });
+    await t.test('unconsumed correction with transient ingest failure prevents admission of an older pending reply',()=>{
+      reset();let fail=false;const f=gasEmailFixture((op,data)=>{if(op==='ingest'&&data.id==='correction'&&fail)throw new Error('before-commit outage');return rawRpc(op,data);});
+      f.add('original');f.loseNextCheckpoint();assert.equal(f.tick().status,'blocked');
+      f.add('correction','thread1','Use the corrected requirement.');fail=true;
+      assert.equal(f.tick().status,'intake-unavailable');assert.equal(f.sends,0);
+      assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'pending');
+      assert.ok(f.messages.get('correction').labelIds.includes('queue'));assert.equal(rpc('health').quarantined,0);
+      fail=false;f.setModel(request=>{assert.equal(JSON.parse(request.messages[1].content).inputs[0].message,'Use the corrected requirement.');return {disposition:'done',summary:'Corrected reply.'};});
+      assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
+      assert.equal(Number(sql("SELECT count(*) AS n FROM gas_email_outbox WHERE state='superseded'")[0].n),1);
     });
     await t.test('intake outage does not prevent admitted readback, but prevents NEW send admission',()=>{
       reset();const f=fixture();f.add('prior');f.loseNextSend();assert.equal(f.tick().status,'blocked');
