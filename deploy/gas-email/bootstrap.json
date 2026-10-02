@@ -1,0 +1,12 @@
+{
+  "purpose": "Fresh dedicated GAS email database only; never run against legacy/shared deployments",
+  "files": [
+    "vnext-migrations/001_outer_loop.sql",
+    "vnext-migrations/002_survivability.sql",
+    "vnext-migrations/006_project_mutation_authority.sql",
+    "vnext-migrations/007_authorization_provenance.sql",
+    "vnext-migrations/008_minimum_pilot.sql",
+    "vnext-migrations/009_project_reconciliation.sql",
+    "deploy/gas-email/schema.sql"
+  ]
+}
