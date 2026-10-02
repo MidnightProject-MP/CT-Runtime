@@ -30,6 +30,8 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       sql("UPDATE gas_email_instances SET active=false");assert.throws(()=>rpc('health'),/principal denied/);sql("UPDATE gas_email_instances SET active=true");
       assert.equal(sql("SELECT has_table_privilege('authenticated','vnext_work_units','INSERT') AS allowed")[0].allowed,false);
       assert.equal(sql("SELECT has_function_privilege('authenticated','gas_email_principal(text)','EXECUTE') AS allowed")[0].allowed,false);
+      const checks=sql("SELECT prosecdef,proconfig FROM pg_proc WHERE oid IN ('vnext_assert_project_mutation_authority_active()'::regprocedure,'vnext_assert_authority_authorization_ref()'::regprocedure)");
+      assert.equal(checks.length,2);assert.ok(checks.every(p=>p.prosecdef&&p.proconfig.includes('search_path=pg_catalog, public')));
       assert.throws(()=>rpc('execute_sql',{sql:'select 1'}),/unknown email operation/);
     });
     await t.test('real GAS modules: Gmail ingest, OpenRouter text, checkpoint, same-thread MIME reply and cold reconstruction',()=>{

@@ -9,6 +9,15 @@ DO $$ BEGIN
    RAISE EXCEPTION 'GAS email bootstrap requires a fresh dedicated database';
  END IF;
 END $$;
+
+-- Deferred constraints fire at transaction COMMIT, after the RPC's definer
+-- context has unwound. Preserve the kernel invariants without granting the
+-- authenticated caller table reads. Their source uses qualified public tables.
+ALTER FUNCTION public.vnext_assert_project_mutation_authority_active() SECURITY DEFINER;
+ALTER FUNCTION public.vnext_assert_project_mutation_authority_active() SET search_path=pg_catalog,public;
+ALTER FUNCTION public.vnext_assert_authority_authorization_ref() SECURITY DEFINER;
+ALTER FUNCTION public.vnext_assert_authority_authorization_ref() SET search_path=pg_catalog,public;
+
 CREATE TABLE public.gas_email_instances (
  instance_id text PRIMARY KEY, jwt_sub text NOT NULL, jwt_aud text NOT NULL,
  project_id text NOT NULL UNIQUE, mailbox text NOT NULL,
