@@ -1,10 +1,12 @@
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
 export function gasEmailFixture(rpc) {
   const values={CT_VNEXT_EMAIL_ENABLED:'true',CT_VNEXT_EMAIL_INSTANCE:'gas-test',CT_VNEXT_EMAIL_DATA_API_URL:'https://test.neon.tech',CT_VNEXT_EMAIL_MODEL:'test/model',CT_VNEXT_EMAIL_LABEL:'Celestan',OPENROUTER_API_KEY:'test-openrouter-secret'};
   const messages=new Map();let sends=0,loseSend=false,searchVisible=true,loseCheckpoint=false,loseAdmission=false;
   let model=()=>({disposition:'done',summary:'Here is a useful draft.',artifact:'A bounded answer.'});
   let ticks=0,now=Date.now();const triggers=[];
+  const unavailable=new Set();let listFailure=false,searchToken=false;const rawMessages=[];
   function add(id,thread='thread1',body='Draft a brief thank-you.',sender='midnightprojectantigravity@gmail.com') {
     messages.set(id,{id,threadId:thread,labelIds:['queue'],payload:{mimeType:'text/plain',headers:[{name:'From',value:sender},{name:'To',value:'midnight.project.mp@gmail.com'},{name:'Subject',value:'A useful task'},{name:'Message-ID',value:`<${id}@example.com>`}],body:{data:Buffer.from(body).toString('base64url')}}});
   }
@@ -28,18 +30,24 @@ export function gasEmailFixture(rpc) {
         if(route==='profile')result={emailAddress:'midnight.project.mp@gmail.com'};
         else if(route==='labels')result={labels:[{id:'queue',name:'Celestan'}]};
         else if(route==='messages'){
-          const q=u.searchParams.get('q');result={messages:[...messages.values()].filter(m=>q?searchVisible&&m.labelIds.includes('SENT')&&q.includes(m.payload.headers.find(h=>h.name==='Message-ID').value):m.labelIds.includes('queue')).slice(0,3).map(m=>({id:m.id}))};
+          const q=u.searchParams.get('q');if(!q&&listFailure)throw new Error('intake unavailable');
+          const all=[...messages.values()].filter(m=>q?searchVisible&&m.labelIds.includes('SENT')&&q.includes(m.payload.headers.find(h=>h.name==='Message-ID').value):m.labelIds.includes('queue'));
+          const max=Number(u.searchParams.get('maxResults'));result={messages:all.slice(0,max).map(m=>({id:m.id}))};
+          if(q&&(searchToken||all.length>max))result.nextPageToken='more-results';
         }else if(route==='messages/send'){
           const data=JSON.parse(opts.payload),raw=Buffer.from(data.raw,'base64url').toString(),[head,body]=raw.split('\r\n\r\n'),id='sent'+(++sends);
-          const headers=head.split('\r\n').map(line=>{const at=line.indexOf(':');let value=line.slice(at+1).trim();if(value.startsWith('=?UTF-8?B?'))value=Buffer.from(value.slice(10,-2),'base64').toString();return {name:line.slice(0,at),value};});
+          rawMessages.push(raw);
+          for(const line of head.split('\r\n'))assert.ok(Buffer.byteLength(line)<=998,'RFC5322 header line bound');
+          for(const word of head.match(/=\?UTF-8\?B\?[^?]+\?=/g)||[]){assert.ok(word.length<=75,'RFC2047 encoded-word bound');new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from(word.slice(10,-2),'base64'));}
+          const headers=head.replace(/\r\n[ \t]+/g,' ').split('\r\n').map(line=>{const at=line.indexOf(':');return {name:line.slice(0,at),value:line.slice(at+1).trim()};});
           messages.set(id,{id,threadId:data.threadId,labelIds:['SENT'],payload:{headers,mimeType:'text/plain',body:{data:Buffer.from(body.replace(/\s/g,''),'base64').toString('base64url')}}});result={id};
           if(loseSend){loseSend=false;throw new Error('lost send response');}
         }else if(route.endsWith('/modify')){const m=messages.get(route.split('/')[1]);m.labelIds=m.labelIds.filter(x=>!JSON.parse(opts.payload).removeLabelIds.includes(x));result=m;}
-        else result=messages.get(route.split('/')[1]);
+        else {if(unavailable.has(route.split('/')[1]))throw new Error('message unavailable');result=messages.get(route.split('/')[1]);}
       }
       if(result===undefined)throw new Error('unexpected request');
       return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(result)};
     }}});
   function cold(){const ctx=context();vm.runInContext(readFileSync(new URL('../gas/gas_vnext_email.js',import.meta.url),'utf8'),ctx);return ctx;}
-  return {values,messages,add,cold,tick(){ticks++;return cold().vnextEmailTick();},get sends(){return sends;},get ticks(){return ticks;},setModel(fn){model=fn;},advance(ms){now+=ms;},loseNextSend(){loseSend=true;},loseNextCheckpoint(){loseCheckpoint=true;},loseNextAdmission(){loseAdmission=true;},hideSearch(){searchVisible=false;},showSearch(){searchVisible=true;}};
+  return {values,messages,add,cold,unavailable,rawMessages,failIntake(value=true){listFailure=value;},truncateSearch(value=true){searchToken=value;},tick(){ticks++;return cold().vnextEmailTick();},get sends(){return sends;},get ticks(){return ticks;},setModel(fn){model=fn;},advance(ms){now+=ms;},loseNextSend(){loseSend=true;},loseNextCheckpoint(){loseCheckpoint=true;},loseNextAdmission(){loseAdmission=true;},hideSearch(){searchVisible=false;},showSearch(){searchVisible=true;}};
 }

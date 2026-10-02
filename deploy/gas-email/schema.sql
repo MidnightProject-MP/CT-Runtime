@@ -30,6 +30,13 @@ CREATE TABLE public.gas_email_threads (
  instance_id text NOT NULL REFERENCES public.gas_email_instances,
  thread_id text NOT NULL, UNIQUE(instance_id,thread_id)
 );
+CREATE TABLE public.gas_email_quarantine (
+ instance_id text NOT NULL REFERENCES public.gas_email_instances,
+ message_id text NOT NULL CHECK(message_id ~ '^[a-zA-Z0-9_-]{1,100}$'),
+ reason text NOT NULL CHECK(reason='intake-rejected'),
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(instance_id,message_id)
+);
+ALTER TABLE public.vnext_pilot_progress ADD COLUMN failed_through_seq bigint NOT NULL DEFAULT 0;
 CREATE TABLE public.gas_email_receipts (
  instance_id text NOT NULL REFERENCES public.gas_email_instances,
  message_id text NOT NULL, input_seq bigint NOT NULL UNIQUE REFERENCES public.vnext_pilot_inputs,
@@ -90,9 +97,14 @@ BEGIN
     'allowed_sender',i.allowed_sender,'grant_ref',i.grant_ref,
     'pending',(SELECT count(*) FROM public.gas_email_outbox WHERE instance_id=i.instance_id AND state='pending'),
     'uncertain',(SELECT count(*) FROM public.gas_email_outbox WHERE instance_id=i.instance_id AND state='admitted'),
+    'quarantined',(SELECT count(*) FROM public.gas_email_quarantine WHERE instance_id=i.instance_id),
     'failed',(SELECT count(*) FROM public.vnext_executions WHERE project_id=i.project_id AND state IN ('failed','expired')),
     'review',(SELECT count(*) FROM public.vnext_work_units WHERE project_id=i.project_id AND state='review'),
     'blocked',EXISTS(SELECT 1 FROM public.vnext_project_reconciliation_blocks WHERE project_id=i.project_id));
+ ELSIF p_operation='quarantine' THEN
+   INSERT INTO public.gas_email_quarantine(instance_id,message_id,reason)
+     VALUES(i.instance_id,p_input->>'id','intake-rejected') ON CONFLICT DO NOTHING;
+   RETURN jsonb_build_object('status','quarantined');
  ELSIF p_operation='ingest' THEN
    IF p_input->>'from' IS DISTINCT FROM i.allowed_sender OR p_input->>'to' IS DISTINCT FROM i.mailbox
       OR coalesce(p_input->>'id','') !~ '^[a-zA-Z0-9_-]{1,100}$'
@@ -133,14 +145,14 @@ BEGIN
      UPDATE public.vnext_executions SET state='expired',finished_at=clock_timestamp(),failure='{"reason":"text-turn-expired"}' WHERE execution_id=a.execution_id;
      UPDATE public.vnext_work_units SET claim_execution_id=NULL,claim_owner=NULL,claim_fence=NULL,claim_expires_at=NULL,
        state='waiting',failure='{"reason":"text-turn-expired"}' WHERE work_unit_id=a.work_unit_id;
-     UPDATE public.vnext_pilot_progress SET consumed_input_seq=(SELECT input_seq FROM public.gas_email_turns WHERE execution_id=a.execution_id),next_wake_at=NULL WHERE work_unit_id=a.work_unit_id;
+     UPDATE public.vnext_pilot_progress SET failed_through_seq=(SELECT max(input_seq) FROM public.vnext_pilot_inputs WHERE work_unit_id=a.work_unit_id),next_wake_at=NULL WHERE work_unit_id=a.work_unit_id;
      DELETE FROM public.vnext_project_mutation_authority WHERE project_id=i.project_id;
    END IF;
    IF EXISTS(SELECT 1 FROM public.gas_email_outbox WHERE instance_id=i.instance_id AND state IN ('pending','admitted')) THEN RETURN jsonb_build_object('status','delivery-first'); END IF;
    SELECT u.* INTO w FROM public.vnext_work_units u JOIN public.gas_email_threads g USING(work_unit_id)
      JOIN public.vnext_pilot_progress p USING(work_unit_id)
      WHERE g.instance_id=i.instance_id AND u.claim_execution_id IS NULL AND
-       (EXISTS(SELECT 1 FROM public.vnext_pilot_inputs x WHERE x.work_unit_id=u.work_unit_id AND x.input_seq>p.consumed_input_seq)
+       (EXISTS(SELECT 1 FROM public.vnext_pilot_inputs x WHERE x.work_unit_id=u.work_unit_id AND x.input_seq>greatest(p.consumed_input_seq,p.failed_through_seq))
         OR (u.state='actionable' AND p.next_wake_at<=clock_timestamp()))
      ORDER BY u.updated_at,u.work_unit_id LIMIT 1 FOR UPDATE OF u;
    IF NOT FOUND THEN RETURN jsonb_build_object('status','idle'); END IF;
@@ -178,7 +190,7 @@ BEGIN
        OR length(turn->>'summary')>4000
        OR coalesce(length(turn->>'question'),0)>1000 OR coalesce(length(turn->>'artifact'),0)>3000
        OR (disposition='waiting' AND coalesce(length(btrim(turn->>'question')),0)=0)
-       OR octet_length(turn::text)>16000 THEN RAISE EXCEPTION 'invalid bounded turn'; END IF;
+       OR (SELECT sum(octet_length(to_jsonb(coalesce(turn->>k,''))::text)) FROM unnest(ARRAY['disposition','summary','question','artifact']) k)>15900 THEN RAISE EXCEPTION 'invalid bounded turn'; END IF;
      turn:=jsonb_build_object('disposition',disposition,'summary',turn->>'summary','question',coalesce(turn->>'question',''),'artifact',coalesce(turn->>'artifact',''));
      response:=CASE WHEN disposition='done' THEN 'Draft outcome — pending human review.'||chr(10)||chr(10) ELSE '' END ||(turn->>'summary')
        ||CASE WHEN turn->>'question'<>'' THEN chr(10)||chr(10)||(turn->>'question') ELSE '' END
@@ -191,22 +203,27 @@ BEGIN
    ELSE
      disposition:='waiting'; turn:=jsonb_build_object('disposition','waiting','summary','Model turn failed; new human input required.');
    END IF;
-   UPDATE public.vnext_pilot_progress SET consumed_input_seq=t.input_seq,
+   UPDATE public.vnext_pilot_progress SET consumed_input_seq=CASE WHEN p_operation='checkpoint' THEN t.input_seq ELSE consumed_input_seq END,
+     failed_through_seq=CASE WHEN p_operation='failure' THEN (SELECT max(input_seq) FROM public.vnext_pilot_inputs WHERE work_unit_id=w.work_unit_id) ELSE 0 END,
      next_wake_at=CASE WHEN disposition='continue' AND (SELECT count(*) FROM public.gas_email_turns WHERE input_seq=t.input_seq)<3 THEN clock_timestamp()+interval '5 minutes' ELSE NULL END,updated_at=clock_timestamp() WHERE work_unit_id=w.work_unit_id;
    UPDATE public.vnext_work_units SET state=CASE
      WHEN EXISTS(SELECT 1 FROM public.vnext_pilot_inputs WHERE work_unit_id=w.work_unit_id AND input_seq>t.input_seq) THEN 'actionable'
      WHEN disposition='done' THEN 'review' WHEN disposition='continue' THEN 'actionable' ELSE 'waiting' END,
-     claim_execution_id=NULL,claim_owner=NULL,claim_fence=NULL,claim_expires_at=NULL,last_execution_id=a.execution_id,last_turn=turn,
+     claim_execution_id=NULL,claim_owner=NULL,claim_fence=NULL,claim_expires_at=NULL,
+     last_execution_id=CASE WHEN p_operation='checkpoint' THEN a.execution_id ELSE last_execution_id END,
+     last_turn=CASE WHEN p_operation='checkpoint' THEN turn ELSE last_turn END,
      updated_at=clock_timestamp() WHERE work_unit_id=w.work_unit_id;
    UPDATE public.vnext_executions SET state=CASE WHEN p_operation='failure' THEN 'failed' ELSE 'succeeded' END,
      failure=CASE WHEN p_operation='failure' THEN '{"reason":"bounded-model-failure"}'::jsonb ELSE NULL END,
      finished_at=clock_timestamp() WHERE execution_id=a.execution_id;
    DELETE FROM public.vnext_project_mutation_authority WHERE project_id=i.project_id;
    RETURN jsonb_build_object('status','settled');
- ELSIF p_operation='delivery' THEN
+ ELSIF p_operation IN ('delivery','delivery-peek') THEN
    SELECT * INTO o FROM public.gas_email_outbox WHERE instance_id=i.instance_id AND state IN ('pending','admitted') ORDER BY created_at LIMIT 1 FOR UPDATE;
    IF NOT FOUND THEN RETURN jsonb_build_object('status','idle'); END IF;
    IF o.state='admitted' THEN RETURN jsonb_build_object('status','reconcile','execution_id',o.execution_id,'envelope',o.envelope); END IF;
+   IF p_operation='delivery-peek' THEN RETURN jsonb_build_object('status','prepare','execution_id',o.execution_id,'envelope',o.envelope); END IF;
+   IF p_input->>'execution_id' IS DISTINCT FROM o.execution_id THEN RAISE EXCEPTION 'stale delivery preparation'; END IF;
    IF EXISTS(SELECT 1 FROM public.vnext_project_mutation_authority WHERE project_id=i.project_id)
       OR EXISTS(SELECT 1 FROM public.vnext_project_reconciliation_blocks WHERE project_id=i.project_id) THEN RETURN jsonb_build_object('status','blocked'); END IF;
    IF EXISTS(SELECT 1 FROM public.vnext_pilot_inputs WHERE work_unit_id=o.work_unit_id AND input_seq>o.input_seq) THEN

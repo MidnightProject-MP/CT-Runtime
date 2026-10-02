@@ -29,7 +29,10 @@ GitHub changes, or deploy anything. A plain-text artifact is returned inline, no
 published as a file. Email attachments/HTML-only messages are not supported.
 
 The model returns `waiting`, `continue`, or `done`, summary (4,000 characters),
-question (1,000), and optional artifact (3,000). Waiting requires a question;
+question (1,000), and optional artifact (3,000). The four canonical JSON string
+values together are also capped at **15,900 UTF-8 bytes including JSON escaping**;
+GAS checks exactly that budget before checkpoint and SQL enforces it independently.
+NUL/unpaired-surrogate text is rejected before checkpoint. Waiting requires a question;
 continue is limited to three turns per input watermark, separated by five
 minutes. After the budget is exhausted there is no automatic wake until new
 input. `done` produces a **draft outcome pending human review**, and Work Unit
@@ -57,8 +60,9 @@ constraints. It takes the same project advisory lock as the existing pilot.
 It is not a second uncoordinated work lifecycle. Never run another host for the
 registered project while this GAS-only grant is active.
 
-`gas_email_rpc` exposes only fixed ingest, claim/reconstruct, checkpoint, failure,
-delivery admission, record/readback settlement, and health operations. These
+`gas_email_rpc` exposes only fixed ingest, ID-only quarantine, claim/reconstruct,
+checkpoint, failure, delivery preparation/admission, record/readback settlement,
+and health operations. These
 are server-side transactions. SECURITY DEFINER functions have a fixed search
 path. Principal sub, audience, Google issuer, expiry, active instance, mailbox,
 project, and a nonempty reviewed grant reference are required. The project and
@@ -77,12 +81,22 @@ supersedes the old pending reply. Admission committed first creates a project
 reconciliation block; newer inputs may be ingested but no new execution can start
 until delivery is resolved. Native PostgreSQL CI tests both racing orderings.
 
+Before admission, GAS retrieves the pending envelope read-only, verifies original
+message provenance, and constructs/validates MIME. UTF-8 subject encoded words
+are split on code-point boundaries, limited to 42 source bytes (at most 68 encoded
+characters), and folded onto continuation lines. Admission then rechecks the exact
+prepared execution and newer-input/authority conditions transactionally. A failed
+preflight leaves the outbox pending, not irreversibly admitted.
+
 Before Gmail send, Neon irreversibly admits that single attempt. Each outbox has
 a deterministic RFC Message-ID derived from its durable execution identity. Only
 the invocation receiving `send` may attempt the send. A later invocation gets
 `reconcile`, **never permission to resend**, even if the first admission response
 was lost before sending. Gmail readback requires Sent label, exact Message-ID,
-thread, From/To, In-Reply-To, subject, and body. Search absence is not proof of
+thread, From/To, In-Reply-To, subject, and body. Reconciliation searches at most ten
+results; **any nextPageToken leaves the effect uncertain**, even with one exact
+match on the first page. Multiple exact matches also remain blocked. There is no
+partial-search uniqueness claim. Search absence is not proof of
 non-delivery. A send/ack/readback timeout remains uncertain, blocking that project.
 The registered GAS principal is trusted to attest exact Gmail readback; SQL cannot
 independently query Gmail. Do not grant that principal to arbitrary clients.
@@ -166,11 +180,18 @@ in-flight Gmail effect. Inspect/reconcile first; do not delete its ledger.
 ## Recovery and property lifecycle
 
 `healthVnextEmailRuntime()` returns only registration identity and aggregate
-pending/uncertain/failure/review counts, not secrets or message bodies. Failed
-model turns settle without a reply and require fresh human input. If GAS dies
+pending/uncertain/quarantine/failure/review counts, not secrets or message bodies.
+Failed model turns settle without a reply and require fresh human input. Failure
+and expiry **never advance the successful-consumption watermark**. A separate
+failed-through watermark suppresses automatic retries of already-present input.
+After a later human reply (for example, “retry”), reconstruction again includes
+the oldest unconsumed failed messages in bounded batches of three. If the failed
+batch contains three follow-ups, all three are reconstructed before the later
+retry message; no failed follow-up is replaced by a generic failure summary.
+There is no automatic endless retry or force-retry RPC. If GAS dies
 during a text-only turn, its eight-minute lease can expire safely: the next claim
-marks it expired, consumes only its snapshot, and waits for fresh input (preserving
-newer input). Text model calls have no external tools. An expired send is never
+marks it expired, retains its unconsumed snapshot and newer inputs, and waits for
+input newer than the failure gate. Text model calls have no external tools. An expired send is never
 treated as safe to retry.
 
 An admitted outbox with no exact Sent match needs operator investigation in
@@ -178,9 +199,18 @@ Gmail and Neon. Do not clear the reconciliation block or reset its state merely
 because search is empty. No automatic retry, unsafe cleanup apply, or manual
 "mark unsent" RPC is provided. Positive exact readback can settle on the next
 tick. Truly unresolved effects require a separately reviewed recovery decision.
-Queued malformed mail stays untouched; the poll is bounded to three messages and
-does not promise fairness if rejected mail occupies the queue. An operator must
-review/remove its queue label. Durable records grow with work; database retention
+Intake examines at most three queued messages per tick. Oversized, malformed,
+NUL-containing, unavailable, wrong-sender, or ingest-failing messages are isolated
+per message: first record only instance/message ID and a fixed rejection reason in
+Neon, then remove the queue label (never delete the email). This prevents three
+poison messages from permanently hiding the fourth valid one. Even transient
+failures are quarantined; an operator can inspect the durable ID and deliberately
+reapply the label to retry. The quarantine audit row remains. If quarantine or
+label removal cannot be confirmed, no new send is admitted that tick. An intake
+listing failure likewise prevents new sends, **but already-admitted effects still
+attempt readback reconciliation**. A persistent Gmail/Neon outage can require
+operator recovery; there is no property cursor or unsafe implicit resend.
+Durable records grow with work; database retention
 is a separate reviewed policy, never Script Property eviction.
 
 The new module performs **zero Script Property writes**, including no cursors,
@@ -198,7 +228,9 @@ occur on this email path.
 VMs, simulated Gmail/OpenRouter, and real SQL via the existing test-pool helper.
 It covers auth, grants, idempotency/conflicts, stale fences, bounded snapshots,
 same-thread MIME replies, reconstruction, invalid/timeout models, artifacts,
-new input, finite continuations, lost checkpoint/admission/send responses, and
+new input, finite continuations, lost checkpoint/admission/send responses, poison
+intake/quarantine, failed-snapshot retries, canonical multibyte/escaping byte
+boundaries, RFC2047 folding, truncated/duplicate Sent searches, and
 no Sheets/runtime-property access. CI also runs it through
 `scripts/run-postgres-suite.mjs` against isolated native PostgreSQL, including
 both genuine competing-transaction admission orderings; native races are not

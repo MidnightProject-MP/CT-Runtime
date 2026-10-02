@@ -65,22 +65,29 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function incoming(m) {
     if((m.labelIds||[]).some(function(x){return x==='SENT'||x==='DRAFT';})||address(header(m,'From'))!==SENDER||address(header(m,'To'))!==MAILBOX)throw new Error('email sender policy rejected');
     var reference=header(m,'Message-ID'),title=subject(m),body=text(m.payload).trim();
-    if(!/^<[^<>\s]{1,250}>$/.test(reference)||/[\r\n]/.test(title)||title.length>500||!body||body.length>16000)throw new Error('unsupported email');
+    if(!/^<[^<>\s]{1,250}>$/.test(reference)||/[^\x21-\x7e]/.test(reference)||/[\x00-\x1f\x7f]/.test(title)||title.length>500||!body||body.length>16000||body.indexOf('\u0000')>=0)throw new Error('unsupported email');
     return {id:m.id,threadId:m.threadId,from:SENDER,to:MAILBOX,reference:reference,subject:title,body:body};
   }
   function poll(c,deadline) {
+    var complete=true;
     var label=(api('labels').labels||[]).filter(function(x){return x.name===c.label;})[0];if(!label)throw new Error('email queue label missing');
     var refs=api('messages?labelIds='+encodeURIComponent(label.id)+'&maxResults=3').messages||[];
     for(var n=0;n<refs.length&&Date.now()<deadline;n++){
-      var m=api('messages/'+encodeURIComponent(refs[n].id)+'?format=full'), envelope;
-      // Invalid mail is left untouched for operator review. No raw data logging.
-      try{envelope=incoming(m);}catch(_){continue;}
-      if(envelope.subject.indexOf(c.key)>=0||envelope.reference.indexOf(c.key)>=0)continue;
-      envelope.body=envelope.body.split(c.key).join('[REDACTED]');
-      var result=rpc(c,'ingest',envelope);
-      if(result.status==='inserted'||result.status==='duplicate')api('messages/'+encodeURIComponent(m.id)+'/modify',{removeLabelIds:[label.id]});
-      else throw new Error('email ingest not acknowledged');
+      var id=refs[n].id;
+      try{
+        var m=api('messages/'+encodeURIComponent(id)+'?format=full'), envelope=incoming(m);
+        if(envelope.subject.indexOf(c.key)>=0||envelope.reference.indexOf(c.key)>=0)throw new Error('unsafe header');
+        envelope.body=envelope.body.split(c.key).join('[REDACTED]');
+        var result=rpc(c,'ingest',envelope);
+        if(result.status!=='inserted'&&result.status!=='duplicate')throw new Error('email ingest not acknowledged');
+        api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});
+      }catch(_){
+        // Durable rejection first; no property cursor, raw body, or error text.
+        // A transient rejection is recoverable by deliberately reapplying the label.
+        try{if(rpc(c,'quarantine',{id:id}).status==='quarantined')api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});else complete=false;}catch(ignore){complete=false;}
+      }
     }
+    return complete&&n===refs.length;
   }
   function model(c,claim,deadline) {
     if(Date.now()>deadline-60000)throw new Error('model budget exhausted');
@@ -91,33 +98,49 @@ var CT_GAS_VNEXT_EMAIL = (function () {
         messages:[{role:'system',content:CAPSULE},{role:'user',content:data}],max_tokens:2500,response_format:{type:'json_object'}}),muteHttpExceptions:true});
     if(Date.now()>deadline)throw new Error('model budget exhausted');
     var content=r&&r.choices&&r.choices[0]&&r.choices[0].message&&r.choices[0].message.content;
-    if(typeof content!=='string'||content.length>16000)throw new Error('invalid model output');
+    if(typeof content!=='string'||content.length>100000)throw new Error('invalid model output');
     var turn=JSON.parse(content.split(c.key).join('[REDACTED]'));
     if(!turn||['waiting','continue','done'].indexOf(turn.disposition)<0||typeof turn.summary!=='string'||!turn.summary.trim()||turn.summary.length>4000)throw new Error('invalid model turn');
     ['question','artifact'].forEach(function(k){if(turn[k]!==undefined&&(typeof turn[k]!=='string'||turn[k].length>(k==='question'?1000:3000)))throw new Error('invalid model artifact');});
     if(turn.disposition==='waiting'&&(!turn.question||!turn.question.trim()))throw new Error('missing model question');
-    return {disposition:turn.disposition,summary:turn.summary,question:turn.question||'',artifact:turn.artifact||''};
+    var canonical={disposition:turn.disposition,summary:turn.summary,question:turn.question||'',artifact:turn.artifact||''},bytes=0;
+    Object.keys(canonical).forEach(function(k){if(canonical[k].indexOf('\u0000')>=0)throw new Error('invalid text');utf8Bytes(canonical[k]);bytes+=utf8Bytes(JSON.stringify(canonical[k]));});
+    if(bytes>15900)throw new Error('model byte budget exceeded');
+    return canonical;
+  }
+  function utf8Bytes(s){return encodeURIComponent(s).replace(/%[0-9A-F]{2}|[^%]/g,'x').length;}
+  function mime(e) {
+    if(typeof e.subject!=='string'||!e.subject||e.subject.length>500||/[\x00-\x1f\x7f]/.test(e.subject)||!/^<[^<>\s]{1,250}>$/.test(e.reference)||/[^\x21-\x7e]/.test(e.reference)||!/^<gas-turn-[a-z0-9-]+@ct-runtime\.invalid>$/.test(e.messageId)||typeof e.body!=='string'||!e.body||e.body.length>8100)throw new Error('invalid reply envelope');
+    var chunks=[],chunk='';
+    Array.from(e.subject).forEach(function(ch){if(utf8Bytes(chunk+ch)>42){chunks.push(chunk);chunk='';}chunk+=ch;});if(chunk)chunks.push(chunk);
+    var title=chunks.map(function(s){return '=?UTF-8?B?'+Utilities.base64Encode(s,Utilities.Charset.UTF_8)+'?=';}).join('\r\n ');
+    return ['From: '+MAILBOX,'To: '+SENDER,'Subject: '+title,
+      'Message-ID: '+e.messageId,'In-Reply-To: '+e.reference,'References: '+e.reference,'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64','',Utilities.base64Encode(e.body,Utilities.Charset.UTF_8).match(/.{1,76}/g).join('\r\n')].join('\r\n');
   }
   function verifiedSent(actual,e) {
     return (actual.labelIds||[]).indexOf('SENT')>=0&&actual.threadId===e.threadId&&header(actual,'Message-ID')===e.messageId&&
       address(header(actual,'From'))===MAILBOX&&address(header(actual,'To'))===SENDER&&header(actual,'In-Reply-To')===e.reference&&
       subject(actual)===e.subject&&text(actual.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();
   }
-  function deliver(c) {
-    var d=rpc(c,'delivery'),e=d.envelope;if(d.status!=='send'&&d.status!=='reconcile')return d.status;
-    var sent;
-    if(d.status==='send'){
+  function deliver(c,reconcileOnly) {
+    var d=rpc(c,'delivery-peek'),e=d.envelope;if(d.status!=='prepare'&&d.status!=='reconcile')return d.status;
+    var sent,raw;
+    if(d.status==='prepare'){
+      if(reconcileOnly)return 'intake-unavailable';
       var original=incoming(api('messages/'+encodeURIComponent(e.id)+'?format=full'));
       if(original.threadId!==e.threadId||original.reference!==e.reference||original.subject!==e.subject)throw new Error('email reply provenance conflict');
-      var raw=['From: '+MAILBOX,'To: '+SENDER,'Subject: =?UTF-8?B?'+Utilities.base64Encode(e.subject,Utilities.Charset.UTF_8)+'?=',
-        'Message-ID: '+e.messageId,'In-Reply-To: '+e.reference,'References: '+e.reference,'MIME-Version: 1.0',
-        'Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64','',Utilities.base64Encode(e.body,Utilities.Charset.UTF_8).match(/.{1,76}/g).join('\r\n')].join('\r\n');
+      raw=mime(e); // Construct and validate before irreversible admission.
+      d=rpc(c,'delivery',{execution_id:d.execution_id});
+      if(d.status!=='send')return d.status;
       sent=api('messages/send',{threadId:e.threadId,raw:Utilities.base64EncodeWebSafe(raw,Utilities.Charset.UTF_8)});
       if(!sent.id)throw new Error('uncertain email send');
       sent=api('messages/'+encodeURIComponent(sent.id)+'?format=full');
       if(!verifiedSent(sent,e))throw new Error('uncertain email readback');
     }else{
-      var found=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId)).messages||[];
+      var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId));
+      if(page.nextPageToken)return 'uncertain'; // Never infer uniqueness from a truncated search.
+      var found=page.messages||[];
       for(var n=0;n<found.length;n++){
         var actual=api('messages/'+encodeURIComponent(found[n].id)+'?format=full');
         if(verifiedSent(actual,e)){if(sent)throw new Error('ambiguous email readback');sent=actual;}
@@ -133,8 +156,8 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       var deadline=Date.now()+240000;
       if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong execution mailbox');
       var health=rpc(c,'health');if(health.mailbox!==MAILBOX||health.allowed_sender!==SENDER)throw new Error('email registration mismatch');
-      poll(c,deadline-120000);
-      var delivery=deliver(c);if(delivery==='uncertain'||delivery==='blocked')return {status:delivery};
+      var intake=true;try{intake=poll(c,deadline-120000);}catch(_){intake=false;}
+      var delivery=deliver(c,!intake);if(!intake||delivery==='uncertain'||delivery==='blocked')return {status:delivery};
       if(Date.now()>deadline-90000)return {status:'budget'};
       var claim=rpc(c,'claim');if(claim.status!=='claimed')return claim;
       var turn;

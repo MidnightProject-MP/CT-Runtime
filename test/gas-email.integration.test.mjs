@@ -11,8 +11,9 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
   const [ready]=await once(worker,'message');assert.equal(ready.error,undefined);
   function request(message){Atomics.store(state,0,0);worker.postMessage(message);assert.notEqual(Atomics.wait(state,0,0,30000),'timed-out');const answer=JSON.parse(new TextDecoder().decode(new Uint8Array(bytes,0,Atomics.load(state,1))));if(answer.error)throw new Error(answer.error);return answer.result;}
   const sql=(sql,args)=>request({type:'sql',sql,args});
-  const rpc=(operation,input,extra={})=>request({type:'rpc',operation,input,...extra});
-  const fixture=()=>gasEmailFixture(rpc);
+  const rawRpc=(operation,input,extra={})=>request({type:'rpc',operation,input,...extra});
+  const rpc=(operation,input,extra={})=>rawRpc(operation,operation==='delivery'&&!input?{execution_id:rawRpc('delivery-peek',{},extra).execution_id}:input,extra);
+  const fixture=()=>gasEmailFixture(rawRpc);
   const input=(id,thread='sqlthread',body='Please draft.')=>({id,threadId:thread,from:'midnightprojectantigravity@gmail.com',to:'midnight.project.mp@gmail.com',reference:`<${id}@example.com>`,subject:'Task',body});
   const checkpoint=(claim,turn={disposition:'done',summary:'Draft complete.'})=>rpc('checkpoint',{execution_id:claim.execution_id,fence:claim.fence,turn});
   const reset=()=>sql('TRUNCATE gas_email_instances, vnext_work_units CASCADE; INSERT INTO gas_email_instances VALUES (\'gas-test\',\'gas-owner\',\'gas-client\',\'email-project\',\'midnight.project.mp@gmail.com\',\'midnightprojectantigravity@gmail.com\',true,\'reviewed:text-only:v1\')');
@@ -77,12 +78,101 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.doesNotMatch(JSON.stringify(sql('SELECT * FROM gas_email_receipts')),/test-openrouter-secret/);
       assert.doesNotMatch(JSON.stringify(sql('SELECT * FROM vnext_pilot_results')),/test-openrouter-secret/);
     });
+    await t.test('three poison messages cannot starve valid intake; fetch/ingest failures quarantine individually',()=>{
+      reset();const f=fixture();
+      f.add('huge');f.messages.get('huge').padding='x'.repeat(250001);
+      f.add('missing');f.unavailable.add('missing');
+      f.add('nul','thread1','invalid\u0000body');f.add('valid','validThread');
+      assert.equal(f.tick().status,'idle');assert.equal(rpc('health').quarantined,3);
+      for(const id of ['huge','missing','nul'])assert.ok(!f.messages.get(id).labelIds.includes('queue'));
+      assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_receipts')[0].n),1);
+      reset();let failed=false;const g=gasEmailFixture((op,data)=>{if(op==='ingest'&&data.id==='ingestFail'&&!failed){failed=true;throw new Error('ingest unavailable');}return rawRpc(op,data);});
+      g.add('ingestFail');g.add('good','goodThread');assert.equal(g.tick().status,'sent');
+      assert.equal(rpc('health').quarantined,1);assert.equal(g.sends,1);
+    });
+    await t.test('intake outage does not prevent admitted readback, but prevents NEW send admission',()=>{
+      reset();const f=fixture();f.add('prior');f.loseNextSend();assert.equal(f.tick().status,'blocked');
+      f.add('recoveryPoison');f.messages.get('recoveryPoison').padding='x'.repeat(250001);
+      assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);assert.equal(rpc('health').uncertain,0);
+      f.add('prior2');f.loseNextSend();assert.equal(f.tick().status,'blocked');
+      f.failIntake();assert.equal(f.tick().status,'sent');assert.equal(f.sends,2);assert.equal(rpc('health').uncertain,0);
+      reset();const g=fixture();g.add('pending');g.loseNextCheckpoint();assert.equal(g.tick().status,'blocked');
+      g.failIntake();assert.equal(g.tick().status,'intake-unavailable');assert.equal(g.sends,0);assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'pending');
+      g.failIntake(false);assert.equal(g.tick().status,'idle');assert.equal(g.sends,1);
+    });
+    await t.test('failed and expired snapshots retain all three follow-ups until a new human retry',()=>{
+      for(const expire of [false,true]){
+        reset();rpc('ingest',input('initial'));checkpoint(rpc('claim'));const d=rpc('delivery');rpc('record',{execution_id:d.execution_id,gmail_id:'initialSent',messageId:d.envelope.messageId,threadId:d.envelope.threadId});
+        const before=Number(sql('SELECT consumed_input_seq AS n FROM vnext_pilot_progress')[0].n);
+        for(let n=1;n<=3;n++)rpc('ingest',input('follow'+n,'sqlthread','Required follow-up '+n));
+        const c=rpc('claim');assert.equal(c.inputs.length,3);
+        if(expire){
+          sql("BEGIN; UPDATE vnext_executions SET claim_expires_at=clock_timestamp()-interval '1 second' WHERE state='running'; UPDATE vnext_work_units SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); UPDATE vnext_project_mutation_authority SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); COMMIT");
+          assert.equal(rpc('claim').status,'idle');
+        }else rpc('failure',{execution_id:c.execution_id,fence:c.fence});
+        assert.equal(rpc('claim').status,'idle');assert.equal(rpc('claim').status,'idle');
+        assert.equal(Number(sql('SELECT consumed_input_seq AS n FROM vnext_pilot_progress')[0].n),before);
+        rpc('ingest',input('retry','sqlthread','retry'));
+        const retry=rpc('claim');assert.equal(retry.previous.summary,'Draft complete.');assert.deepEqual(retry.inputs.map(x=>x.message),['Required follow-up 1','Required follow-up 2','Required follow-up 3']);
+        checkpoint(retry);assert.equal(rpc('delivery').status,'superseded');assert.equal(rpc('claim').inputs[0].message,'retry');
+      }
+    });
+    await t.test('canonical multilingual and JSON escaping byte budgets agree before checkpoint, failures preserve input',()=>{
+      const turns=[
+        {disposition:'done',summary:'界'.repeat(3000),artifact:'界'.repeat(2000)},
+        {disposition:'done',summary:'界'.repeat(4000),artifact:'界'.repeat(3000)},
+        {disposition:'done',summary:'界'.repeat(3000),artifact:'界'.repeat(2296)},
+        {disposition:'done',summary:'界'.repeat(3000),artifact:'界'.repeat(2297)},
+        {disposition:'done',summary:'"\\'.repeat(1900),artifact:'"\\'.repeat(1400)},
+        {disposition:'done',summary:'"'.repeat(4000),artifact:'"'.repeat(3000),question:'"'.repeat(944)},
+        {disposition:'done',summary:'"'.repeat(4000),artifact:'"'.repeat(3000),question:'"'.repeat(945)},
+        {disposition:'done',summary:'\u0001'.repeat(3000),artifact:''}
+      ];
+      for(const turn of turns){
+        reset();const f=fixture();f.add('bytes');f.setModel(()=>turn);
+        const bytes=['disposition','summary','question','artifact'].reduce((n,k)=>n+Buffer.byteLength(JSON.stringify(turn[k]||'')),0),valid=bytes<=15900;
+        assert.equal(f.tick().status,valid?'sent':'model-failed');
+        assert.equal(sql('SELECT state FROM vnext_executions')[0].state,valid?'succeeded':'failed');
+        if(!valid){
+          assert.equal(Number(sql('SELECT consumed_input_seq AS n FROM vnext_pilot_progress')[0].n),0);
+          assert.equal(f.tick().status,'idle');f.add('retryBytes','thread1','retry');
+          f.setModel(request=>{assert.equal(JSON.parse(request.messages[1].content).inputs[0].message,'Draft a brief thank-you.');return {disposition:'done',summary:'Recovered'};});
+          assert.equal(f.tick().status,'sent');
+        }
+        reset();rpc('ingest',input('sqlBytes'));const c=rpc('claim');
+        if(valid)checkpoint(c,turn);else assert.throws(()=>checkpoint(c,turn),/invalid bounded turn/);
+      }
+    });
+    await t.test('RFC2047 folded ASCII, CJK and emoji subjects roundtrip without splitting UTF-8',()=>{
+      for(const title of ['A'.repeat(500),'界'.repeat(500),'😀'.repeat(250)]){
+        reset();const f=fixture();f.add('subject');f.messages.get('subject').payload.headers.find(h=>h.name==='Subject').value=title;
+        assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);assert.ok(f.rawMessages[0].includes('\r\n =?UTF-8?B?'));
+      }
+      reset();const f=fixture();f.add('preflight');f.loseNextCheckpoint();assert.equal(f.tick().status,'blocked');
+      sql("UPDATE gas_email_outbox SET envelope=jsonb_set(envelope,'{subject}',to_jsonb(E'bad\\nheader'::text))");
+      assert.equal(f.tick().status,'blocked');assert.equal(f.sends,0);assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'pending');assert.equal(rpc('health').uncertain,0);
+    });
+    await t.test('truncated or duplicate Sent search never settles partial uniqueness',()=>{
+      for(const mode of ['token','second-page','same-page']){
+        reset();const f=fixture();f.add('search');f.loseNextSend();assert.equal(f.tick().status,'blocked');
+        const original=f.messages.get('sent1');
+        if(mode==='token')f.truncateSearch();
+        else if(mode==='same-page')f.messages.set('duplicate',{...structuredClone(original),id:'duplicate'});
+        else {
+          for(let n=0;n<9;n++){const m=structuredClone(original);m.id='nonmatch'+n;m.threadId='different';f.messages.set(m.id,m);}
+          f.messages.set('hiddenDuplicate',{...structuredClone(original),id:'hiddenDuplicate'});
+        }
+        assert.equal(f.tick().status,mode==='same-page'?'blocked':'uncertain');assert.equal(f.sends,1);
+        assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'admitted');assert.equal(rpc('health').blocked,true);
+      }
+    });
     await t.test('lost admission is uncertain without sending; checkpoint response loss reconstructs once',()=>{
       reset();const f=fixture();f.add('admission');f.loseNextAdmission();assert.equal(f.tick().status,'blocked');assert.equal(f.sends,0);assert.equal(f.tick().status,'uncertain');assert.equal(f.sends,0);
       reset();const g=fixture();g.add('checkpoint');g.loseNextCheckpoint();assert.equal(g.tick().status,'blocked');assert.equal(g.sends,0);assert.equal(g.tick().status,'idle');assert.equal(g.sends,1);
     });
     await t.test('invalid/timeout model fails durably, artifact bounds and no automatic failure retry',()=>{
-      for(const model of [()=>'{broken',()=>{throw new Error('timeout');},()=>({disposition:'done',summary:'Draft',artifact:'x'.repeat(3001)})]){
+      for(const model of [()=>'{broken',()=>{throw new Error('timeout');},()=>({disposition:'done',summary:'Draft',artifact:'x'.repeat(3001)}),()=>({disposition:'done',summary:'bad\u0000text'}),()=>({disposition:'done',summary:'bad\ud800text'})]){
         reset();const f=fixture();f.add('bad');f.setModel(model);assert.equal(f.tick().status,'model-failed');assert.equal(f.sends,0);assert.equal(f.tick().status,'idle');
         assert.equal(sql('SELECT state FROM vnext_executions')[0].state,'failed');
       }
@@ -118,10 +208,12 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
     await t.test('native transaction races: input-first supersedes; admission-first blocks claims, preserves input', {skip:!process.env.TEST_DATABASE_URL},async()=>{
       const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
       const auth=async client=>{await client.query('BEGIN');await client.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify({sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800})]);await client.query('SET LOCAL ROLE authenticated');};
-      const call=(client,op,data={})=>client.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test',op,JSON.stringify(data)]);
+      let prepared;
+      const call=(client,op,data={})=>client.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test',op,JSON.stringify(op==='delivery'?{execution_id:prepared}:data)]);
       try{
         for(const first of ['ingest','delivery']){
           reset();rpc('ingest',input('race'));checkpoint(rpc('claim'));
+          prepared=rpc('delivery-peek').execution_id;
           const a=await pool.connect(),b=await pool.connect();
           try{
             await auth(a);await auth(b);const x=(await call(a,first,first==='ingest'?input('newrace'):{})).rows[0].r;
