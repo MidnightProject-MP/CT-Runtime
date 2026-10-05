@@ -196,9 +196,25 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       reason:'No legacy active-reference proof. Preserve all unknown properties and unresolved send fences.'};
   }
   function health(){return rpc(config(false),'health');}
-  return {tick:tick,install:install,inventory:inventory,health:health,capsule:CAPSULE};
+  function configure(input){
+    var p=props();
+    if(!input||Object.keys(input).sort().join(',')!=='instance,label,model,url'||
+       !/^[A-Za-z0-9_-]{1,100}$/.test(input.instance||'')||
+       !/^https:\/\/[A-Za-z0-9.-]+\.neon\.tech(?:\/[A-Za-z0-9._/-]*)?$/.test(input.url||'')||
+       !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(input.model||'')||
+       typeof input.label!=='string'||!input.label.trim()||input.label.length>100||/[\x00-\x1f]/.test(input.label))throw new Error('invalid explicit email bindings');
+    if(!p.getProperty('OPENROUTER_API_KEY'))throw new Error('existing OpenRouter secret required');
+    var desired={CT_VNEXT_EMAIL_ENABLED:'false',CT_VNEXT_EMAIL_INSTANCE:input.instance,CT_VNEXT_EMAIL_DATA_API_URL:input.url.replace(/\/$/,''),CT_VNEXT_EMAIL_MODEL:input.model,CT_VNEXT_EMAIL_LABEL:input.label};
+    Object.keys(desired).forEach(function(k){var old=p.getProperty(k);if(old!==null&&old!==desired[k])throw new Error('existing binding conflict; explicit owner review required');});
+    var h=rpc({instance:input.instance,url:desired.CT_VNEXT_EMAIL_DATA_API_URL},'health');
+    if(h.instance!==input.instance||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.blocked!==false)throw new Error('email grant not ready');
+    p.setProperties(desired,false); // Explicit owner invocation only; never a tick/deploy side effect.
+    return {status:'configured',enabled:false,instance:input.instance};
+  }
+  return {tick:tick,install:install,inventory:inventory,health:health,configure:configure,capsule:CAPSULE};
 }());
 function vnextEmailTick(){return CT_GAS_VNEXT_EMAIL.tick();}
 function installVnextEmailTrigger(){return CT_GAS_VNEXT_EMAIL.install();}
 function inventoryVnextEmailProperties(){return CT_GAS_VNEXT_EMAIL.inventory();}
 function healthVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.health();}
+function configureVnextEmailRuntime(config){return CT_GAS_VNEXT_EMAIL.configure(config);}

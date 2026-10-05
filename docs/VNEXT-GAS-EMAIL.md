@@ -125,6 +125,73 @@ runtime operation. The schema requires PostgreSQL with `gen_random_uuid()`.
 
 ## Provisioning and activation — explicit parent approval required
 
+### Source-only, still-disabled deployment from the reviewed branch
+
+The canonical `gas-clasp-deploy.yml` now has an explicit `source_only` boolean,
+default **false**, preserving the legacy operator path when omitted. For vNext
+source-only deployment it bypasses **all** legacy configure/setup/diagnose and
+Execution API calls. It neither configures Script Properties nor installs triggers
+nor calls Gmail. Do not use the default legacy path for this activation.
+
+First observe current reality without any source/configuration/deployment writes:
+
+```sh
+gh workflow run gas-clasp-deploy.yml --ref work/vnext-gas-email-loop \
+  -f source_only=true -f source_only_preflight=true \
+  -f deployment_id=AKfycbwyFPC55MvhCfPUmBlfm7eRp-uHr5tpZ2H9suobETGXod_hLLVDQtC9DelC7ee_WSNawg
+```
+
+Read the `Read-only source-only preflight metadata` step of that run. It returns
+`head`, `live`, `desired`, version, deployment/script identity, commit, and
+`hash_format=ct-runtime-normalizeFiles-sha256-v1`, but does not stage/push code,
+create a version, change a deployment, call the Execution API, or configure anything.
+It requires the exact existing deployment ID even in read-only mode. Require
+`head == live`, inspect the intended source commit, and retain that run's hashes.
+
+After approval, dispatch actual source deployment with **both observed hashes**:
+
+```sh
+gh workflow run gas-clasp-deploy.yml --ref work/vnext-gas-email-loop \
+  -f source_only=true -f source_only_preflight=false \
+  -f deployment_id=AKfycbwyFPC55MvhCfPUmBlfm7eRp-uHr5tpZ2H9suobETGXod_hLLVDQtC9DelC7ee_WSNawg \
+  -f expected_head_hash=HEAD_FROM_READ_ONLY_PREFLIGHT \
+  -f expected_desired_hash=DESIRED_FROM_SAME_REVIEWED_PREFLIGHT \
+  -f description='Reviewed vNext email source, runtime still disabled'
+```
+
+Do not reuse the older diagnostic's raw-object hash: it may use a different
+canonicalization. Observation, desired source, prepare, and final readback now
+all use the same existing `normalizeFiles` + `bundleHash` implementation, including
+canonical file names and field selection. There is no hard-coded predecessor.
+The mutation run independently re-reads reality and must still find the supplied
+HEAD equal to LIVE; its built bundle must match the supplied desired hash. Branch
+movement changing source therefore fails before push rather than deploying an
+unreviewed snapshot. HEAD and the deployment version are re-read within each
+inspection to reject changes during observation.
+It reads the pinned Script ID, verifies the supplied existing deployment against
+the canonical `CT_GAS_ADMIN_WEB_APP_URL` secret, and reads both HEAD and the exact
+deployed version through the Apps Script API. Hashes use normalized, sorted
+`{name,type,source}` objects; logs contain only identity/version/hash metadata,
+never source/tokens.
+If the canonical URL secret is missing or identities/hash differ, no push occurs.
+No new deployment identity can be created in this mode.
+
+The workflow stages only the reviewed bundle allowlist, shares the canonical
+`gas-production-deploy` concurrency group, pushes once, verifies desired HEAD and
+unchanged LIVE, updates the same deployment once, then verifies HEAD and deployed
+version equal the desired hash. Already-current source skips both writes. Failed
+or ambiguous mutation responses lead only to bounded API readback, never automatic
+mutation retry. A partial deployment must be investigated/reconciled through the
+existing control-plane recovery contract before redispatch. This is not a local
+clasp-push operator path. Do not edit the script concurrently from the editor.
+
+This source-only operation does not repeat Feedback effects, so its preflight is
+the direct read-only source/deployment API inspection rather than Feedback
+diagnosis. Before any later legacy Feedback effect, retain the existing
+`diagnoseFeedbackInbox` reality-first requirement. New Gmail OAuth scopes may need
+interactive owner consent; API source readback does **not** establish that consent
+or qualify runtime execution. Nothing in source-only deployment enables email.
+
 1. Review this PR, capsule, limits, sender policy, model/cost policy, and CI. Do not
    merge/deploy as a side effect of qualification. Provision a **new** isolated
    Neon database/Data API only after approval. Capture the selected project,
@@ -160,6 +227,16 @@ runtime operation. The schema requires PostgreSQL with `gen_random_uuid()`.
    guarantee. Keep `CT_VNEXT_EMAIL_ENABLED=false`. Create the Gmail `Celestan`
    label and a reviewed filter restricted to authenticated allowed-sender mail;
    replies must also receive that label. This runner never creates filters.
+   Alternatively, after the active Neon grant is prepared, the owner may explicitly
+   invoke `configureVnextEmailRuntime({instance, url, model, label})` in the GAS
+   editor using reviewed literal arguments (a temporary owner wrapper may call it).
+   It checks the authenticated grant, fixed mailbox/sender and unresolved block,
+   requires the **existing** `OPENROUTER_API_KEY`, accepts an explicit model only,
+   and sets only five allowlisted stable bindings with enabled **false**. It refuses
+   conflicting existing values, enabled runtimes, extra fields, and silent rotation.
+   It returns sanitized metadata and does not create labels/triggers or send mail.
+   The deployment workflow never invokes this helper. Supply/rotate secrets through
+   the approved owner channel separately; never put secrets in source/wrapper code.
 7. With the reviewed database grant active, call `healthVnextEmailRuntime()` and
    `inventoryVnextEmailProperties()` read-only. Verify project/mailbox/sender and
    no unresolved authority/reconciliation. Complete a controlled live test only
@@ -217,9 +294,11 @@ operator recovery; there is no property cursor or unsafe implicit resend.
 Durable records grow with work; database retention
 is a separate reviewed policy, never Script Property eviction.
 
-The new module performs **zero Script Property writes**, including no cursors,
+The tick performs **zero Script Property writes**, including no cursors,
 events, tasks, runtime telemetry, receipts, nonces, or send fences. Properties hold
-only six stable settings/secret names. `inventoryVnextEmailProperties()` emits
+only six stable settings/secret names. The explicitly invoked owner setup helper
+writes only the five non-secret stable bindings, disabled; it is not a runtime
+state sink. `inventoryVnextEmailProperties()` emits
 names/classifications/counts, never values. Legacy runtime names and unknowns are
 preserved. Its cleanup preparation allowlist is intentionally empty: there is no
 proof of inactive legacy references. Cleanup apply is separate parent work; never
