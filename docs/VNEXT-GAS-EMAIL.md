@@ -1,7 +1,8 @@
 # vNext GAS email loop — pending live qualification
 
-This is an independent, disabled-by-default vertical slice. **Nothing has been
-provisioned, deployed, enabled, sent, or deleted by this change.** PR #68's Node
+This is an independent, disabled-by-default vertical slice. Source-only deployment
+and the explicitly authorized fresh Neon owner bootstrap are now recorded below;
+**the email runtime remains disabled and unregistered**. PR #68's Node
 email pilot remains a separate merge gate; do not merge it to activate this path.
 Its Gmail MIME/provenance and deterministic send identity ideas are recycled here,
 not its Node worker, HTTP webapp bridge, migrations 010/011, or property fences.
@@ -102,6 +103,78 @@ The registered GAS principal is trusted to attest exact Gmail readback; SQL cann
 independently query Gmail. Do not grant that principal to arbitrary clients.
 
 ## Fresh bootstrap, not a migration of the archived database
+
+### Observed provisioning status — 2026-10-05
+
+- Parent deployed reviewed source commit `a91d8cf` through canonical source-only
+  Action [37329107460](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/37329107460),
+  existing deployment version **101**, reported HEAD = LIVE =
+  `3d9af65ce90b927e8956f82e75922b7233c0363bc289001c4f9ca65092708d59`.
+  No runtime configuration or trigger was enabled by that deployment.
+- New Neon project **CT-Runtime-vNext**, `steep-fog-88521756`, organization
+  `org-icy-union-90602157`, region `aws-us-east-2`, PostgreSQL 18.
+  Branch `main` / `br-falling-sky-b4d1fow0`; endpoint `ep-weathered-tree-b4v72i6c`;
+  direct host `ep-weathered-tree-b4v72i6c.c-6.us-east-2.aws.neon.tech`;
+  database `neondb`, owner `neondb_owner`. Compute min/max 0.25 CU was provisioned
+  by the parent. The rejected auto-suspend adjustment was not retried.
+- Read-only inspection proved **zero public objects** before bootstrap.
+  The exact seven-file bootstrap committed in one owner transaction and subsequent
+  inspection returned **already-applied**, with **17 public tables** including the
+  owner-only checksum ledger, **zero registered/active instances**, and **zero
+  direct table/column grants** to authenticated/anonymous. Authenticated has the
+  intended RPC permission; anonymous and internal-function access are denied.
+  An owner RPC call with missing/unregistered JWT claims was rejected with the
+  expected principal-denial contract. This is SQL/ACL evidence, **not live Data API
+  Google-JWT qualification**.
+- Effective manifest SHA-256:
+  `a016399b360f3ba7844ace0065b54275af22a3b47bd53b1b4c41c0f9df5bec24`.
+  The ledger stores file paths and SHA-256 values (LF-normalized UTF-8 SQL), never
+  credentials or raw SQL/output. Existing migration files/checksums were not edited.
+- An initial owner bootstrap attempt failed at a `SET ROLE` readback probe and
+  rolled back; fresh inspection again proved empty. Managed Neon owners can create
+  NOLOGIN roles without permission to assume them. The corrected readback probes
+  the SECURITY DEFINER RPC as owner and verifies role ACLs separately, without
+  granting additional membership. Full validation then rolled back successfully,
+  followed by the one successful commit and idempotent readback.
+- **Data API is not provisioned; no Google principal/audience registration exists.
+  No GAS properties, triggers or emails were changed by the bootstrap.** Actual
+  identity/audience must be established before the next provisioning step.
+  Archived `falling-bird-38424127` was not touched.
+
+### Safe owner bootstrap command
+
+`scripts/bootstrap-gas-email.mjs` accepts only the exact new host/database/owner,
+encrypted direct connection, and allowlisted connection options. Modes:
+
+- `inspect`: prove empty readiness, or verify the existing manifest ledger and
+  readback without replaying DDL.
+- `validate`: perform the full bootstrap/readback in a transaction, then roll back.
+- `apply`: re-inspect inside a serialized owner transaction; apply only to an empty
+  public schema. Existing matching ledger returns `already-applied`, never reruns
+  DDL. Checksum mismatch or nonempty unrecognized schema fails closed.
+
+Owner connection strings must be captured only in memory. Example PowerShell
+readback (change the final mode to `apply` only when explicitly authorized):
+
+```powershell
+$old = $env:CT_BOOTSTRAP_DATABASE_URL
+try {
+  $connection = (& npx --yes neon connection-string br-falling-sky-b4d1fow0 --project-id steep-fog-88521756 --database-name neondb --role-name neondb_owner --ssl verify-full 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'Connection lookup failed; output withheld' }
+  $env:CT_BOOTSTRAP_DATABASE_URL = ($connection -join '').Trim()
+  node scripts/bootstrap-gas-email.mjs inspect
+} finally {
+  $env:CT_BOOTSTRAP_DATABASE_URL = $old
+  $connection = $null
+}
+```
+
+The CLI prints only pinned target identifiers, status/counts, hashes and bounded
+failure phase/SQLSTATE, never URLs/passwords/SQL error bodies. After any uncertain
+outcome, run `inspect` first. No automatic mutation retry occurs. Do not provision
+another project or run this against the archive. Native PostgreSQL CI and PGlite
+tests cover nonempty rejection, full rollback, readback, checksum conflicts, and
+repeat application without duplicate records.
 
 `deploy/gas-email/bootstrap.json` is the authoritative **fresh dedicated database**
 file list. Apply it once, in order, as the owner, inside a transaction, after
