@@ -21,12 +21,12 @@ async function buildBundle() {
 }
 
 test('canonical dispatcher routes deployment operations before federation authentication', () => {
-  assert.match(dispatch, /var federationDoPost = doPost/);
-  assert.match(dispatch, /CT_GAS_DEPLOY\.authenticate\(raw, query\)/);
+  assert.doesNotMatch(dispatch, /var federationDoPost = doPost/);
+  assert.match(dispatch, /CT_GAS_AUTH_TRACE\.authenticate\(raw, query, CT_GAS_DEPLOY\.authenticate\)/);
   assert.match(dispatch, /quiesceLegacyAutonomy\(\)/);
   assert.match(dispatch, /assertLegacyQuiesced\(\)/);
   assert.match(dispatch, /return federationDoPost\(e\)/);
-  assert.match(federation, /function doPost\(e\)/);
+  assert.match(federation, /function federationDoPost\(e\)/);
 });
 
 test('privileged dispatch binds requests to the receiving script and configured deployment', () => {
@@ -35,7 +35,7 @@ test('privileged dispatch binds requests to the receiving script and configured 
   assert.match(dispatch, /CT_GAS_DEPLOYMENT_ID/);
   assert.match(dispatch, /deploy-script-id-mismatch/);
   assert.match(dispatch, /deploy-deployment-id-mismatch/);
-  assert.match(dispatch, /CT_GAS_DEPLOY\.authenticate\(raw, query\), result/);
+  assert.match(dispatch, /CT_GAS_AUTH_TRACE\.authenticate\(raw, query, CT_GAS_DEPLOY\.authenticate\), result/);
   assert.match(dispatch, /assertDeploymentIdentity\(request\)/);
 });
 
@@ -46,13 +46,13 @@ test('built bundle contains the canonical control-plane and complete vNext Feedb
   const dispatchIndex = names.indexOf('gas_zz_a_dispatch');
   const traceIndex = names.indexOf('gas_zz_auth_trace');
   assert.ok(federationIndex >= 0);
-  assert.ok(dispatchIndex > federationIndex);
-  assert.ok(traceIndex > federationIndex);
-  assert.ok(dispatchIndex < traceIndex);
+  assert.ok(dispatchIndex >= 0);
+  assert.ok(traceIndex >= 0);
   for (const name of ['gas_deploy_qualify', 'gas_feedback_vnext', 'gas_feedback_vnext_projection', 'gas_feedback_vnext_transport', 'gas_vnext_events']) {
     assert.ok(names.includes(name), `missing assembled production file: ${name}`);
   }
-  assert.match(trace, /var originalDoPost = doPost/);
+  assert.doesNotMatch(trace, /var originalDoPost = doPost/);
+  assert.match(trace, /function dispatch\(e, originalDoPost\)/);
 });
 
 test('quiescence signs and transmits the same populated request body', () => {
