@@ -2,7 +2,7 @@
 
 This is an independent, disabled-by-default vertical slice. Source-only deployment
 and the explicitly authorized fresh Neon owner bootstrap are now recorded below;
-**the email runtime remains disabled and unregistered**. PR #68's Node
+**the email runtime remains disabled, with its registered grant inactive**. PR #68's Node
 email pilot remains a separate merge gate; do not merge it to activate this path.
 Its Gmail MIME/provenance and deterministic send identity ideas are recycled here,
 not its Node worker, HTTP webapp bridge, migrations 010/011, or property fences.
@@ -136,10 +136,78 @@ independently query Gmail. Do not grant that principal to arbitrary clients.
   the SECURITY DEFINER RPC as owner and verifies role ACLs separately, without
   granting additional membership. Full validation then rolled back successfully,
   followed by the one successful commit and idempotent readback.
-- **Data API is not provisioned; no Google principal/audience registration exists.
-  No GAS properties, triggers or emails were changed by the bootstrap.** Actual
-  identity/audience must be established before the next provisioning step.
+- **At the bootstrap checkpoint, Data API was not provisioned and no Google
+  principal/audience registration existed** (see the subsequent checkpoint below).
+  No GAS properties, triggers or emails were changed by the bootstrap.
+  Identity/audience were subsequently supplied by the owner, not inferred.
   Archived `falling-bird-38424127` was not touched.
+
+### Data API provisioning and inactive grant — 2026-10-07
+
+The parent supplied actual GAS JWT identity: subject `101290949094805660136`,
+audience `788761466843-bqaho4ssrgp2ahif41uacv3o832o7hoo.apps.googleusercontent.com`.
+These identifiers are not bearer tokens. The new target Data API is now **active**:
+
+`https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1`
+
+Provisioning initially rejected the pre-existing bootstrap roles with “anonymous
+role already exists.” Read-only inspection proved both were NOLOGIN, owned zero
+objects, had no inherited roles or other-database dependencies, and runtime tables
+were empty. The owner-only handoff preserved these exact roles as
+`ct_gas_bootstrap_authenticated` and `ct_gas_bootstrap_anonymous`, revoking the old
+RPC grant. No role/state/schema was deleted. Neon then successfully created its
+managed `authenticated`/`anonymous` identities with default grants disabled and
+auth-schema creation skipped. Creation used the distinct `anonymous` fallback;
+after creation, the supported settings update selected `authenticated` for Google
+tokens without a role claim. No repeated provisioning is necessary or authorized.
+
+Observed configuration:
+- Google JWKS `https://www.googleapis.com/oauth2/v3/certs`, provider
+  `Google-GAS-vNext`, exact audience above; JWKS configuration
+  `56697f69-f646-40ed-8723-f4cb5279a0c8`.
+- Public schema only; max rows 10; aggregates disabled; OpenAPI disabled;
+  role claim `.role`; fallback `authenticated`.
+- Managed application roles and preserved bootstrap roles remain NOLOGIN,
+  non-superuser, without CREATE ROLE/CREATE DB/BYPASSRLS, owned objects, or inherited
+  roles. Only managed `authenticated` can execute the public email RPC. Neither
+  application role has table/column/sequence access or other public function
+  execution. Bootstrap ledger inspection still returns `already-applied` with
+  unchanged manifest hash and 17 tables.
+- Registered instance `gas-vnext-email`, project `celestan-email`, fixed mailbox
+  `midnight.project.mp@gmail.com`, allowed sender
+  `midnightprojectantigravity@gmail.com`, authorization reference
+  `user-authorized:pr69:gas-text-only:v1`, **active=false**. Runtime work/execution/
+  reply counts remain zero. No live SQL positive-policy probe activated this row.
+- Real HTTP health probes returned **400 missing-JWT denial** and **400 signature
+  error denial** for a syntactically valid forged RS256 token using a currently
+  published Google key ID. These gateway responses are explicitly classified;
+  arbitrary HTTP 400 is not accepted as an authentication proof. No tokens/error
+  bodies are logged. **A matching authentic Google token was unavailable and its
+  successful end-to-end health check remains pending.**
+
+`scripts/configure-gas-email-data-api.mjs inspect` audits the pinned new database;
+`probe` performs only the public-key read and negative HTTP health probes. The
+`prepare-roles`/`restrict-register` modes are narrowly scoped maintenance actions,
+not automatic startup. They fail closed on unexpected ownership, inherited roles,
+runtime work, ledger drift, or registration conflicts. Native role-handoff tests
+use a separate PostgreSQL cluster because roles are cluster-global.
+
+After parent-controlled policy qualification/activation of this grant, the existing
+GAS owner helper's exact binding shape is:
+
+```javascript
+configureVnextEmailRuntime({
+  instance: 'gas-vnext-email',
+  url: 'https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1',
+  model: 'provider/reviewed-model-id', // Replace with the explicit approved model; no default/fallback.
+  label: 'Celestan'
+});
+```
+
+This call intentionally fails while the grant is inactive. It requires the existing
+OpenRouter secret, sets stable bindings with email **disabled**, and does not
+install a trigger or send mail. No GAS configuration, trigger, email, archived
+project change, or merge occurred during this Data API setup.
 
 ### Safe owner bootstrap command
 
