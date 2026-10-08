@@ -255,6 +255,51 @@ value contain only status, disabled state, selected model, fixed identities,
 created. Inspect the logged readiness/model before the separate approved enable/
 trigger-install step. Gmail scope consent may still require the owner's approval.
 
+### Diagnose an uncertain preparation without another write
+
+The owner's v103 preparation attempt returned only a generic blocked message.
+That message does **not** establish whether Gmail consent/service enablement,
+Neon transport, configuration, trigger inventory or a property write failed.
+Timestamp differences in the execution log are not evidence of the cause. Fresh
+owner SQL inspection after the report confirmed the exact registration is active,
+ACLs/manifest are intact, and runtime work/execution/reply counts remain zero;
+this does not prove the actual GAS-to-Gmail or GAS-to-Neon call succeeds.
+
+After the parent deploys this diagnostic repair, the next owner action is select
+**`diagnoseVnextEmailPreparation`** and **Run** — not another preparation attempt.
+It reuses the same inspection as `prepareVnextEmailRuntime`, takes the script lock,
+and performs only profile/label metadata reads, Neon health, trigger inventory and
+property reads. It never changes properties, creates triggers/labels, reads mail,
+calls a model, sends email or accesses Sheets. Independent Neon/property checks
+continue after a Gmail failure; labels are not inspected from an unverified mailbox.
+
+The structured execution log/return value reports:
+- `stages`: fixed stages `script-lock`, `gmail-profile`, `property-read`,
+  `model-config`, `neon-health`, `gmail-labels`, `trigger-inventory`, and (only for
+  preparation) `property-write`/`property-readback`.
+- Safe failure classification, HTTP status, explicitly allowlisted Google provider
+  reason and PostgreSQL SQLSTATE. Unknown exception messages, response bodies,
+  arbitrary provider codes, credentials and JWTs are never copied into output.
+  Google `SERVICE_DISABLED` / `accessNotConfigured` includes only the known project
+  number `788761466843`; do not enable services or widen scopes without this evidence.
+- `properties`: only allowlisted stable property **presence/match booleans**, never
+  values or unknown property names. `preparedConfigMatch` establishes whether all
+  five desired disabled bindings already match, including after a prior partial or
+  completed write. `null` means the model/property prerequisites prevented comparison.
+- `configWriteAttempted` (always false for diagnosis) and `readbackConfirmed`.
+  Preparation now makes at most one property write and follows it with readback,
+  even if the write response was lost. A failed response can therefore report
+  `configWriteAttempted=true`, `readbackConfirmed=true` without repeating the write.
+
+Use the actual failed stage/reason to choose the next action. For example, a
+verified Gmail `SERVICE_DISABLED` differs from insufficient scope, an HTTP 401
+Neon JWT denial differs from SQLSTATE `42501`, and an unclassified transport error
+does not justify changing permissions. If desired properties already match, do
+not rewrite them merely because an earlier invocation was reported blocked.
+The worker has not observed the user's Gmail response; the underlying live cause
+remains unconfirmed until this read-only diagnostic is run. No new scope or broad
+permission was added for diagnosis.
+
 ### Safe owner bootstrap command
 
 `scripts/bootstrap-gas-email.mjs` accepts only the exact new host/database/owner,
