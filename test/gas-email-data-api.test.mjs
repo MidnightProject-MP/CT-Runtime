@@ -36,6 +36,18 @@ test('explicit role handoff preserves bootstrap identities and restores sole RPC
     }finally{c.release();}
     assert.equal((await pool.query('SELECT active FROM gas_email_instances')).rows[0].active,false);
     assert.equal((await pool.query("SELECT has_function_privilege('ct_gas_bootstrap_authenticated','public.gas_email_rpc(text,text,jsonb)','EXECUTE') AS allowed")).rows[0].allowed,false);
-    await pool.query('UPDATE gas_email_instances SET active=true');await assert.rejects(configure(pool,'restrict-register'));
+    await pool.query("UPDATE gas_email_instances SET jwt_sub='conflicting-subject'");
+    await assert.rejects(configure(pool,'activate-for-qualification'),/identity conflict/);
+    assert.equal((await pool.query('SELECT active FROM gas_email_instances')).rows[0].active,false);
+    await pool.query('UPDATE gas_email_instances SET jwt_sub=$1',[INSTANCE.sub]);
+    await pool.query('GRANT SELECT ON gas_email_instances TO authenticated');
+    await assert.rejects(configure(pool,'activate-for-qualification'),/privilege readback/);
+    assert.equal((await pool.query('SELECT active FROM gas_email_instances')).rows[0].active,false);
+    await pool.query('REVOKE SELECT ON gas_email_instances FROM authenticated');
+    const activated=await configure(pool,'activate-for-qualification');assert.equal(activated.status,'activated-for-qualification');assert.equal(activated.activeInstances,1);
+    assert.equal((await configure(pool,'activate-for-qualification')).status,'already-active-for-qualification');
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM gas_email_instances')).rows[0].n,1);
+    assert.equal((await configure(pool,'inspect')).counts.work_units,0);
+    await assert.rejects(configure(pool,'restrict-register'));
   }finally{await pool.end();}
 });

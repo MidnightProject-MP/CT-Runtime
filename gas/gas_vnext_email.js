@@ -196,7 +196,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       reason:'No legacy active-reference proof. Preserve all unknown properties and unresolved send fences.'};
   }
   function health(){return rpc(config(false),'health');}
-  function configure(input){
+  function configureChecked(input,inspectReady){
     var p=props();
     if(!input||Object.keys(input).sort().join(',')!=='instance,label,model,url'||
        !/^[A-Za-z0-9_-]{1,100}$/.test(input.instance||'')||
@@ -208,13 +208,40 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     Object.keys(desired).forEach(function(k){var old=p.getProperty(k);if(old!==null&&old!==desired[k])throw new Error('existing binding conflict; explicit owner review required');});
     var h=rpc({instance:input.instance,url:desired.CT_VNEXT_EMAIL_DATA_API_URL},'health');
     if(h.instance!==input.instance||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.blocked!==false)throw new Error('email grant not ready');
+    var result=inspectReady?inspectReady(h,desired):{status:'configured',enabled:false,instance:input.instance};
     p.setProperties(desired,false); // Explicit owner invocation only; never a tick/deploy side effect.
-    return {status:'configured',enabled:false,instance:input.instance};
+    return result;
   }
-  return {tick:tick,install:install,inventory:inventory,health:health,configure:configure,capsule:CAPSULE};
+  function setupLock(fn){var lock=LockService.getScriptLock();lock.waitLock(10000);try{return fn();}finally{lock.releaseLock();}}
+  function configure(input){return setupLock(function(){return configureChecked(input);});}
+  function prepare(){
+    try{
+      var result=setupLock(function(){
+        if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('prepare: wrong execution mailbox');
+        var p=props(),model=p.getProperty('CT_VNEXT_EMAIL_MODEL');if(model===null)model=p.getProperty('CT_GAS_PROOF_MODEL');
+        if(typeof model!=='string'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model))throw new Error('prepare: set CT_VNEXT_EMAIL_MODEL to an explicit approved provider/model');
+        var input={instance:'gas-vnext-email',url:'https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1',model:model,label:'Celestan'};
+        return configureChecked(input,function(h,desired){
+          if(h.project!=='celestan-email')throw new Error('prepare: project mismatch');
+          var labels=api('labels').labels||[],handlers=ScriptApp.getProjectTriggers().map(function(t){var name=String(t.getHandlerFunction());return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)?name:'(invalid-handler)';}).sort();
+          var names=Object.keys(p.getProperties()),counts={total:0,stable:0,legacy_runtime:0,unknown:0};
+          Object.keys(desired).forEach(function(k){if(names.indexOf(k)<0)names.push(k);});
+          names.forEach(function(k){counts.total++;counts[CONFIG.indexOf(k)>=0?'stable':/^(CT_EMAIL_SEND_|CT_GAS_.*(?:EVENT|WAKE|CHECKPOINT|FENCE|RECEIPT))/.test(k)?'legacy_runtime':'unknown']++;});
+          return {status:'prepared',enabled:false,instance:input.instance,mailbox:MAILBOX,allowedSender:SENDER,project:h.project,model:model,labelPresent:labels.some(function(l){return l.name===input.label;}),triggerHandlerNames:handlers,triggerCount:handlers.length,emailTriggerCount:handlers.filter(function(n){return n==='vnextEmailTick';}).length,propertyCounts:counts};
+        });
+      });
+      console.log(JSON.stringify(result));return result;
+    }catch(e){
+      var safe=['prepare: wrong execution mailbox','prepare: set CT_VNEXT_EMAIL_MODEL to an explicit approved provider/model','prepare: project mismatch','existing binding conflict; explicit owner review required','existing OpenRouter secret required','email grant not ready'];
+      var reason=safe.indexOf(String(e&&e.message))>=0?e.message:'prepare: readiness/configuration outcome unavailable; inspect before retry';
+      console.log(JSON.stringify({status:'blocked',reason:reason}));throw new Error(reason);
+    }
+  }
+  return {tick:tick,install:install,inventory:inventory,health:health,configure:configure,prepare:prepare,capsule:CAPSULE};
 }());
 function vnextEmailTick(){return CT_GAS_VNEXT_EMAIL.tick();}
 function installVnextEmailTrigger(){return CT_GAS_VNEXT_EMAIL.install();}
 function inventoryVnextEmailProperties(){return CT_GAS_VNEXT_EMAIL.inventory();}
 function healthVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.health();}
 function configureVnextEmailRuntime(config){return CT_GAS_VNEXT_EMAIL.configure(config);}
+function prepareVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.prepare();}

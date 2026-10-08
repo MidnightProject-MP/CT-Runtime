@@ -30,11 +30,12 @@ export async function roleState(client){
     FROM pg_roles r WHERE r.rolname IN ('authenticated','anonymous','ct_gas_bootstrap_authenticated','ct_gas_bootstrap_anonymous') ORDER BY r.rolname`)).rows;
 }
 export async function configure(pool,mode){
-  if(!['inspect','prepare-roles','restrict-register'].includes(mode))throw new Error('invalid mode');
+  if(!['inspect','prepare-roles','restrict-register','activate-for-qualification'].includes(mode))throw new Error('invalid mode');
   if(mode==='prepare-roles')await bootstrap(pool); // Exact ledger and current ACL proof before handoff.
   const c=await pool.connect();try{
     await c.query('BEGIN');await c.query("SET LOCAL lock_timeout='10s'; SET LOCAL statement_timeout='30s'");
     await c.query("SELECT pg_advisory_xact_lock(hashtextextended('ct-runtime:gas-email-bootstrap',0))");
+    if(mode==='activate-for-qualification')await c.query("SELECT pg_advisory_xact_lock(hashtextextended('ct-runtime:vnext-project:celestan-email',0))");
     const manifest=await loadManifest(),ledger=(await c.query('SELECT manifest_sha256,files FROM gas_email_bootstrap_ledger')).rows;
     if(ledger.length!==1||ledger[0].manifest_sha256!==manifest.hash||JSON.stringify(ledger[0].files.map(x=>({path:x.path,sha256:x.sha256})))!==JSON.stringify(manifest.checksums))throw new Error('bootstrap ledger mismatch');
     const roles=await roleState(c);
@@ -51,6 +52,14 @@ export async function configure(pool,mode){
     }
     const managed=roles.filter(r=>['authenticated','anonymous'].includes(r.name));
     if(managed.length!==2||managed.some(r=>r.superuser||r.create_role||r.create_db||r.bypass_rls||r.owned_objects||r.other_database_dependencies||r.inherits.length))throw new Error('unexpected managed role authority');
+    if(mode==='activate-for-qualification'){
+      const expected=[INSTANCE.instance,INSTANCE.sub,INSTANCE.aud,INSTANCE.project,INSTANCE.mailbox,INSTANCE.sender,INSTANCE.grant];
+      const rows=(await c.query('SELECT * FROM gas_email_instances FOR UPDATE')).rows,r=rows[0];
+      if(rows.length!==1||JSON.stringify([r.instance_id,r.jwt_sub,r.jwt_aud,r.project_id,r.mailbox,r.allowed_sender,r.grant_ref])!==JSON.stringify(expected))throw new Error('qualification identity conflict');
+      await readback(c); // Verify existing permissions; this mode repairs none.
+      if(!r.active)await c.query('UPDATE gas_email_instances SET active=true WHERE instance_id=$1 AND active=false',[INSTANCE.instance]);
+      const proof=await readback(c);await c.query('COMMIT');return {status:r.active?'already-active-for-qualification':'activated-for-qualification',instance:INSTANCE,...proof};
+    }
     for(const r of managed)if(r.login)await c.query(r.name==='authenticated'?'ALTER ROLE authenticated NOLOGIN':'ALTER ROLE anonymous NOLOGIN');
     await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC,authenticated,anonymous;
       REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC,authenticated,anonymous;

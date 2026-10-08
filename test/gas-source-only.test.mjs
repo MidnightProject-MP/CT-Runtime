@@ -66,7 +66,7 @@ test('explicit owner configuration is disabled, grant-checked, fixed-field and r
   const source=await readFile(new URL('../gas/gas_vnext_email.js',import.meta.url),'utf8');
   const props={OPENROUTER_API_KEY:'private-existing-key'},writes=[];
   const health={instance:'reviewed',mailbox:'midnight.project.mp@gmail.com',allowed_sender:'midnightprojectantigravity@gmail.com',blocked:false};
-  const ctx=vm.createContext({PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperties:(v,remove)=>{assert.equal(remove,false);writes.push(v);Object.assign(props,v);}})},ScriptApp:{getIdentityToken:()=> 'private-google-token'},UrlFetchApp:{fetch:()=>({getResponseCode:()=>200,getContentText:()=>JSON.stringify(health)})}});
+  const ctx=vm.createContext({LockService:{getScriptLock:()=>({waitLock(){},releaseLock(){}})},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperties:(v,remove)=>{assert.equal(remove,false);writes.push(v);Object.assign(props,v);}})},ScriptApp:{getIdentityToken:()=> 'private-google-token'},UrlFetchApp:{fetch:()=>({getResponseCode:()=>200,getContentText:()=>JSON.stringify(health)})}});
   vm.runInContext(source,ctx);assert.equal(writes.length,0);
   const c={instance:'reviewed',url:'https://reviewed.neon.tech',model:'vendor/explicit-model',label:'Celestan'};
   for(const bad of [null,{...c,enabled:true},{...c,url:'https://attacker.invalid'},{...c,model:''},{...c,label:'bad\nlabel'}])assert.throws(()=>ctx.configureVnextEmailRuntime(bad),/bindings/);

@@ -2,7 +2,8 @@
 
 This is an independent, disabled-by-default vertical slice. Source-only deployment
 and the explicitly authorized fresh Neon owner bootstrap are now recorded below;
-**the email runtime remains disabled, with its registered grant inactive**. PR #68's Node
+**the email runtime remains disabled; its registered grant is active for owner
+qualification**. PR #68's Node
 email pilot remains a separate merge gate; do not merge it to activate this path.
 Its Gmail MIME/provenance and deterministic send identity ideas are recycled here,
 not its Node worker, HTTP webapp bridge, migrations 010/011, or property fences.
@@ -204,10 +205,55 @@ configureVnextEmailRuntime({
 });
 ```
 
-This call intentionally fails while the grant is inactive. It requires the existing
+This call intentionally fails if the grant is inactive. It requires the existing
 OpenRouter secret, sets stable bindings with email **disabled**, and does not
 install a trigger or send mail. No GAS configuration, trigger, email, archived
 project change, or merge occurred during this Data API setup.
+
+### One-call disabled owner preparation and grant qualification
+
+The user subsequently authorized activation of the exact existing registration for
+qualification. `activate-for-qualification` in
+`scripts/configure-gas-email-data-api.mjs` first checks the pinned target, unchanged
+bootstrap ledger, exact subject/audience/project/mailbox/sender/grant, existing
+restricted ACLs and empty runtime. It serializes with project authority, locks the
+registration, changes only that row's `active` flag, and is idempotent for the same
+already-active empty registration. It never repairs permissions or creates another
+registration. Conflicting identity, permissions or runtime state fails closed.
+
+**Observed result:** `gas-vnext-email` is now **active=true** in `celestan-email`.
+Fresh readback showed one registered/active instance, zero work/execution/reply
+rows, unchanged 17-table bootstrap manifest, and zero direct/default application
+grants. Missing-JWT and forged-signature HTTP health probes were denied both before
+and after activation. No authentic matching bearer token was available to the
+worker. This flag enables the existing bounded text grant, not a separate
+health-only database role; GAS must remain disabled until qualification completes.
+No GAS configuration, trigger, model request, inbox read or email occurred during
+the owner database action.
+
+**After the parent deploys the reviewed helper source**, the owner's single action
+in the GAS editor is to select **`prepareVnextEmailRuntime`** and click **Run**.
+There are no arguments, temporary wrappers or pasted configuration snippets.
+
+The helper is never invoked on global load or by deployment. Under the script lock
+it verifies the real Gmail profile, selects the exact existing
+`CT_VNEXT_EMAIL_MODEL` or (only when absent) the existing `CT_GAS_PROOF_MODEL`, then
+checks the authenticated Neon health response for the pinned instance/project and
+mailbox/sender. There is no model guess, provider substitution, price fallback or
+model invocation. If neither property provides a valid explicit model, it reports
+the one required owner action: set `CT_VNEXT_EMAIL_MODEL` to the approved model.
+The existing `OPENROUTER_API_KEY` must be present and is never logged or replaced.
+
+Only after all readiness/conflict checks pass does it set the five stable bindings
+in one property call with `CT_VNEXT_EMAIL_ENABLED=false`. Repeating identical
+disabled setup is safe; existing conflicting bindings or enabled state are refused.
+It reads label names and the current owner's trigger handlers, but creates no
+label/filter/trigger and reads no messages or Sheets. Its execution log and return
+value contain only status, disabled state, selected model, fixed identities,
+`labelPresent`, trigger handler names/counts and property classification counts
+(not property names/values). Missing `Celestan` label is reported, not silently
+created. Inspect the logged readiness/model before the separate approved enable/
+trigger-install step. Gmail scope consent may still require the owner's approval.
 
 ### Safe owner bootstrap command
 
