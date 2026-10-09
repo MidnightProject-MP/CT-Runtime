@@ -78,7 +78,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     if(!/^<[^<>\s]{1,250}>$/.test(reference)||/[^\x21-\x7e]/.test(reference)||/[\x00-\x1f\x7f]/.test(title)||title.length>500||!body||body.length>16000||body.indexOf('\u0000')>=0)throw new Error('unsupported email');
     return {id:m.id,threadId:m.threadId,from:SENDER,to:MAILBOX,reference:reference,subject:title,body:body};
   }
-  function poll(c,deadline) {
+  function poll(c,deadline,trace) {
     var complete=true;
     var label=(api('labels').labels||[]).filter(function(x){return x.name===c.label;})[0];if(!label)throw new Error('email queue label missing');
     var refs=api('messages?labelIds='+encodeURIComponent(label.id)+'&maxResults=3').messages||[];
@@ -102,10 +102,11 @@ var CT_GAS_VNEXT_EMAIL = (function () {
         var result=rpc(c,'ingest',envelope);
         if(result.status!=='inserted'&&result.status!=='duplicate')throw new Error('email ingest not acknowledged');
         api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});
-      }catch(_){
+      }catch(err){
         // Transport/ingest/unclassified failures retain the queue label. The next
         // bounded tick retries; incomplete intake cannot authorize a NEW send.
         complete=false;
+        if(trace)trace.intakeFailure=safeFailure(err);
       }
     }
     return complete&&n===refs.length;
@@ -144,49 +145,108 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       address(header(actual,'From'))===MAILBOX&&address(header(actual,'To'))===SENDER&&header(actual,'In-Reply-To')===e.reference&&
       subject(actual)===e.subject&&text(actual.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();
   }
-  function deliver(c,reconcileOnly) {
+  function deliver(c,reconcileOnly,trace) {
+    function stage(name){if(trace)trace.stage=name;}
+    stage('delivery-peek');
     var d=rpc(c,'delivery-peek'),e=d.envelope;if(d.status!=='prepare'&&d.status!=='reconcile')return d.status;
     var sent,raw;
     if(d.status==='prepare'){
       if(reconcileOnly)return 'intake-unavailable';
-      var original=incoming(api('messages/'+encodeURIComponent(e.id)+'?format=full'));
+      stage('delivery-provenance');var original=incoming(api('messages/'+encodeURIComponent(e.id)+'?format=full'));
       if(original.threadId!==e.threadId||original.reference!==e.reference||original.subject!==e.subject)throw new Error('email reply provenance conflict');
       raw=mime(e); // Construct and validate before irreversible admission.
-      d=rpc(c,'delivery',{execution_id:d.execution_id});
+      stage('delivery-admission');d=rpc(c,'delivery',{execution_id:d.execution_id});
       if(d.status!=='send')return d.status;
-      sent=api('messages/send',{threadId:e.threadId,raw:Utilities.base64EncodeWebSafe(raw,Utilities.Charset.UTF_8)});
+      stage('delivery-send');sent=api('messages/send',{threadId:e.threadId,raw:Utilities.base64EncodeWebSafe(raw,Utilities.Charset.UTF_8)});
       if(!sent.id)throw new Error('uncertain email send');
-      sent=api('messages/'+encodeURIComponent(sent.id)+'?format=full');
+      stage('delivery-readback');sent=api('messages/'+encodeURIComponent(sent.id)+'?format=full');
       if(!verifiedSent(sent,e))throw new Error('uncertain email readback');
     }else{
-      var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId));
+      stage('delivery-search');var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId));
       if(page.nextPageToken)return 'uncertain'; // Never infer uniqueness from a truncated search.
       var found=page.messages||[];
       for(var n=0;n<found.length;n++){
-        var actual=api('messages/'+encodeURIComponent(found[n].id)+'?format=full');
+        stage('delivery-readback');var actual=api('messages/'+encodeURIComponent(found[n].id)+'?format=full');
         if(verifiedSent(actual,e)){if(sent)throw new Error('ambiguous email readback');sent=actual;}
       }
       if(!sent)return 'uncertain'; // Absence never grants permission to resend.
     }
-    return rpc(c,'record',{execution_id:d.execution_id,gmail_id:sent.id,messageId:e.messageId,threadId:e.threadId}).status;
+    stage('delivery-record');return rpc(c,'record',{execution_id:d.execution_id,gmail_id:sent.id,messageId:e.messageId,threadId:e.threadId}).status;
   }
-  function tick() {
+  function tickRun(trace) {
+    trace.stage='persisted-config';
     var c=config(true);if(!c)return {status:'disabled'};
-    var lock=LockService.getScriptLock();if(!lock.tryLock(1000))return {status:'busy'};
+    trace.stage='script-lock';var lock=LockService.getScriptLock();if(!lock.tryLock(1000))return {status:'busy'};
     try{
       var deadline=Date.now()+240000;
-      if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong execution mailbox');
-      var health=rpc(c,'health');if(health.mailbox!==MAILBOX||health.allowed_sender!==SENDER)throw new Error('email registration mismatch');
-      var intake=true;try{intake=poll(c,deadline-120000);}catch(_){intake=false;}
-      var delivery=deliver(c,!intake);if(!intake||delivery==='uncertain'||delivery==='blocked')return {status:delivery};
+      trace.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong execution mailbox');
+      trace.stage='neon-health';var health=rpc(c,'health');if(health.mailbox!==MAILBOX||health.allowed_sender!==SENDER)throw new Error('email registration mismatch');
+      trace.stage='intake';var intake=true;try{intake=poll(c,deadline-120000,trace);}catch(err){intake=false;trace.intakeFailure=safeFailure(err);}
+      trace.stage='delivery';var delivery=deliver(c,!intake,trace);if(!intake||delivery==='uncertain'||delivery==='blocked')return {status:delivery};
       if(Date.now()>deadline-90000)return {status:'budget'};
-      var claim=rpc(c,'claim');if(claim.status!=='claimed')return claim;
+      trace.stage='claim';var claim=rpc(c,'claim');if(claim.status!=='claimed')return {status:claim.status};
       var turn;
-      try{turn=model(c,claim,deadline-30000);}catch(_){rpc(c,'failure',{execution_id:claim.execution_id,fence:claim.fence});return {status:'model-failed'};}
+      trace.stage='model';try{turn=model(c,claim,deadline-30000);}catch(e){trace.failure=safeFailure(e);rpc(c,'failure',{execution_id:claim.execution_id,fence:claim.fence});return {status:'model-failed'};}
       // Never turn a lost checkpoint response into a second completion/send.
-      rpc(c,'checkpoint',{execution_id:claim.execution_id,fence:claim.fence,turn:turn});
-      return {status:Date.now()<deadline-20000?deliver(c):'checkpointed'};
-    }catch(_){return {status:'blocked',reason:'email-operation-failed'};}finally{lock.releaseLock();}
+      trace.stage='checkpoint';rpc(c,'checkpoint',{execution_id:claim.execution_id,fence:claim.fence,turn:turn});
+      trace.stage='delivery';
+      return {status:Date.now()<deadline-20000?deliver(c,false,trace):'checkpointed'};
+    }catch(e){trace.failure=safeFailure(e);return {status:'blocked',reason:'email-operation-failed'};}finally{lock.releaseLock();}
+  }
+  function tick(){
+    var trace={stage:'persisted-config'},result;
+    try{result=tickRun(trace);}catch(e){trace.failure=safeFailure(e);result={status:'blocked'};}
+    var allowed=['disabled','busy','uncertain','blocked','budget','idle','model-failed','checkpointed','sent','superseded','intake-unavailable','delivery-first'];
+    var out={status:allowed.indexOf(result.status)>=0?result.status:'blocked',stage:trace.stage};
+    if(trace.failure)out.failure=trace.failure;
+    if(trace.intakeFailure)out.intakeFailure=trace.intakeFailure;
+    console.log(JSON.stringify(out));return out;
+  }
+  // Owner evidence only. No admission, record, send, model or configuration writes.
+  function diagnoseDelivery(){
+    var out={status:'uncertain',readOnly:true,stage:'persisted-config',candidates:[]},c,e;
+    function id(v){return typeof v==='string'&&/^[a-f0-9]{1,100}$/.test(v)?v:null;}
+    function compare(m,source){
+      var row={source:source,id:id(m&&m.id),threadId:id(m&&m.threadId),comparisons:{},mismatchFields:[]};
+      var checks={sent:function(){return (m.labelIds||[]).indexOf('SENT')>=0;},thread:function(){return m.threadId===e.threadId;},from:function(){return address(header(m,'From'))===MAILBOX;},to:function(){return address(header(m,'To'))===SENDER;},messageId:function(){return header(m,'Message-ID')===e.messageId;},reference:function(){return header(m,'In-Reply-To')===e.reference;},subject:function(){return subject(m)===e.subject;},normalizedBody:function(){return text(m.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();}};
+      Object.keys(checks).forEach(function(k){try{row.comparisons[k]=checks[k]();}catch(err){row.comparisons[k]=false;row.failure=safeFailure(err);}if(!row.comparisons[k])row.mismatchFields.push(k);});
+      out.candidates.push(row);
+    }
+    try{
+      c=config(false);
+      if(c.instance!=='gas-vnext-email'||c.url!=='https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1'||c.label!=='Celestan'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');
+      out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
+      out.stage='neon-health';var h=rpc(c,'health');
+      if(h.instance!==c.instance||h.project!=='celestan-email'||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.grant_ref!=='user-authorized:pr69:gas-text-only:v1')throw new Error('wrong grant');
+      out.stage='delivery-peek';var d=rpc(c,'delivery-peek');
+      if(['idle','prepare','reconcile'].indexOf(d.status)<0)throw new Error('unexpected peek');
+      out.outboxStatus=d.status==='reconcile'?'admitted':d.status==='prepare'?'pending':'none';
+      if(d.status==='idle'){out.status='idle';}
+      else{
+        out.stage='expected-envelope';e=d.envelope;mime(e);
+        if(!id(e.threadId)||!id(e.id)||!/^gas-turn-[a-f0-9-]{36}$/.test(d.execution_id)||e.messageId!=='<'+d.execution_id+'@ct-runtime.invalid>')throw new Error('invalid envelope identifiers');
+        out.executionId=d.execution_id;out.expectedMessageId=e.messageId;out.expectedThreadId=e.threadId;out.inputMessageId=e.id;
+        out.expectedLengths={envelopeChars:JSON.stringify(e).length,envelopeBytes:utf8Bytes(JSON.stringify(e)),bodyChars:e.body.length,bodyBytes:utf8Bytes(e.body),subjectChars:e.subject.length,subjectBytes:utf8Bytes(e.subject)};
+        out.stage='sent-search';
+        try{
+          var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId)),refs=page.messages||[];
+          if(!Array.isArray(refs))throw new Error('invalid search');
+          out.searchHasNextPage=!!page.nextPageToken;out.searchTruncated=!!page.nextPageToken||refs.length>10;out.searchCandidateIds=refs.slice(0,10).map(function(r){return id(r.id);});
+          refs.slice(0,10).forEach(function(r){try{if(!id(r.id))throw new Error('invalid candidate');compare(api('messages/'+encodeURIComponent(r.id)+'?format=full'),'sent-search');}catch(err){out.candidates.push({source:'sent-search',id:id(r.id),failure:safeFailure(err)});}});
+        }catch(err){out.searchFailure=safeFailure(err);}
+        out.stage='thread-readback';
+        try{
+          var thread=api('threads/'+encodeURIComponent(e.threadId)+'?format=full'),messages=thread.messages||[];
+          if(!Array.isArray(messages))throw new Error('invalid thread');
+          out.threadTruncated=!!thread.nextPageToken||messages.length>10;out.threadMatches=thread.id===e.threadId;
+          out.threadCandidateIds=messages.slice(0,10).map(function(m){return id(m.id);});
+          messages.slice(0,10).forEach(function(m){compare(m,'thread');});
+        }catch(err){out.threadFailure=safeFailure(err);}
+        // Evidence is not delivery authorization, even when every comparison matches.
+        out.stage='complete';
+      }
+    }catch(err){out.status='blocked';out.failure=safeFailure(err);}
+    console.log(JSON.stringify(out));return out;
   }
   function install() {
     var c=config(true);if(!c)throw new Error('email must be explicitly enabled before installation');
@@ -324,7 +384,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     console.log(JSON.stringify(result));return result;
   }
   function pause(){var result;try{result=setupLock(function(){var p=props();p.setProperty('CT_VNEXT_EMAIL_ENABLED','false');if(p.getProperty('CT_VNEXT_EMAIL_ENABLED')!=='false')throw new Error('pause-readback-unresolved');return {status:'paused',enabled:false,inFlightCancelled:false};});}catch(_){result={status:'blocked',reason:'pause-outcome-unresolved',enabled:null};}console.log(JSON.stringify(result));return result;}
-  return {tick:tick,install:install,inventory:inventory,health:health,configure:configure,prepare:prepare,diagnose:diagnose,activate:activate,pause:pause,capsule:CAPSULE};
+  return {tick:tick,diagnoseDelivery:diagnoseDelivery,install:install,inventory:inventory,health:health,configure:configure,prepare:prepare,diagnose:diagnose,activate:activate,pause:pause,capsule:CAPSULE};
 }());
 function vnextEmailTick(){return CT_GAS_VNEXT_EMAIL.tick();}
 function installVnextEmailTrigger(){return CT_GAS_VNEXT_EMAIL.install();}
@@ -333,5 +393,6 @@ function healthVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.health();}
 function configureVnextEmailRuntime(config){return CT_GAS_VNEXT_EMAIL.configure(config);}
 function prepareVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.prepare();}
 function diagnoseVnextEmailPreparation(){return CT_GAS_VNEXT_EMAIL.diagnose();}
+function diagnoseVnextEmailDelivery(){return CT_GAS_VNEXT_EMAIL.diagnoseDelivery();}
 function activateVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.activate();}
 function pauseVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.pause();}
