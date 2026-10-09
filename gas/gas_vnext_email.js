@@ -116,7 +116,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     data=data.split(c.key).join('[REDACTED]');
     var r=jsonFetch('https://openrouter.ai/api/v1/chat/completions',{method:'post',contentType:'application/json',
       headers:{Authorization:'Bearer '+c.key},payload:JSON.stringify({model:c.model.replace(/^openrouter\//,''),
-        messages:[{role:'system',content:CAPSULE},{role:'user',content:data}],max_tokens:2500,response_format:{type:'json_object'}}),muteHttpExceptions:true});
+        messages:[{role:'system',content:CAPSULE},{role:'user',content:data}],max_tokens:2500}),muteHttpExceptions:true});
     if(Date.now()>deadline)throw new Error('model budget exhausted');
     var content=r&&r.choices&&r.choices[0]&&r.choices[0].message&&r.choices[0].message.content;
     if(typeof content!=='string'||content.length>100000)throw new Error('invalid model output');
@@ -196,7 +196,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     if(all.some(function(t){return t.getHandlerFunction()!=='vnextEmailTick';}))throw new Error('other triggers require explicit cutover review');
     var triggers=all.filter(function(t){return t.getHandlerFunction()==='vnextEmailTick';});
     if(triggers.length>1)throw new Error('duplicate email triggers require manual reconciliation');
-    if(!triggers.length)ScriptApp.newTrigger('vnextEmailTick').timeBased().everyMinutes(5).create();
+    if(!triggers.length)createEmailTrigger();
     return {status:'installed'};
   }
   function inventory() {
@@ -273,7 +273,58 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   }
   function prepare(){return preparation(true);}
   function diagnose(){return preparation(false);}
-  return {tick:tick,install:install,inventory:inventory,health:health,configure:configure,prepare:prepare,diagnose:diagnose,capsule:CAPSULE};
+  function createEmailTrigger(){return ScriptApp.newTrigger('vnextEmailTick').timeBased().everyMinutes(5).create();}
+  function activationTriggers(){
+    var all=ScriptApp.getProjectTriggers(),legacy=[],email=[];
+    all.forEach(function(t){var n=t.getHandlerFunction();if(n==='gasSafetyWake')legacy.push(t);else if(n==='vnextEmailTick')email.push(t);else throw new Error('activation-unknown-trigger');});
+    if(legacy.length>1||email.length>1)throw new Error('activation-duplicate-trigger');
+    return {legacy:legacy,email:email};
+  }
+  function activate(){
+    var stage='feedback-diagnostic',p,mutated=false,retired=0,creationAttempted=false,counts=null,model=null,result;
+    try{
+      // Reality first, read-only: no Feedback setup, Sheets reads or legacy ledger.
+      var feedback=diagnoseFeedbackInbox();
+      if(!feedback||feedback.script_id!=='1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri'||ScriptApp.getScriptId()!==feedback.script_id)throw new Error('activation-script-mismatch');
+      stage='script-lock';
+      result=setupLock(function(){
+        try{
+          stage='persisted-config';p=props();var c=config(false);model=c.model;
+          if(c.instance!=='gas-vnext-email'||c.url!=='https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1'||c.label!=='Celestan'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model)||['false','true'].indexOf(p.getProperty('CT_VNEXT_EMAIL_ENABLED'))<0)throw new Error('activation-config-mismatch');
+          stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('activation-mailbox-mismatch');
+          stage='neon-health';var h=rpc(c,'health');
+          if(h.instance!==c.instance||h.project!=='celestan-email'||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.grant_ref!=='user-authorized:pr69:gas-text-only:v1'||h.blocked!==false||h.uncertain!==0)throw new Error('activation-grant-not-ready');
+          stage='gmail-labels';if(!(api('labels').labels||[]).some(function(l){return l.name==='Celestan';}))throw new Error('activation-label-missing-create-Celestan-filter-in-Gmail');
+          stage='trigger-inventory';counts=activationTriggers();
+          stage='retire-future-legacy';mutated=true;
+          p.setProperty('CT_AUTONOMY_MODE','vnext');if(p.getProperty('CT_AUTONOMY_MODE')!=='vnext')throw new Error('activation-mode-readback');
+          var original=counts.legacy;
+          original.forEach(function(t){try{ScriptApp.deleteTrigger(t);}catch(_){} });
+          counts=activationTriggers();if(counts.legacy.length)throw new Error('activation-legacy-retirement-unresolved');retired=original.length;
+          if(p.getProperty('CT_GAS_SAFETY_TRIGGER')!==null)p.deleteProperty('CT_GAS_SAFETY_TRIGGER');
+          stage='install-trigger';
+          if(!counts.email.length){
+            // Keep polling disabled throughout an uncertain trigger creation,
+            // including an execution interruption that cannot run compensation.
+            if(p.getProperty('CT_VNEXT_EMAIL_ENABLED')!=='false')p.setProperty('CT_VNEXT_EMAIL_ENABLED','false');
+            if(p.getProperty('CT_VNEXT_EMAIL_ENABLED')!=='false')throw new Error('activation-enabled-readback');
+            creationAttempted=true;try{createEmailTrigger();}catch(_){}
+          }
+          // An ambiguous create is read back once, never blindly retried.
+          stage='trigger-readback';counts=activationTriggers();if(counts.legacy.length||counts.email.length!==1)throw new Error('activation-trigger-outcome-unresolved');
+          stage='enable';p.setProperty('CT_VNEXT_EMAIL_ENABLED','true');if(p.getProperty('CT_VNEXT_EMAIL_ENABLED')!=='true')throw new Error('activation-enabled-readback');
+          return {status:'active',enabled:true,mailbox:MAILBOX,allowedSender:SENDER,model:model,readiness:'verified',triggerCounts:{legacy:0,email:1},retiredLegacyCount:retired,creationAttempted:creationAttempted,inFlightLegacyCancelled:false};
+        }catch(e){
+          var disabled=null;if(mutated){try{p.setProperty('CT_VNEXT_EMAIL_ENABLED','false');disabled=p.getProperty('CT_VNEXT_EMAIL_ENABLED')==='false';}catch(_){disabled=null;}}
+          var reasons=['activation-config-mismatch','activation-mailbox-mismatch','activation-grant-not-ready','activation-label-missing-create-Celestan-filter-in-Gmail','activation-unknown-trigger','activation-duplicate-trigger','activation-mode-readback','activation-legacy-retirement-unresolved','activation-enabled-readback','activation-trigger-outcome-unresolved'];
+          return {status:'blocked',stage:stage,reason:reasons.indexOf(e&&e.message)>=0?e.message:'activation-readiness-or-effect-unavailable',failure:safeFailure(e),enabled:disabled===true?false:null,disabledConfirmed:disabled,mutationAttempted:mutated,creationAttempted:creationAttempted,retiredLegacyCount:retired,next:creationAttempted?'inspect owner triggers before any explicit retry':'resolve reported readiness before activation'};
+        }
+      });
+    }catch(e){result={status:'blocked',stage:stage,reason:e&&e.message==='activation-script-mismatch'?'activation-script-mismatch':'activation-owner-context-unavailable',failure:safeFailure(e),mutationAttempted:mutated,creationAttempted:creationAttempted};}
+    console.log(JSON.stringify(result));return result;
+  }
+  function pause(){var result;try{result=setupLock(function(){var p=props();p.setProperty('CT_VNEXT_EMAIL_ENABLED','false');if(p.getProperty('CT_VNEXT_EMAIL_ENABLED')!=='false')throw new Error('pause-readback-unresolved');return {status:'paused',enabled:false,inFlightCancelled:false};});}catch(_){result={status:'blocked',reason:'pause-outcome-unresolved',enabled:null};}console.log(JSON.stringify(result));return result;}
+  return {tick:tick,install:install,inventory:inventory,health:health,configure:configure,prepare:prepare,diagnose:diagnose,activate:activate,pause:pause,capsule:CAPSULE};
 }());
 function vnextEmailTick(){return CT_GAS_VNEXT_EMAIL.tick();}
 function installVnextEmailTrigger(){return CT_GAS_VNEXT_EMAIL.install();}
@@ -282,3 +333,5 @@ function healthVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.health();}
 function configureVnextEmailRuntime(config){return CT_GAS_VNEXT_EMAIL.configure(config);}
 function prepareVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.prepare();}
 function diagnoseVnextEmailPreparation(){return CT_GAS_VNEXT_EMAIL.diagnose();}
+function activateVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.activate();}
+function pauseVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.pause();}

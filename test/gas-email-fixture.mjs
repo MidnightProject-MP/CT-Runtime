@@ -24,6 +24,7 @@ export function gasEmailFixture(rpc) {
         if(loseAdmission&&p.p_operation==='delivery'&&result.status==='send'){loseAdmission=false;throw new Error('lost admission response');}
       }else if(u.hostname==='openrouter.ai'){
         const request=JSON.parse(opts.payload);if(request.messages[0].role!=='system'||request.messages[1].role!=='user')throw new Error('invalid roles');
+        assert.equal('response_format' in request,false,'use strict prompted JSON without unsupported provider parameter');
         const turn=model(request);result={choices:[{message:{content:typeof turn==='string'?turn:JSON.stringify(turn)}}]};
       }else{
         const route=u.pathname.split('/users/me/')[1];

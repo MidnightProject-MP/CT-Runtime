@@ -300,6 +300,74 @@ The worker has not observed the user's Gmail response; the underlying live cause
 remains unconfirmed until this read-only diagnostic is run. No new scope or broad
 permission was added for diagnosis.
 
+### Final owner cutover after successful disabled preparation
+
+The owner subsequently reported successful v104 preparation: all readiness stages
+passed, `preparedConfigMatch=true`, `readbackConfirmed=true`, `enabled=false`,
+72 properties (6 stable / 28 legacy-runtime / 38 unknown), `labelPresent=false`,
+and only the current owner's `gasSafetyWake` trigger. The exact selected model is
+`openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`. These are observed preparation
+facts, **not proof of an actual inference or email delivery**.
+
+The parent's public OpenRouter endpoint-metadata check did not list
+`response_format` for this model. Model calls now omit that optional parameter
+generally, relying on the existing JSON-only system contract plus strict parsing,
+disposition/character/UTF-8-byte validation. Invalid model output still fails
+durably without consuming the failed input. No model substitution, paid fallback,
+registry, or claim of successful real inference was introduced.
+
+After the parent deploys the reviewed activation helper, the final owner flow is:
+
+1. In **Gmail UI** create label **Celestan** and a filter with From
+   `midnightprojectantigravity@gmail.com`, To `midnight.project.mp@gmail.com`,
+   action **Apply the label: Celestan**. Apply it to **future mail only**; do not
+   select “also apply to matching conversations.” Keep normal Gmail authenticated
+   delivery/spam protections. No Gmail settings scope or filter API was added.
+2. In Apps Script select **`activateVnextEmailRuntime`** and **Run** once. There
+   are no arguments and no Script Properties UI edits (including the >50-property
+   UI limitation). Missing label returns a specific blocked result with no writes.
+3. After a verified `active` result, send one bounded **plain-text** task from the
+   allowed sender to the mailbox. The installed trigger polls every five minutes;
+   the activation helper itself never polls messages, calls a model, or sends mail.
+4. Verify the reply stays in the same Gmail thread and the parent verifies Neon
+   execution/result/outbox readback. A delivered draft is still pending human
+   review, not automatic terminal authority. Qualification remains pending until
+   this real task/model/delivery check succeeds.
+
+Activation calls `diagnoseFeedbackInbox()` read-only first and asserts the pinned
+Script ID. Under the script lock it verifies the persisted exact email bindings,
+actual Gmail profile, unblocked Neon registration and required label. It permits
+only `gasSafetyWake` and `vnextEmailTick` among the current owner's triggers,
+rejecting unknown handlers or duplicate instances of either **before mutation**.
+It sets/re-reads the stable `CT_AUTONOMY_MODE=vnext`, deletes only the observed
+legacy safety trigger, verifies it is gone, and only then retires the specific
+`CT_GAS_SAFETY_TRIGGER` marker. Other properties/unknown markers are preserved.
+No Sheets setup or stale legacy execution-ledger inspection is performed.
+
+Only after these checks does it create at most one five-minute trigger (or reuse
+the sole existing one). Polling remains disabled during creation; only verified
+single-trigger readback permits the final enable flag write. An ambiguous trigger-create
+response gets readback, never an automatic second create. Exactly one visible
+email trigger confirms success; unresolved/duplicate outcomes compensate by
+setting email disabled, with explicit readback status. If compensation itself is
+uncertain, the result does not claim disabled. **Inspect owner triggers before any
+explicit retry after an unresolved result.** Correctly active repetition creates
+no duplicate. Existing-trigger cadence is not exposed by GAS readback; new triggers
+use the fixed five-minute builder.
+
+This retires **future** legacy wakes, not an already-running execution, and current
+user trigger enumeration does not prove another account has no triggers. The
+result states `inFlightLegacyCancelled=false`. The new Neon execution/uncertainty
+fences remain authoritative for the email path. No blanket deletion or cleanup
+of legacy Sheets/state is authorized by this helper.
+
+For a no-argument owner stop action, run **`pauseVnextEmailRuntime`**. It only sets
+and verifies `CT_VNEXT_EMAIL_ENABLED=false`; it does not delete triggers, revoke
+the grant, clear uncertain send evidence, or claim to cancel in-flight work.
+
+No worker deployment, activation, filter creation, trigger mutation, model call,
+mail send, or database change was performed while implementing these helpers.
+
 ### Safe owner bootstrap command
 
 `scripts/bootstrap-gas-email.mjs` accepts only the exact new host/database/owner,
@@ -474,16 +542,18 @@ or qualify runtime execution. Nothing in source-only deployment enables email.
    no unresolved authority/reconciliation. Complete a controlled live test only
    with approval to send real email. Until then all live qualifications remain
    **pending**, not proven by VM tests.
-8. Only then set `CT_VNEXT_EMAIL_ENABLED=true` and manually invoke
-   `installVnextEmailTrigger()`. It creates one five-minute `vnextEmailTick`
-   trigger, refuses other visible trigger handlers, and is idempotent for one
-   existing matching trigger. GAS can only enumerate the current user's triggers;
+8. Use the final owner flow above: create the future-mail Gmail filter/label and
+   run `activateVnextEmailRuntime()` for verified future-legacy cutover and one
+   five-minute trigger. No manual property editing is required. The lower-level
+   `installVnextEmailTrigger()` remains available only after explicit enablement
+   and still refuses other handlers; it does not perform the cutover.
+   GAS can only enumerate the current user's triggers;
    cross-account trigger ownership must be audited separately. Nothing installs
    on load or at deployment. Verify one physical trigger and controlled same-thread
    reply, cold reconstruction, and Neon outbox readback before unattended use.
 
-To pause, set the stable enabled property false (future ticks are inert); revoke
-the instance grant as a second gate. This does not cancel an already-admitted
+To pause, run `pauseVnextEmailRuntime()` (future ticks are inert); explicit owner
+revocation of the instance grant is a separate second gate. This does not cancel an already-admitted
 in-flight Gmail effect. Inspect/reconcile first; do not delete its ledger.
 
 ## Recovery and property lifecycle
@@ -529,7 +599,9 @@ is a separate reviewed policy, never Script Property eviction.
 The tick performs **zero Script Property writes**, including no cursors,
 events, tasks, runtime telemetry, receipts, nonces, or send fences. Properties hold
 only six stable settings/secret names. The explicitly invoked owner setup helper
-writes only the five non-secret stable bindings, disabled; it is not a runtime
+writes only the five non-secret stable bindings, disabled. Activation/pause reuse
+the stable enabled/mode flags; only the verified obsolete safety-trigger marker
+may be removed. These are not runtime
 state sink. `inventoryVnextEmailProperties()` emits
 names/classifications/counts, never values. Legacy runtime names and unknowns are
 preserved. Its cleanup preparation allowlist is intentionally empty: there is no
