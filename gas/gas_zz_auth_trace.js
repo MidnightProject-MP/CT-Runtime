@@ -1,5 +1,5 @@
 /* Temporary safe correlated authentication tracing. Remove after diagnosis. */
-(function () {
+var CT_GAS_AUTH_TRACE = (function () {
   function digest(value) {
     var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8);
     return bytes.map(function (b) { return ('0' + (b < 0 ? b + 256 : b).toString(16)).slice(-2); }).join('');
@@ -45,8 +45,7 @@
     return record.diagnostic_id;
   }
 
-  var originalAuthenticate = CT_GAS_DEPLOY.authenticate;
-  CT_GAS_DEPLOY.authenticate = function (raw, query) {
+  function authenticate(raw, query, originalAuthenticate) {
     trace(raw, query, 'before-verify', 'CT_GAS_DEPLOY', null);
     try {
       var result = originalAuthenticate(raw, query);
@@ -56,10 +55,9 @@
       trace(raw, query, 'rejected', 'CT_GAS_DEPLOY', String(error && error.message || error));
       throw error;
     }
-  };
+  }
 
-  var originalDoPost = doPost;
-  doPost = function (e) {
+  function dispatch(e, originalDoPost) {
     var raw = String(e && e.postData && e.postData.contents || '');
     var query = e && e.parameter || {};
     var request = parsed(raw);
@@ -74,5 +72,6 @@
     } catch (_) {
       return output;
     }
-  };
+  }
+  return {authenticate:authenticate,dispatch:dispatch};
 })();

@@ -64,6 +64,33 @@ Break-glass work must preserve the same final invariant: `HEAD == LIVE == desire
 
 ## Change policy
 
+### GAS cold-load order
+
+GAS file evaluation order is not an initialization contract. The canonical bundle
+has one `doPost` declaration, in `gas_zz_a_dispatch.js`; the filename does not give
+it priority. This entry point resolves explicit dispatcher/auth-trace modules at
+invocation time. Federation has a named handler, not a competing global `doPost`.
+Qualification decorates its result by calling the qualification module at
+invocation time, not by capturing/replacing another module during global load.
+Missing required modules fail visibly; wrappers are never silently skipped.
+
+This corrects the v101 cold-load failure where `gas_deploy_qualify.js` attempted
+to read `CT_GAS_DEPLOY.qualify` before `CT_GAS_DEPLOY` was initialized, as well as
+the equivalent authenticate/doPost capture hazards in the trace/dispatch files.
+`test/gas-load-order.test.mjs` builds the actual production bundle and tests normal,
+reverse and seeded shuffled orders, both as separate files and with declaration
+hoisting in a concatenated program. All global initialization must be service-free.
+It invokes the existing identity helper, signed deployment/qualification routes,
+auth rejection, cutover routing and federation fallback, including auth tracing.
+The identity helper retains its existing `FEDERATION_IDENTITY` diagnostic response
+(an intentional exception containing only audience/subject, not the token).
+
+After a load-order repair, deployment is still a separate approved operation.
+Use the source-only read-only preflight documented in `docs/VNEXT-GAS-EMAIL.md`
+against fresh HEAD/LIVE; do not assume v101's previous hash is still current after
+editor activity. No filenames need renaming and no runtime configuration, Neon
+state, triggers, or mail effects are needed to qualify this source repair.
+
 The deployment control plane is intentionally small. The primary surfaces are:
 
 - `.github/workflows/gas-self-deploy.yml`
