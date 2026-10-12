@@ -15,17 +15,26 @@ export function query(from, to) {
   if (!validTime(from) || !validTime(to) || Date.parse(to) <= Date.parse(from) || Date.parse(to)-Date.parse(from) > 3600000) throw new Error('invalid-window');
   // resourceNames accepts the project number; resource.labels.project_id may be
   // its textual ID, so do not incorrectly compare that label to the number.
-  return { resourceNames: [`projects/${PROJECT}`], filter: `resource.type="app_script_function" AND resource.labels.function_name="vnextEmailTick" AND labels."script.googleapis.com/project_key"="${SCRIPT}" AND timestamp>="${from}" AND timestamp<"${to}"`, orderBy: 'timestamp asc', pageSize: 50 };
+  return { resourceNames: [`projects/${PROJECT}`], filter: `resource.type="app_script_function" AND resource.labels.function_name="vnextEmailTick" AND timestamp>="${from}" AND timestamp<"${to}"`, orderBy: 'timestamp asc', pageSize: 50 };
 }
 
-export function sanitize(entry, from, to) {
-  if (entry?.resource?.type !== 'app_script_function' || entry.resource.labels?.function_name !== 'vnextEmailTick' || entry.labels?.['script.googleapis.com/project_key'] !== SCRIPT) return null;
-  if (!validTime(entry.timestamp) || Date.parse(entry.timestamp)<Date.parse(from) || Date.parse(entry.timestamp)>=Date.parse(to)) return null;
+export function metadata(entry) {
+  const key=entry?.labels?.['script.googleapis.com/project_key'];
+  const fn=entry?.resource?.labels?.function_name;
+  return {functionNamePresent:fn!==undefined,functionName:fn==='vnextEmailTick'?'vnextEmailTick':'other',scriptKeyPresent:key!==undefined,scriptKeyMatch:key===SCRIPT,payloadShape:typeof entry?.jsonPayload?.message==='string'?'jsonmessage':typeof entry?.textPayload==='string'?'text':entry?.jsonPayload&&typeof entry.jsonPayload==='object'?'jsonobject':'other'};
+}
+
+export function sanitize(entry, from, to, reject=()=>{}) {
+  const omit=reason=>{reject(reason);return null;};
+  const key=entry?.labels?.['script.googleapis.com/project_key'];
+  if (entry?.resource?.type !== 'app_script_function' || entry.resource.labels?.function_name !== 'vnextEmailTick') return omit('resource-mismatch');
+  if (key!==undefined && key!==SCRIPT) return omit('script-mismatch');
+  if (!validTime(entry.timestamp) || Date.parse(entry.timestamp)<Date.parse(from) || Date.parse(entry.timestamp)>=Date.parse(to)) return omit('timestamp-mismatch');
   const raw = entry.jsonPayload?.message ?? entry.textPayload;
-  if (typeof raw !== 'string' || raw.length>16384) return null;
-  let record; try { record=JSON.parse(raw); } catch { return null; }
-  if (!statuses.includes(record?.status) || !stages.includes(record?.stage)) return null;
-  const out = { timestamp: entry.timestamp, status: record.status, stage: record.stage };
+  if (typeof raw !== 'string' || raw.length>16384) return omit('payload-shape');
+  let record; try { record=JSON.parse(raw); } catch { return omit('invalid-json'); }
+  if (!statuses.includes(record?.status) || !stages.includes(record?.stage)) return omit('unknown-tick');
+  const out = { timestamp: entry.timestamp, status: record.status, stage: record.stage, identityLevel:key===SCRIPT?'script-verified':'project-function' };
   const f=record.failure;
   if (f && typeof f === 'object') {
     if (classes.includes(f.classification)) out.classification=f.classification;
@@ -58,16 +67,33 @@ export async function run(env, fetcher=fetch, emit=value=>console.log(JSON.strin
     if (!token) return false;
     if (typeof token.access_token!=='string'||!token.access_token) throw new Error('missing-token');
     phase='logging';
-    let matched=0;
+    let matched=0,rawEntriesReturned=0,truncated=false;
+    const rejected={},groups=new Map();
+    const aggregate=entry=>{const safe=metadata(entry),key=JSON.stringify(safe);groups.set(key,{...safe,count:(groups.get(key)?.count??0)+1});};
+    const list=body=>request('https://logging.googleapis.com/v2/entries:list',{method:'POST',headers:{Authorization:`Bearer ${token.access_token}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
     for (let page=0;page<2;page++) {
-      const result=await request('https://logging.googleapis.com/v2/entries:list',{method:'POST',headers:{Authorization:`Bearer ${token.access_token}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const result=await list(body);
       if (!result) return false;
       if (result.entries!==undefined && !Array.isArray(result.entries)) throw new Error('invalid-entries');
-      for (const entry of (result.entries??[]).slice(0,50)) { const safe=sanitize(entry,env.FROM_UTC,env.TO_UTC);if(safe){emit(safe);matched++;} }
-      if (!result.nextPageToken || page===1) { emit({status:'read-complete',matched,truncated:!!result.nextPageToken});return true; }
+      rawEntriesReturned+=(result.entries??[]).length;
+      for (const entry of (result.entries??[]).slice(0,50)) { aggregate(entry);const safe=sanitize(entry,env.FROM_UTC,env.TO_UTC,reason=>{rejected[reason]=(rejected[reason]??0)+1;});if(safe){emit(safe);matched++;} }
+      truncated=!!result.nextPageToken;
+      if (!result.nextPageToken || page===1) break;
       if (typeof result.nextPageToken!=='string'||result.nextPageToken.length>8192) throw new Error('invalid-pagination');
       body.pageToken=result.nextPageToken;
     }
+    emit({status:'read-complete',rawEntriesReturned,recognized:matched,truncated,sanitizerReasons:rejected,metadata:[...groups.values()]});
+    if (rawEntriesReturned===0) {
+      // One metadata-only fallback. Never parse or emit these payloads.
+      phase='logging-metadata';
+      const fallback=query(env.FROM_UTC,env.TO_UTC);
+      fallback.filter=fallback.filter.replace(' AND resource.labels.function_name="vnextEmailTick"','');
+      const result=await list(fallback);if(!result)return false;
+      if (result.entries!==undefined && !Array.isArray(result.entries)) throw new Error('invalid-entries');
+      groups.clear();for(const entry of (result.entries??[]).slice(0,50))aggregate(entry);
+      emit({status:'metadata-complete',rawEntriesReturned:(result.entries??[]).length,truncated:!!result.nextPageToken,metadata:[...groups.values()]});
+    }
+    return true;
   } catch { emit({status:'access-unavailable',stage:phase});return false; }
 }
 
