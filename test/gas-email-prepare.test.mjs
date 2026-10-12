@@ -21,7 +21,7 @@ function fixture(overrides={}){
       return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(data)};
     }}});
   vm.runInContext(source,ctx);assert.equal(calls.length,0);assert.equal(writes.length,0);assert.equal(logs.length,0);
-  return {values,writes,logs,calls,run:()=>ctx.prepareVnextEmailRuntime(),diagnose:()=>ctx.diagnoseVnextEmailPreparation(),http:(suffix,status,body)=>{responses[suffix]={status,body};},writeMode:v=>{writeMode=v;},readFailure:()=>{readFailure=true;},triggerFailure:()=>{triggerFailure=true;},lockFailure:()=>{lockFailure=true;},profile:v=>{profile=v;},rpcFail:()=>{rpcFail=true;},project:v=>{project=v;},missingLabel:()=>{label=false;}};
+  return {values,writes,logs,calls,inventory:()=>ctx.inventoryVnextEmailProperties(),run:()=>ctx.prepareVnextEmailRuntime(),diagnose:()=>ctx.diagnoseVnextEmailPreparation(),http:(suffix,status,body)=>{responses[suffix]={status,body};},writeMode:v=>{writeMode=v;},readFailure:()=>{readFailure=true;},triggerFailure:()=>{triggerFailure=true;},lockFailure:()=>{lockFailure=true;},profile:v=>{profile=v;},rpcFail:()=>{rpcFail=true;},project:v=>{project=v;},missingLabel:()=>{label=false;}};
 }
 test('no-argument preparation pins reviewed bindings, reuses exact model, logs readiness and remains disabled/idempotent',()=>{
   const f=fixture(),r=f.run();assert.equal(r.status,'prepared');assert.equal(r.enabled,false);assert.equal(r.model,'openrouter/vendor/exact-approved-model');assert.equal(r.project,'celestan-email');assert.equal(r.labelPresent,true);assert.equal(r.triggerCount,1);
@@ -81,4 +81,19 @@ test('missing configuration, property-read, trigger inventory and lock errors st
     const f=fixture();set(f);const d=f.diagnose();assert.equal(d.stages.find(s=>s.stage===stage).status,'failed');assert.equal(d.configWriteAttempted,false);assert.equal(f.writes.length,0);
     assert.doesNotMatch(JSON.stringify(d),/test-secret|private-value|private-oauth|private-identity|PRIVATE_UNKNOWN_PROPERTY/);
   }
+});
+
+test('property inventory emits a sanitized log and keeps cleanup fail-closed',()=>{
+  const f=fixture(),result=f.inventory();
+  assert.equal(f.logs.length,1);
+  assert.deepEqual(f.logs[0],JSON.parse(JSON.stringify(result)));
+  assert.equal(result.total,Object.keys(f.values).length);
+  assert.equal(result.counts.stable,6);
+  assert.equal(result.counts.legacy_runtime,1);
+  assert.equal(result.counts.unknown,1);
+  assert.ok(result.properties.some(p=>p.name==='OPENROUTER_API_KEY'&&p.classification==='stable'));
+  assert.ok(result.properties.some(p=>p.name==='CT_GAS_SAFETY_TRIGGER'&&p.classification==='legacy_runtime'));
+  assert.equal(result.cleanup_allowlist.length,0);
+  assert.equal(result.cleanup_apply_available,false);
+  assert.doesNotMatch(JSON.stringify(f.logs),/private-test-secret|ep-weathered-tree|private-value/);
 });
