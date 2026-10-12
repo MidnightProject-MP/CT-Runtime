@@ -84,16 +84,24 @@ test('missing configuration, property-read, trigger inventory and lock errors st
 });
 
 test('property inventory emits a sanitized log and keeps cleanup fail-closed',()=>{
-  const f=fixture(),result=f.inventory();
+  const f=fixture({
+    CT_VNEXT_EMAIL_ENABLED:'false',
+    CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',
+    CT_VNEXT_EMAIL_DATA_API_URL:'https://ep-weathered-tree.example.neon.tech/neondb/rest/v1',
+    CT_VNEXT_EMAIL_MODEL:'openrouter/vendor/model:free',
+    CT_VNEXT_EMAIL_LABEL:'Celestan',
+    CT_GAS_SAFETY_TRIGGER:'present'
+  }),result=f.inventory();
   assert.equal(f.logs.length,1);
   assert.deepEqual(f.logs[0],JSON.parse(JSON.stringify(result)));
   assert.equal(result.total,Object.keys(f.values).length);
   assert.equal(result.counts.stable,6);
   assert.equal(result.counts.legacy_runtime,1);
-  assert.equal(result.counts.unknown,1);
+  assert.equal(result.counts.unknown,2);
   assert.ok(result.properties.some(p=>p.name==='OPENROUTER_API_KEY'&&p.classification==='stable'));
   assert.ok(result.properties.some(p=>p.name==='CT_GAS_SAFETY_TRIGGER'&&p.classification==='legacy_runtime'));
+  assert.ok(result.properties.some(p=>p.name==='PRIVATE_UNKNOWN_PROPERTY'&&p.classification==='unknown'));
   assert.equal(result.cleanup_allowlist.length,0);
   assert.equal(result.cleanup_apply_available,false);
-  assert.doesNotMatch(JSON.stringify(f.logs),/private-test-secret|ep-weathered-tree|private-value/);
+  assert.doesNotMatch(JSON.stringify(f.logs),/test-secret-never-log|ep-weathered-tree|private-value/);
 });
