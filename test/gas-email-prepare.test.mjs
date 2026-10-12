@@ -96,10 +96,11 @@ test('property inventory emits a sanitized log and keeps cleanup fail-closed',()
   assert.deepEqual(f.logs[0],JSON.parse(JSON.stringify(result)));
   assert.equal(result.total,Object.keys(f.values).length);
   assert.equal(result.counts.stable,6);
-  assert.equal(result.counts.legacy_runtime,1);
-  assert.equal(result.counts.unknown,2);
+  assert.equal(result.counts.legacy_runtime,0);
+  assert.equal(result.counts.unknown,3);
   assert.ok(result.properties.some(p=>p.name==='OPENROUTER_API_KEY'&&p.classification==='stable'));
-  assert.ok(result.properties.some(p=>p.name==='CT_GAS_SAFETY_TRIGGER'&&p.classification==='legacy_runtime'));
+  assert.ok(result.properties.some(p=>p.name==='CT_GAS_SAFETY_TRIGGER'&&p.classification==='unknown'));
+  assert.ok(result.properties.some(p=>p.name==='CT_GAS_PROOF_MODEL'&&p.classification==='unknown'));
   assert.ok(result.properties.some(p=>p.name==='PRIVATE_UNKNOWN_PROPERTY'&&p.classification==='unknown'));
   assert.equal(result.cleanup_allowlist.length,0);
   assert.equal(result.cleanup_apply_available,false);
