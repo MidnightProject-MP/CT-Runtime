@@ -6,7 +6,8 @@ const secret='injected-secret-mail-token-userkey';
 const entry={timestamp:'2026-10-12T14:44:05.591Z',resource:{type:'app_script_function',labels:{function_name:'vnextEmailTick',project_id:PROJECT}},labels:{'script.googleapis.com/project_key':SCRIPT},jsonPayload:{message:JSON.stringify({status:'model-failed',stage:'model',failure:{classification:'rate-limited',httpStatus:429,providerReason:secret,sqlState:secret,message:secret},request:secret})}};
 test('closed project/script/function scope and maximum hour window',()=>{
   const q=query(from,to);assert.deepEqual(q.resourceNames,[`projects/${PROJECT}`]);assert.equal(q.pageSize,50);
-  for(const text of [SCRIPT,PROJECT,'vnextEmailTick','app_script_function',from,to])assert.ok(q.filter.includes(text));
+  for(const text of [SCRIPT,'vnextEmailTick','app_script_function',from,to])assert.ok(q.filter.includes(text));
+  assert.ok(!q.filter.includes('resource.labels.project_id'));
   for(const bounds of [[secret,to],[from,from],[from,'2026-10-12T16:00:00Z'],[from+'" OR true',to]])assert.throws(()=>query(...bounds));
 });
 test('only recognized tick JSON fields survive; unknown logs omitted',()=>{
@@ -16,6 +17,7 @@ test('only recognized tick JSON fields survive; unknown logs omitted',()=>{
   assert.equal(sanitize({...entry,timestamp:secret},from,to),null);
   assert.equal(sanitize({...entry,jsonPayload:{message:JSON.stringify({status:secret,stage:'model'})}},from,to),null);
   assert.ok(sanitize({...entry,jsonPayload:undefined,textPayload:entry.jsonPayload.message},from,to));
+  assert.ok(sanitize({...entry,resource:{...entry.resource,labels:{...entry.resource.labels,project_id:'textual-project-id'}}},from,to));
 });
 const env={FROM_UTC:from,TO_UTC:to,CLASPRC_JSON:JSON.stringify({tokens:{default:{client_id:secret,client_secret:secret,refresh_token:secret}}})};
 test('OAuth in memory then only entries:list, bounded two pages and redacted output',async()=>{

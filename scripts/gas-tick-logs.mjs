@@ -13,11 +13,13 @@ const validTime = value => typeof value === 'string' && utc.test(value) && Numbe
 
 export function query(from, to) {
   if (!validTime(from) || !validTime(to) || Date.parse(to) <= Date.parse(from) || Date.parse(to)-Date.parse(from) > 3600000) throw new Error('invalid-window');
-  return { resourceNames: [`projects/${PROJECT}`], filter: `resource.type="app_script_function" AND resource.labels.project_id="${PROJECT}" AND resource.labels.function_name="vnextEmailTick" AND labels."script.googleapis.com/project_key"="${SCRIPT}" AND timestamp>="${from}" AND timestamp<"${to}"`, orderBy: 'timestamp asc', pageSize: 50 };
+  // resourceNames accepts the project number; resource.labels.project_id may be
+  // its textual ID, so do not incorrectly compare that label to the number.
+  return { resourceNames: [`projects/${PROJECT}`], filter: `resource.type="app_script_function" AND resource.labels.function_name="vnextEmailTick" AND labels."script.googleapis.com/project_key"="${SCRIPT}" AND timestamp>="${from}" AND timestamp<"${to}"`, orderBy: 'timestamp asc', pageSize: 50 };
 }
 
 export function sanitize(entry, from, to) {
-  if (entry?.resource?.type !== 'app_script_function' || entry.resource.labels?.function_name !== 'vnextEmailTick' || entry.resource.labels?.project_id !== PROJECT || entry.labels?.['script.googleapis.com/project_key'] !== SCRIPT) return null;
+  if (entry?.resource?.type !== 'app_script_function' || entry.resource.labels?.function_name !== 'vnextEmailTick' || entry.labels?.['script.googleapis.com/project_key'] !== SCRIPT) return null;
   if (!validTime(entry.timestamp) || Date.parse(entry.timestamp)<Date.parse(from) || Date.parse(entry.timestamp)>=Date.parse(to)) return null;
   const raw = entry.jsonPayload?.message ?? entry.textPayload;
   if (typeof raw !== 'string' || raw.length>16384) return null;
