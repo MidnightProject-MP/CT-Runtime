@@ -3,6 +3,22 @@ name: GAS clasp deploy (break glass)
 on:
   workflow_dispatch:
     inputs:
+      source_only:
+        description: 'Reviewed source-only deployment; no remote configuration, Feedback, or Execution API calls'
+        type: boolean
+        default: false
+      source_only_preflight:
+        description: 'Read-only source inspection: requires source_only=true; no push, version or deployment update'
+        type: boolean
+        default: false
+      expected_desired_hash:
+        description: 'Source-only mutation: desired hash from the reviewed preflight for this exact source'
+        type: string
+        required: false
+      expected_head_hash:
+        description: 'Source-only mutation: normalized HEAD hash from preflight (must equal LIVE)'
+        type: string
+        required: false
       deployment_id:
         description: 'Existing Apps Script deployment ID; leave blank to create a new deployment'
         required: false
@@ -15,6 +31,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: gas-production-deploy
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: '22.14.0'
@@ -29,6 +49,15 @@ jobs:
     environment: gas-production
     steps:
       - uses: actions/checkout@v4
+      - name: Validate source-only mode selection
+        env:
+          SOURCE_ONLY: ${{ inputs.source_only }}
+          PREFLIGHT: ${{ inputs.source_only_preflight }}
+        run: |
+          if [ "$PREFLIGHT" = 'true' ] && [ "$SOURCE_ONLY" != 'true' ]; then
+            echo 'Read-only preflight requires source_only=true; refusing legacy path.' >&2
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -57,18 +86,22 @@ jobs:
           console.log(JSON.stringify({ top_level_keys: Object.keys(config).sort(), has_tokens_default: true, token_ids: Object.keys(config.tokens || {}).sort(), credential_shape: serviceAccountLike ? 'service-account-like' : 'user-oauth-like', oauth2_client_id: settings.clientId || settings.client_id || null, oauth2_project_id: settings.projectId || settings.project_id || null, token_scopes: scopes }, null, 2));
           NODE
       - name: Configure Apps Script project
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         run: |
           test -n "$CT_GAS_SCRIPT_ID"
           node -e "const fs=require('node:fs'); fs.writeFileSync('.clasp.json', JSON.stringify({scriptId:process.env.CT_GAS_SCRIPT_ID,rootDir:'.'},null,2)+'\\n');"
           test "$(node -p "require('./.clasp.json').scriptId")" = "$CT_GAS_SCRIPT_ID"
       - name: Show clasp file status
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         run: clasp show-file-status --json
       - name: Push source
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         run: clasp push --force
       - name: Deploy
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         env:
           DEPLOYMENT_ID: ${{ inputs.deployment_id }}
@@ -76,18 +109,76 @@ jobs:
         run: |
           if [ -n "$DEPLOYMENT_ID" ]; then clasp create-deployment --deploymentId "$DEPLOYMENT_ID" --description "$DEPLOYMENT_DESCRIPTION"; else clasp create-deployment --description "$DEPLOYMENT_DESCRIPTION"; fi
       - name: Configure dedicated feedback inbox
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         run: |
           bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/configure-feedback.log" configureFeedbackInbox --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" --require 'sheet_name' -- clasp run configureFeedbackInbox --params "[\"$CT_GAS_FEEDBACK_SPREADSHEET_ID\",\"$CT_GAS_FEEDBACK_SHEET_NAME\"]"
       - name: Diagnose feedback inbox after configure
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         run: |
           bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-configure.log" diagnoseFeedbackInbox --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" -- clasp run diagnoseFeedbackInbox
       - name: Bootstrap feedback sheet
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         run: |
           bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/setup-feedback.log" setupFeedbackSheet --require 'spreadsheet_id' --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" -- clasp run setupFeedbackSheet
       - name: Diagnose feedback inbox after setup
+        if: ${{ !inputs.source_only }}
         working-directory: gas
         run: |
           bash ../.github/scripts/clasp-run-gate.sh "$RUNNER_TEMP/diagnose-after-setup.log" diagnoseFeedbackInbox --require 'script_id' --require "$CT_GAS_SCRIPT_ID" --require "$CT_GAS_FEEDBACK_SPREADSHEET_ID" -- clasp run diagnoseFeedbackInbox
+      - name: Build reviewed source-only bundle
+        if: ${{ inputs.source_only }}
+        run: |
+          node --test test/gas-source-only.test.mjs test/gas-deploy-contract.test.mjs test/gas-deploy-state-machine.test.mjs test/gas-deploy-readback.test.mjs
+          node scripts/build-gas-bundle.mjs gas "$RUNNER_TEMP/gas-bundle.json"
+      - name: Inspect source-only predecessor and stage exact bundle
+        id: source_prepare
+        if: ${{ inputs.source_only && !inputs.source_only_preflight }}
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          EXPECTED_HEAD_HASH: ${{ inputs.expected_head_hash }}
+          EXPECTED_DESIRED_HASH: ${{ inputs.expected_desired_hash }}
+        run: node scripts/gas-source-only.mjs prepare
+      - name: Read-only source-only preflight metadata
+        if: ${{ inputs.source_only && inputs.source_only_preflight }}
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+        run: node scripts/gas-source-only.mjs inspect
+      - name: Push reviewed source-only bundle once
+        id: source_push
+        if: ${{ inputs.source_only && steps.source_prepare.outputs.needed == 'true' }}
+        working-directory: ${{ runner.temp }}/gas-source-only
+        run: |
+          if ! clasp push --force >/dev/null 2>&1; then
+            echo 'Source push outcome unresolved; readback only, do not retry mutation.' >&2
+            exit 1
+          fi
+      - name: Verify source-only HEAD and unchanged LIVE
+        if: ${{ inputs.source_only && steps.source_prepare.outcome == 'success' && !cancelled() }}
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          EXPECTED_HEAD_HASH: ${{ inputs.expected_head_hash }}
+        run: node scripts/gas-source-only.mjs head
+      - name: Update pinned source-only deployment once
+        if: ${{ inputs.source_only && steps.source_prepare.outputs.needed == 'true' }}
+        working-directory: ${{ runner.temp }}/gas-source-only
+        env:
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_DESCRIPTION: ${{ inputs.description }}
+        run: |
+          if ! clasp create-deployment --deploymentId "$DEPLOYMENT_ID" --description "$DEPLOYMENT_DESCRIPTION" >/dev/null 2>&1; then
+            echo 'Deployment update outcome unresolved; readback only, do not retry mutation.' >&2
+            exit 1
+          fi
+      - name: Verify source-only HEAD and deployed version
+        if: ${{ inputs.source_only && steps.source_prepare.outcome == 'success' && !cancelled() }}
+        env:
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.CT_GAS_ADMIN_WEB_APP_URL }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          EXPECTED_HEAD_HASH: ${{ inputs.expected_head_hash }}
+        run: node scripts/gas-source-only.mjs final

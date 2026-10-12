@@ -1,5 +1,5 @@
 /* Add the GAS-computed desired bundle hash to the read-only qualification response. */
-(function () {
+var CT_GAS_DEPLOY_QUALIFY = (function () {
   var MAX_FILES = 64;
   var MAX_FILE_BYTES = 262144;
   var MAX_BUNDLE_BYTES = 2097152;
@@ -51,12 +51,11 @@
     return digest(JSON.stringify(normalizeFiles(files)));
   }
 
-  var qualify = CT_GAS_DEPLOY.qualify;
-  CT_GAS_DEPLOY.qualify = function (request) {
-    var result = qualify(request);
+  function decorate(request, result) {
     if (request && Array.isArray(request.files) && request.files.length) {
       result.desiredBundleHash = bundleHash(request.files);
     }
     return result;
-  };
+  }
+  return {decorate:decorate};
 }());
