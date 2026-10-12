@@ -63,6 +63,73 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       f.add('followup','thread1','One more thing.');assert.equal(f.tick().status,'uncertain');assert.equal(rpc('claim').status,'blocked');
       f.showSearch();assert.equal(f.tick().status,'sent');assert.equal(f.sends,2);assert.equal(rpc('health').uncertain,0);
     });
+    await t.test('rewritten Message-ID: durable receipt survives lost receipt-write response and lost record',()=>{
+      for(const loss of ['none','note-send-receipt','record']){
+        reset();let lose=loss;const calls=[];
+        const f=gasEmailFixture((op,data)=>{
+          calls.push(op);
+          if(op==='note-send-receipt')f.messages.get('sent1').payload.headers.find(h=>h.name==='Message-ID').value='<gmail-rewritten@example.com>';
+          const r=rawRpc(op,data);
+          if(op===lose){lose=null;throw new Error('lost response');}return r;
+        });
+        f.add('rewritten');assert.equal(f.tick().status,loss==='none'?'sent':'blocked');assert.equal(f.sends,1);
+        assert.equal(sql('SELECT provider_receipt FROM gas_email_outbox')[0].provider_receipt,'sent1');
+        if(loss==='note-send-receipt')assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'admitted');
+        f.hideSearch();assert.equal(f.tick().status,'idle');assert.equal(f.sends,1);
+        assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'sent');
+        assert.equal(calls.filter(x=>x==='delivery').length,1);
+      }
+    });
+    await t.test('marker recovers response lost before receipt; wrong marker, duplicates and truncation never settle',()=>{
+      for(const mode of ['recover','wrong-marker','duplicate','truncated','to','reference','body']){
+        reset();const f=fixture();f.add('marker');f.loseNextSend();assert.equal(f.tick().status,'blocked');
+        const m=f.messages.get('sent1'),headers=m.payload.headers;
+        headers.find(h=>h.name==='Message-ID').value='<rewritten@gmail.com>';
+        const exec=sql('SELECT execution_id FROM gas_email_outbox')[0].execution_id;
+        assert.equal(headers.find(h=>h.name==='X-CT-Runtime-Execution').value,exec);
+        if(mode==='wrong-marker')headers.find(h=>h.name==='X-CT-Runtime-Execution').value='wrong';
+        if(mode==='duplicate'){const copy=structuredClone(m);copy.id='sent2';f.messages.set(copy.id,copy);}
+        if(mode==='truncated')for(let n=0;n<10;n++)f.add('extra'+n,'thread1','other','attacker@example.com');
+        if(mode==='to')headers.find(h=>h.name==='To').value='attacker@example.com';
+        if(mode==='reference')headers.find(h=>h.name==='In-Reply-To').value='<other@example.com>';
+        if(mode==='body')m.payload.body.data=Buffer.from('different').toString('base64url');
+        f.failIntake();const result=f.tick();assert.equal(result.status,mode==='recover'?'sent':mode==='duplicate'?'blocked':'uncertain',mode);
+        assert.equal(f.sends,1);assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,mode==='recover'?'sent':'admitted');
+        assert.equal(rpc('claim').status,mode==='recover'?'idle':'blocked');
+      }
+    });
+    await t.test('saved receipt cannot suppress recipient/reference/body mismatch; receipt RPC immutable and scoped',()=>{
+      for(const field of ['To','In-Reply-To','body']){
+        reset();let lost=true;
+        const f=gasEmailFixture((op,data)=>{const r=rawRpc(op,data);if(op==='note-send-receipt'&&lost){lost=false;throw new Error('lost receipt response');}return r;});
+        f.add('saved');assert.equal(f.tick().status,'blocked');const m=f.messages.get('sent1');
+        if(field==='body')m.payload.body.data=Buffer.from('different').toString('base64url');else m.payload.headers.find(h=>h.name===field).value=field==='To'?'attacker@example.com':'<other@example.com>';
+        assert.equal(f.tick().status,'uncertain');assert.equal(f.sends,1);
+        const d=rpc('delivery-peek'),data={execution_id:d.execution_id,gmail_id:'sent1',messageId:d.envelope.messageId,threadId:d.envelope.threadId};
+        assert.equal(d.providerReceipt,'sent1');assert.equal(rpc('note-send-receipt',data).status,'noted');
+        for(const bad of [{gmail_id:'other'},{threadId:'other'},{messageId:'other'},{execution_id:'other'},{gmail_id:'bad/id'}])assert.throws(()=>rpc('note-send-receipt',{...data,...bad}),/invalid delivery evidence/);
+        assert.throws(()=>rpc('record',{...data,gmail_id:'other'}),/invalid delivery evidence/);
+        assert.equal(sql("SELECT has_function_privilege('authenticated','gas_email_rpc_bootstrap(text,text,jsonb)','EXECUTE') AS allowed")[0].allowed,false);
+      }
+    });
+    await t.test('provider IDs cannot be reused by another outbox or bypass receipt identity at record',()=>{
+      reset();rpc('ingest',input('first'));checkpoint(rpc('claim'));const first=rpc('delivery');
+      const proof=d=>({execution_id:d.execution_id,gmail_id:'shared',messageId:d.envelope.messageId,threadId:d.envelope.threadId});
+      assert.equal(rpc('note-send-receipt',proof(first)).status,'noted');
+      assert.equal(rpc('record',proof(first)).status,'sent');
+      rpc('ingest',input('second'));checkpoint(rpc('claim'));const second=rpc('delivery');
+      assert.throws(()=>rpc('note-send-receipt',proof(second)),/invalid delivery evidence/);
+      assert.throws(()=>rpc('record',proof(second)),/invalid delivery evidence/);
+      assert.equal(rpc('note-send-receipt',{...proof(second),gmail_id:'distinct'}).status,'noted');
+      assert.equal(rpc('health').uncertain,1);
+    });
+    await t.test('receipt write rejected before commit recovers marker without sending again',()=>{
+      reset();let fail=true;
+      const f=gasEmailFixture((op,data)=>{if(op==='note-send-receipt'&&fail){fail=false;f.messages.get('sent1').payload.headers.find(h=>h.name==='Message-ID').value='<rewritten@gmail.com>';throw new Error('receipt unavailable');}return rawRpc(op,data);});
+      f.add('failedReceipt');assert.equal(f.tick().status,'blocked');
+      assert.equal(sql('SELECT provider_receipt FROM gas_email_outbox')[0].provider_receipt,null);
+      assert.equal(f.tick().status,'idle');assert.equal(f.sends,1);assert.equal(rpc('health').uncertain,0);
+    });
     await t.test('wrong sender, encoded subjects, and mismatched readback fail closed',()=>{
       reset();const f=fixture();f.add('wrong','thread1','untrusted','attacker@example.com');assert.equal(f.tick().status,'idle');assert.equal(f.sends,0);
       f.messages.delete('wrong');f.add('encoded');f.messages.get('encoded').payload.headers.find(h=>h.name==='Subject').value='=?UTF-8?B?'+Buffer.from('Merci — draft').toString('base64')+'?=';

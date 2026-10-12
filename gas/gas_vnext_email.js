@@ -137,11 +137,12 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     Array.from(e.subject).forEach(function(ch){if(utf8Bytes(chunk+ch)>42){chunks.push(chunk);chunk='';}chunk+=ch;});if(chunk)chunks.push(chunk);
     var title=chunks.map(function(s){return '=?UTF-8?B?'+Utilities.base64Encode(s,Utilities.Charset.UTF_8)+'?=';}).join('\r\n ');
     return ['From: '+MAILBOX,'To: '+SENDER,'Subject: '+title,
-      'Message-ID: '+e.messageId,'In-Reply-To: '+e.reference,'References: '+e.reference,'MIME-Version: 1.0',
+      'Message-ID: '+e.messageId,'X-CT-Runtime-Execution: '+e.messageId.slice(1,e.messageId.indexOf('@')),'In-Reply-To: '+e.reference,'References: '+e.reference,'MIME-Version: 1.0',
       'Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64','',Utilities.base64Encode(e.body,Utilities.Charset.UTF_8).match(/.{1,76}/g).join('\r\n')].join('\r\n');
   }
-  function verifiedSent(actual,e) {
-    return (actual.labelIds||[]).indexOf('SENT')>=0&&actual.threadId===e.threadId&&header(actual,'Message-ID')===e.messageId&&
+  function verifiedSent(actual,e,receipt,execution) {
+    return (actual.labelIds||[]).indexOf('SENT')>=0&&actual.threadId===e.threadId&&
+      (receipt?actual.id===receipt:header(actual,'Message-ID')===e.messageId||header(actual,'X-CT-Runtime-Execution')===execution)&&
       address(header(actual,'From'))===MAILBOX&&address(header(actual,'To'))===SENDER&&header(actual,'In-Reply-To')===e.reference&&
       subject(actual)===e.subject&&text(actual.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();
   }
@@ -154,22 +155,46 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       if(reconcileOnly)return 'intake-unavailable';
       stage('delivery-provenance');var original=incoming(api('messages/'+encodeURIComponent(e.id)+'?format=full'));
       if(original.threadId!==e.threadId||original.reference!==e.reference||original.subject!==e.subject)throw new Error('email reply provenance conflict');
+      if(e.messageId!=='<'+d.execution_id+'@ct-runtime.invalid>')throw new Error('execution identity conflict');
       raw=mime(e); // Construct and validate before irreversible admission.
       stage('delivery-admission');d=rpc(c,'delivery',{execution_id:d.execution_id});
       if(d.status!=='send')return d.status;
       stage('delivery-send');sent=api('messages/send',{threadId:e.threadId,raw:Utilities.base64EncodeWebSafe(raw,Utilities.Charset.UTF_8)});
-      if(!sent.id)throw new Error('uncertain email send');
+      if(typeof sent.id!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(sent.id)||sent.threadId!==e.threadId)throw new Error('uncertain email send');
+      var receipt=sent.id;
+      stage('delivery-receipt');
+      if(rpc(c,'note-send-receipt',{execution_id:d.execution_id,gmail_id:receipt,messageId:e.messageId,threadId:e.threadId}).status!=='noted')throw new Error('uncertain receipt');
       stage('delivery-readback');sent=api('messages/'+encodeURIComponent(sent.id)+'?format=full');
-      if(!verifiedSent(sent,e))throw new Error('uncertain email readback');
+      if(!verifiedSent(sent,e,receipt,d.execution_id))throw new Error('uncertain email readback');
     }else{
-      stage('delivery-search');var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId));
-      if(page.nextPageToken)return 'uncertain'; // Never infer uniqueness from a truncated search.
-      var found=page.messages||[];
-      for(var n=0;n<found.length;n++){
-        stage('delivery-readback');var actual=api('messages/'+encodeURIComponent(found[n].id)+'?format=full');
-        if(verifiedSent(actual,e)){if(sent)throw new Error('ambiguous email readback');sent=actual;}
+      if(d.providerReceipt){
+        if(!/^[a-zA-Z0-9_-]{1,100}$/.test(d.providerReceipt))return 'uncertain';
+        stage('delivery-readback');sent=api('messages/'+encodeURIComponent(d.providerReceipt)+'?format=full');
+        if(!verifiedSent(sent,e,d.providerReceipt,d.execution_id))return 'uncertain';
+      }else{
+        stage('delivery-search');var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId));
+        if(page.nextPageToken||!Array.isArray(page.messages||[])||(page.messages||[]).length>10)return 'uncertain';
+        var found=page.messages||[];
+        for(var n=0;n<found.length;n++){
+          stage('delivery-readback');var actual=api('messages/'+encodeURIComponent(found[n].id)+'?format=full');
+          if(header(actual,'Message-ID')===e.messageId){
+            if(!verifiedSent(actual,e,null,d.execution_id))return 'uncertain';
+            if(sent)throw new Error('ambiguous email readback');sent=actual;
+          }
+        }
+        if(!sent){
+          stage('delivery-thread');var thread=api('threads/'+encodeURIComponent(e.threadId)+'?format=full');
+          if(thread.id!==e.threadId||thread.nextPageToken||!Array.isArray(thread.messages)||thread.messages.length>10)return 'uncertain';
+          for(var k=0;k<thread.messages.length;k++){
+            var m=thread.messages[k];
+            if(header(m,'Message-ID')===e.messageId||header(m,'X-CT-Runtime-Execution')===d.execution_id){
+              if(!verifiedSent(m,e,null,d.execution_id))return 'uncertain';
+              if(sent)throw new Error('ambiguous email readback');sent=m;
+            }
+          }
+        }
+        if(!sent)return 'uncertain'; // Absence never grants permission to resend.
       }
-      if(!sent)return 'uncertain'; // Absence never grants permission to resend.
     }
     stage('delivery-record');return rpc(c,'record',{execution_id:d.execution_id,gmail_id:sent.id,messageId:e.messageId,threadId:e.threadId}).status;
   }

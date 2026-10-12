@@ -423,6 +423,66 @@ Tests execute this exact manifest against PGlite and native PostgreSQL. Owner
 bootstrap/setup SQL is an operator provisioning activity, never an authenticated
 runtime operation. The schema requires PostgreSQL with `gen_random_uuid()`.
 
+### Forward delivery identity upgrade (002)
+
+Gmail can rewrite the outbound RFC `Message-ID`. A synthetic RFC ID alone is
+therefore not the primary delivery identity. The runner now persists the valid
+Gmail send response's message ID and matching thread via `note-send-receipt`
+**before** any message readback. This receipt does not mark delivery sent: SENT,
+exact thread, sender, recipient, In-Reply-To, decoded subject and normalized body
+must still verify. A saved receipt is fetched by exact Gmail ID after a cold wake;
+an unavailable or mismatched readback remains admitted and never permits resend.
+
+For a crash/lost send response before receipt persistence, outbound MIME carries
+`X-CT-Runtime-Execution`. Recovery accepts an exact legacy synthetic RFC match,
+or one matching execution marker in a complete, bounded (at most ten messages)
+fixed-thread readback, with all content/provenance checks intact. Truncated or
+ambiguous results stay uncertain. Identical body alone is never identity proof.
+If Gmail removes both identifiers before the receipt was saved, manual evidence
+reconciliation is required; absence never grants a second send.
+
+The original `bootstrap.json`, `schema.sql` and bootstrap ledger are immutable.
+For both existing and fresh dedicated installations: run the original bootstrap
+first, then `node scripts/upgrade-gas-email-delivery.mjs inspect`, then authorized
+`apply`. The forward SQL is `deploy/gas-email/002_delivery_provider_receipts.sql`;
+its checksum is independently recorded in `gas_email_upgrade_ledger`. A private,
+non-callable renamed bootstrap RPC preserves the original implementation; the
+sole authenticated public RPC validates/records receipts and augments peek.
+All table/internal-function privileges remain denied, with fixed search paths.
+The upgrade is backward-compatible with the deployed legacy runner. Do not edit
+an already-applied extension; use another forward migration if needed.
+
+### One historical owner-evidence repair — only after the receipt fix is deployed
+
+`scripts/repair-gas-email-delivery.mjs` is pinned to the new Neon target and only
+execution `gas-turn-479896e4-aea4-4e10-9d01-bb90ff715326`, Gmail message
+`1a12116729e4a391`, input/thread `1a121129847fa71a`, input sequence 1, exact work
+unit and fence 1. It is not a general force-unlock command. The user supplied
+complete owner readback with exactly one Sent candidate, every content/provenance
+comparison true except synthetic Message-ID, and confirmed receiving the reply.
+The audit explicitly records **operator-supplied evidence**, not autonomous token
+verification or a provider send receipt. No body or credentials enter the audit.
+
+After canonical Actions deployment and live/HEAD verification of the receipt fix,
+capture the exact owner connection in memory as above, then:
+
+```powershell
+node scripts/repair-gas-email-delivery.mjs inspect
+# Use the snapshot returned by this fresh inspection; do not reuse stale evidence.
+node scripts/repair-gas-email-delivery.mjs apply SNAPSHOT_SHA256 --receipt-fix-deployed
+node scripts/inspect-gas-email-runtime.mjs
+```
+
+Inspection checks the admitted envelope's known lengths, persisted provenance,
+succeeded execution, registered grant, work/fence/block, absent receipt and unused
+Gmail ID. Apply repeats checks under the project lock and requires the exact
+inspection snapshot. One transaction inserts deterministic append-only typed
+audit evidence, marks only that outbox sent, and removes only the matching block.
+A matching committed repair returns `already-resolved`; conflicts reject without
+override. There are no Gmail, send, trigger, property or deployment effects.
+Do **not** apply before deploying the fix: old live code could admit another reply
+whose rewritten RFC ID would reproduce the incident.
+
 ## Provisioning and activation — explicit parent approval required
 
 ### Source-only, still-disabled deployment from the reviewed branch

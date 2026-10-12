@@ -41,9 +41,10 @@ export function gasEmailFixture(rpc) {
           for(const line of head.split('\r\n'))assert.ok(Buffer.byteLength(line)<=998,'RFC5322 header line bound');
           for(const word of head.match(/=\?UTF-8\?B\?[^?]+\?=/g)||[]){assert.ok(word.length<=75,'RFC2047 encoded-word bound');new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from(word.slice(10,-2),'base64'));}
           const headers=head.replace(/\r\n[ \t]+/g,' ').split('\r\n').map(line=>{const at=line.indexOf(':');return {name:line.slice(0,at),value:line.slice(at+1).trim()};});
-          messages.set(id,{id,threadId:data.threadId,labelIds:['SENT'],payload:{headers,mimeType:'text/plain',body:{data:Buffer.from(body.replace(/\s/g,''),'base64').toString('base64url')}}});result={id};
+          messages.set(id,{id,threadId:data.threadId,labelIds:['SENT'],payload:{headers,mimeType:'text/plain',body:{data:Buffer.from(body.replace(/\s/g,''),'base64').toString('base64url')}}});result={id,threadId:data.threadId};
           if(loseSend){loseSend=false;throw new Error('lost send response');}
-        }else if(route.endsWith('/modify')){const m=messages.get(route.split('/')[1]);m.labelIds=m.labelIds.filter(x=>!JSON.parse(opts.payload).removeLabelIds.includes(x));result=m;}
+        }else if(route.startsWith('threads/')){const id=route.split('/')[1];result={id,messages:[...messages.values()].filter(m=>m.threadId===id&&(!m.labelIds.includes('SENT')||searchVisible))};}
+        else if(route.endsWith('/modify')){const m=messages.get(route.split('/')[1]);m.labelIds=m.labelIds.filter(x=>!JSON.parse(opts.payload).removeLabelIds.includes(x));result=m;}
         else {if(unavailable.has(route.split('/')[1]))throw new Error('message unavailable');result=messages.get(route.split('/')[1]);}
       }
       if(result===undefined)throw new Error('unexpected request');
