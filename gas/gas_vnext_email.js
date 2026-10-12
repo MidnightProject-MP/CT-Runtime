@@ -437,7 +437,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
 }());
 function vnextEmailTick(){return CT_GAS_VNEXT_EMAIL.tick();}
 function installVnextEmailTrigger(){return CT_GAS_VNEXT_EMAIL.install();}
-function inventoryVnextEmailProperties(){return CT_GAS_VNEXT_EMAIL.inventory();}
+function inventoryVnextEmailProperties(){var result=CT_GAS_VNEXT_EMAIL.inventory();console.log(JSON.stringify(result));return result;}
 function healthVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.health();}
 function configureVnextEmailRuntime(config){return CT_GAS_VNEXT_EMAIL.configure(config);}
 function prepareVnextEmailRuntime(){return CT_GAS_VNEXT_EMAIL.prepare();}
