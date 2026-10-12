@@ -2,6 +2,19 @@ name: GAS clasp auth health
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        default: auth-health
+        options: [auth-health, tick-logs]
+      from_utc:
+        description: 'Tick logs only: inclusive UTC start (maximum one hour window)'
+        default: '2026-10-12T14:40:00Z'
+        type: string
+      to_utc:
+        description: 'Tick logs only: exclusive UTC end'
+        default: '2026-10-12T15:00:00Z'
+        type: string
   schedule:
     # Periodic early-warning check. UTC; does not keep OAuth grants alive.
     - cron: "17 13 1 * *"
@@ -11,6 +24,7 @@ permissions:
 
 jobs:
   auth-health:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'tick-logs'
     runs-on: ubuntu-latest
 
     env:
@@ -78,3 +92,19 @@ jobs:
       - name: Remove local credentials
         if: always()
         run: rm -f "$HOME/.clasprc.json"
+
+  tick-logs:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'tick-logs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - name: Read bounded sanitized tick logs (no Apps Script execution)
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          FROM_UTC: ${{ inputs.from_utc }}
+          TO_UTC: ${{ inputs.to_utc }}
+        run: node scripts/gas-tick-logs.mjs
