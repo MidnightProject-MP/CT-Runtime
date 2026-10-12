@@ -6,9 +6,10 @@ import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { TARGET,validateTarget,loadManifest,readback } from './bootstrap-gas-email.mjs';
 export const UPGRADE='002_delivery_provider_receipts';
+export const UPGRADES=[UPGRADE,'003_model_diagnostics'];
 export async function upgradeDelivery(pool,{apply=false}={}){
- const sql=(await readFile(new URL('../deploy/gas-email/002_delivery_provider_receipts.sql',import.meta.url),'utf8')).replace(/\r\n/g,'\n');
- const checksum=createHash('sha256').update(sql).digest('hex'),manifest=await loadManifest(),c=await pool.connect();
+ const files=await Promise.all(UPGRADES.map(async id=>{const sql=(await readFile(new URL('../deploy/gas-email/'+id+'.sql',import.meta.url),'utf8')).replace(/\r\n/g,'\n');return {id,sql,checksum:createHash('sha256').update(sql).digest('hex')};}));
+ const manifest=await loadManifest(),c=await pool.connect();
  try{
   await c.query('BEGIN');await c.query("SET LOCAL lock_timeout='10s'; SET LOCAL statement_timeout='60s'");
   await c.query("SELECT pg_advisory_xact_lock(hashtextextended('ct-runtime:gas-email-bootstrap',0))");
@@ -18,15 +19,13 @@ export async function upgradeDelivery(pool,{apply=false}={}){
   const registrations=(await c.query('SELECT instance_id,project_id FROM public.gas_email_instances FOR SHARE')).rows;
   if(registrations.length>1||(registrations.length===1&&(registrations[0].instance_id!=='gas-vnext-email'||registrations[0].project_id!=='celestan-email')))throw new Error('upgrade registration mismatch');
   const exists=(await c.query("SELECT to_regclass('public.gas_email_upgrade_ledger') IS NOT NULL AS present")).rows[0].present;
-  if(exists){const rows=(await c.query('SELECT upgrade_id,sha256 FROM public.gas_email_upgrade_ledger')).rows;
-   if(rows.length!==1||rows[0].upgrade_id!==UPGRADE||rows[0].sha256!==checksum)throw new Error('upgrade ledger mismatch');
-   await c.query('ROLLBACK');return {status:'already-applied',upgrade:UPGRADE,sha256:checksum};
-  }
-  if(!apply){await c.query('ROLLBACK');return {status:'upgrade-ready',upgrade:UPGRADE,sha256:checksum};}
-  await c.query(sql);
-  await c.query('CREATE TABLE public.gas_email_upgrade_ledger(upgrade_id text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp()); REVOKE ALL ON public.gas_email_upgrade_ledger FROM PUBLIC,authenticated,anonymous');
-  await c.query('INSERT INTO public.gas_email_upgrade_ledger(upgrade_id,sha256) VALUES($1,$2)',[UPGRADE,checksum]);
-  const privileges=await readback(c);await c.query('COMMIT');return {status:'applied',upgrade:UPGRADE,sha256:checksum,...privileges};
+   const rows=exists?(await c.query('SELECT upgrade_id,sha256 FROM public.gas_email_upgrade_ledger ORDER BY upgrade_id')).rows:[];
+   if(rows.length>files.length||rows.some((r,n)=>r.upgrade_id!==files[n].id||r.sha256!==files[n].checksum))throw new Error('upgrade ledger mismatch');
+   const pending=files.slice(rows.length),evidence=files.map(f=>({upgrade:f.id,sha256:f.checksum}));
+   if(!pending.length||!apply){await c.query('ROLLBACK');return {status:pending.length?'upgrade-ready':'already-applied',applied:rows.map(r=>r.upgrade_id),pending:pending.map(f=>f.id),upgrades:evidence};}
+   if(!exists)await c.query('CREATE TABLE public.gas_email_upgrade_ledger(upgrade_id text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp()); REVOKE ALL ON public.gas_email_upgrade_ledger FROM PUBLIC,authenticated,anonymous');
+   for(const f of pending){await c.query(f.sql);await c.query('INSERT INTO public.gas_email_upgrade_ledger(upgrade_id,sha256) VALUES($1,$2)',[f.id,f.checksum]);}
+   const privileges=await readback(c);await c.query('COMMIT');return {status:'applied',upgrades:evidence,...privileges};
  }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
 }
 async function main(){

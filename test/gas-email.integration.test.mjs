@@ -18,6 +18,22 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
   const checkpoint=(claim,turn={disposition:'done',summary:'Draft complete.'})=>rpc('checkpoint',{execution_id:claim.execution_id,fence:claim.fence,turn});
   const reset=()=>sql('TRUNCATE gas_email_instances, vnext_work_units CASCADE; INSERT INTO gas_email_instances VALUES (\'gas-test\',\'gas-owner\',\'gas-client\',\'email-project\',\'midnight.project.mp@gmail.com\',\'midnightprojectantigravity@gmail.com\',true,\'reviewed:text-only:v1\')');
   try {
+    await t.test('closed diagnostics, stale fence rollback and old runtime compatibility',()=>{
+      for(const legacy of [false,true]){
+        reset();rpc('ingest',input('diagnostics'));const c=rpc('claim');
+        const diagnostics={classification:'model-validation',code:'truncated',httpStatus:200,finishReason:'length',choicePresent:true,contentChars:200};
+        assert.throws(()=>rpc('failure',{execution_id:c.execution_id,fence:c.fence,diagnostics:{...diagnostics,secret:'SECRET'}}),/invalid diagnostics/);
+        assert.throws(()=>rpc('failure',{execution_id:c.execution_id,fence:c.fence+1,diagnostics}),/stale email fence/);
+        assert.equal(sql('SELECT state FROM vnext_executions')[0].state,'running');
+        assert.equal(sql('SELECT count(*)::int AS n FROM vnext_project_mutation_authority')[0].n,1);
+        rpc('failure',{execution_id:c.execution_id,fence:c.fence,...(legacy?{}:{diagnostics})});
+        const failure=sql('SELECT failure FROM vnext_executions')[0].failure;
+        assert.equal(failure.reason,'bounded-model-failure');assert.deepEqual(failure.diagnostics,legacy?undefined:diagnostics);
+        assert.equal(sql('SELECT count(*)::int AS n FROM gas_email_outbox')[0].n,0);
+      }
+      for(const fn of ['gas_email_rpc_delivery','gas_email_rpc_bootstrap'])assert.equal(sql(`SELECT has_function_privilege('authenticated','${fn}(text,text,jsonb)','EXECUTE') AS allowed`)[0].allowed,false);
+      reset();
+    });
     await t.test('authentication, project registration, disabled grant, table/RPC privileges',()=>{
       const claims={sub:'wrong',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800};
       assert.throws(()=>rpc('health',{}, {claims}),/principal denied/);

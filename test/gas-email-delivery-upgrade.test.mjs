@@ -4,6 +4,23 @@ import { testPool } from './pilot-test-pool.mjs';
 import { bootstrap } from '../scripts/bootstrap-gas-email.mjs';
 import { upgradeDelivery } from '../scripts/upgrade-gas-email-delivery.mjs';
 import { repairDelivery,REPAIR } from '../scripts/repair-gas-email-delivery.mjs';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+
+test('known 002 prefix upgrades without relabeling its checksum; unknown prefix fails closed',async()=>{
+ const pool=await testPool();try{
+  await bootstrap(pool,{apply:true});
+  const sql=(await readFile(new URL('../deploy/gas-email/002_delivery_provider_receipts.sql',import.meta.url),'utf8')).replace(/\r\n/g,'\n');
+  const hash=createHash('sha256').update(sql).digest('hex');await pool.query(sql);
+  await pool.query('CREATE TABLE gas_email_upgrade_ledger(upgrade_id text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp()); REVOKE ALL ON gas_email_upgrade_ledger FROM PUBLIC,authenticated,anonymous');
+  await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('002_delivery_provider_receipts',$1)",[hash]);
+  const original=(await pool.query('SELECT * FROM gas_email_upgrade_ledger')).rows[0];
+  assert.deepEqual((await upgradeDelivery(pool)).pending,['003_model_diagnostics']);
+  assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
+  assert.deepEqual((await pool.query("SELECT * FROM gas_email_upgrade_ledger WHERE upgrade_id='002_delivery_provider_receipts'")).rows[0],original);
+  await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('004_unknown','unknown')");await assert.rejects(upgradeDelivery(pool),/ledger mismatch/);
+ }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
+});
 
 test('forward delivery upgrade preserves bootstrap and scoped owner repair is atomic and evidence-bound',{timeout:120000},async()=>{
  const pool=await testPool();try{

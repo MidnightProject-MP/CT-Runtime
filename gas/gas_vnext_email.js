@@ -112,22 +112,39 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     return complete&&n===refs.length;
   }
   function model(c,claim,deadline) {
-    if(Date.now()>deadline-60000)throw new Error('model budget exhausted');
+    var meta={};
+    function fail(code){var e=new Error('bounded model validation failed');e.modelFailure=Object.assign({code:code},meta);throw e;}
+    if(Date.now()>deadline-60000)fail('budget-before');
     var data=JSON.stringify({objective:claim.objective,previous:claim.previous,inputs:claim.inputs||[]});
     data=data.split(c.key).join('[REDACTED]');
     var r=jsonFetch('https://openrouter.ai/api/v1/chat/completions',{method:'post',contentType:'application/json',
       headers:{Authorization:'Bearer '+c.key},payload:JSON.stringify({model:c.model.replace(/^openrouter\//,''),
         messages:[{role:'system',content:CAPSULE},{role:'user',content:data}],max_tokens:2500}),muteHttpExceptions:true});
-    if(Date.now()>deadline)throw new Error('model budget exhausted');
+    meta.httpStatus=200;
+    if(Date.now()>deadline)fail('budget-after');
+    if(r&&r.error)fail('embedded-provider-error');
+    var choice=r&&Array.isArray(r.choices)&&r.choices[0];
+    meta.choicePresent=!!choice;
+    if(!choice)fail('missing-choice');
+    if(choice.error)fail('embedded-provider-error');
+    meta.finishReason=['stop','length','content_filter','tool_calls','function_call'].indexOf(choice.finish_reason)>=0?choice.finish_reason:'unknown';
+    if(meta.finishReason==='length')fail('truncated');
+    if(meta.finishReason==='content_filter')fail('content-filter');
     var content=r&&r.choices&&r.choices[0]&&r.choices[0].message&&r.choices[0].message.content;
-    if(typeof content!=='string'||content.length>100000)throw new Error('invalid model output');
-    var turn=JSON.parse(content.split(c.key).join('[REDACTED]'));
-    if(!turn||['waiting','continue','done'].indexOf(turn.disposition)<0||typeof turn.summary!=='string'||!turn.summary.trim()||turn.summary.length>4000)throw new Error('invalid model turn');
-    ['question','artifact'].forEach(function(k){if(turn[k]!==undefined&&(typeof turn[k]!=='string'||turn[k].length>(k==='question'?1000:3000)))throw new Error('invalid model artifact');});
-    if(turn.disposition==='waiting'&&(!turn.question||!turn.question.trim()))throw new Error('missing model question');
+    meta.contentPresent=typeof content==='string';
+    if(!meta.contentPresent)fail('missing-content');
+    meta.contentChars=content.length;
+    if(content.length>100000)fail('field-bounds');
+    content=content.trim();if(!content)fail('empty-content');
+    var fence=content.match(/^```json\s*\n([\s\S]*?)\n```$/);if(fence&&fence[1].indexOf('```')<0)content=fence[1];
+    var turn;try{turn=JSON.parse(content.split(c.key).join('[REDACTED]'));}catch(_){fail('non-json');}
+    if(!turn||Array.isArray(turn)||Object.keys(turn).some(function(k){return ['disposition','summary','question','artifact'].indexOf(k)<0;})||['waiting','continue','done'].indexOf(turn.disposition)<0||typeof turn.summary!=='string'||!turn.summary.trim())fail('malformed-contract');
+    if(turn.summary.length>4000)fail('field-bounds');
+    ['question','artifact'].forEach(function(k){if(turn[k]!==undefined&&typeof turn[k]!=='string')fail('malformed-contract');if(turn[k]&&turn[k].length>(k==='question'?1000:3000))fail('field-bounds');});
+    if(turn.disposition==='waiting'&&(!turn.question||!turn.question.trim()))fail('malformed-contract');
     var canonical={disposition:turn.disposition,summary:turn.summary,question:turn.question||'',artifact:turn.artifact||''},bytes=0;
-    Object.keys(canonical).forEach(function(k){if(canonical[k].indexOf('\u0000')>=0)throw new Error('invalid text');utf8Bytes(canonical[k]);bytes+=utf8Bytes(JSON.stringify(canonical[k]));});
-    if(bytes>15900)throw new Error('model byte budget exceeded');
+    Object.keys(canonical).forEach(function(k){if(canonical[k].indexOf('\u0000')>=0)fail('invalid-text');try{utf8Bytes(canonical[k]);bytes+=utf8Bytes(JSON.stringify(canonical[k]));}catch(_){fail('invalid-text');}});
+    meta.contractBytes=bytes;if(bytes>15900)fail('utf8-byte-bounds');
     return canonical;
   }
   function utf8Bytes(s){return encodeURIComponent(s).replace(/%[0-9A-F]{2}|[^%]/g,'x').length;}
@@ -211,7 +228,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       if(Date.now()>deadline-90000)return {status:'budget'};
       trace.stage='claim';var claim=rpc(c,'claim');if(claim.status!=='claimed')return {status:claim.status};
       var turn;
-      trace.stage='model';try{turn=model(c,claim,deadline-30000);}catch(e){trace.failure=safeFailure(e);rpc(c,'failure',{execution_id:claim.execution_id,fence:claim.fence});return {status:'model-failed'};}
+      trace.stage='model';try{turn=model(c,claim,deadline-30000);}catch(e){trace.failure=safeFailure(e);rpc(c,'failure',{execution_id:claim.execution_id,fence:claim.fence,diagnostics:trace.failure});return {status:'model-failed'};}
       // Never turn a lost checkpoint response into a second completion/send.
       trace.stage='checkpoint';rpc(c,'checkpoint',{execution_id:claim.execution_id,fence:claim.fence,turn:turn});
       trace.stage='delivery';
@@ -314,6 +331,13 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     var f=e&&e.emailFailure||{},classes=['transport-error','response-too-large','invalid-json','authentication-denied','authorization-denied','rate-limited','provider-unavailable','http-error'];
     var reason=PREPARE_REASONS.indexOf(e&&e.message)>=0?e.message:null;
     var out={classification:classes.indexOf(f.classification)>=0?f.classification:reason?'readiness-rejected':'unclassified-error',httpStatus:Number.isInteger(f.httpStatus)&&f.httpStatus>=100&&f.httpStatus<=599?f.httpStatus:null,providerReason:PROVIDER_REASONS.indexOf(f.providerReason)>=0?f.providerReason:null,sqlState:SQL_STATES.indexOf(f.sqlState)>=0?f.sqlState:null};
+    var m=e&&e.modelFailure||{};
+    if(['budget-before','budget-after','embedded-provider-error','missing-choice','missing-content','empty-content','truncated','content-filter','non-json','malformed-contract','field-bounds','utf8-byte-bounds','invalid-text'].indexOf(m.code)>=0){
+      out.classification='model-validation';out.code=m.code;if(m.httpStatus===200)out.httpStatus=200;
+      if(['stop','length','content_filter','tool_calls','function_call','unknown'].indexOf(m.finishReason)>=0)out.finishReason=m.finishReason;
+      ['choicePresent','contentPresent'].forEach(function(k){if(typeof m[k]==='boolean')out[k]=m[k];});
+      ['contentChars','contractBytes'].forEach(function(k){if(Number.isInteger(m[k])&&m[k]>=0&&m[k]<=1000000)out[k]=m[k];});
+    }
     if(reason)out.reason=reason;
     if(['serviceDisabled','accessNotConfigured','SERVICE_DISABLED'].indexOf(out.providerReason)>=0)out.projectNumber='788761466843';
     return out;

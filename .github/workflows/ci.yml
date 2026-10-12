@@ -91,6 +91,7 @@ jobs:
           node scripts/run-postgres-suite.mjs test/gas-email.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/gas-email-bootstrap.test.mjs
           node scripts/run-postgres-suite.mjs test/gas-email-delivery-upgrade.test.mjs
+          node scripts/run-postgres-suite.mjs test/gas-email-model-retry.test.mjs
       - run: npm audit --audit-level=high
 
   gas-data-api-role-handoff:
