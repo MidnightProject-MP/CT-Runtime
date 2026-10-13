@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testPool } from './pilot-test-pool.mjs';
 import { bootstrap } from '../scripts/bootstrap-gas-email.mjs';
-import { configure,INSTANCE,probe } from '../scripts/configure-gas-email-data-api.mjs';
+import { configure,INSTANCE,probe,instanceFromEnv } from '../scripts/configure-gas-email-data-api.mjs';
 const DATA_API_URL='https://isolated-test.example/data-api';
 test('isolated registration identity requires explicit values and supports a test mailbox',()=>{
   assert.throws(()=>instanceFromEnv({}),/explicit email registration identity required/);
