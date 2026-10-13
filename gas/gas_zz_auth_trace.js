@@ -1,5 +1,8 @@
-/* Temporary safe correlated authentication tracing. Remove after diagnosis. */
+/* Bounded, best-effort authentication tracing. Diagnostics never authorize requests. */
 var CT_GAS_AUTH_TRACE = (function () {
+  var MAX_DEPLOY_BODY_BYTES = 3 * 1024 * 1024;
+  var MAX_FEDERATION_BODY_BYTES = 8192;
+
   function digest(value) {
     var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8);
     return bytes.map(function (b) { return ('0' + (b < 0 ? b + 256 : b).toString(16)).slice(-2); }).join('');
@@ -44,27 +47,57 @@ var CT_GAS_AUTH_TRACE = (function () {
     console.log(JSON.stringify(record));
     return record.diagnostic_id;
   }
-
+  // Tracing is never part of the authorization decision. If a diagnostic service
+  // fails, the real authenticator still runs and retains its own fail-closed behavior.
+  function safeTrace(raw, query, stage, authPath, reason) {
+    try { return trace(raw, query, stage, authPath, reason); } catch (_) { return null; }
+  }
+  function rejected(reason) {
+    return ContentService.createTextOutput(JSON.stringify({ status: 'rejected', reason: reason })).setMimeType(ContentService.MimeType.JSON);
+  }
+  function isDeploymentOperation(operation) {
+    return operation === 'self-deploy' || operation === 'self-deploy-plan' ||
+      operation === 'self-deploy-qualify' || operation === 'quiesce-legacy-autonomy' ||
+      operation === 'assert-legacy-quiesced' || operation === 'arm-vnext-cutover';
+  }
   function authenticate(raw, query, originalAuthenticate) {
-    trace(raw, query, 'before-verify', 'CT_GAS_DEPLOY', null);
+    safeTrace(raw, query, 'before-verify', 'CT_GAS_DEPLOY', null);
     try {
       var result = originalAuthenticate(raw, query);
-      trace(raw, query, 'authenticated', 'CT_GAS_DEPLOY', null);
+      safeTrace(raw, query, 'authenticated', 'CT_GAS_DEPLOY', null);
       return result;
     } catch (error) {
-      trace(raw, query, 'rejected', 'CT_GAS_DEPLOY', String(error && error.message || error));
+      safeTrace(raw, query, 'rejected', 'CT_GAS_DEPLOY', String(error && error.message || error));
       throw error;
     }
   }
-
   function dispatch(e, originalDoPost) {
     var raw = String(e && e.postData && e.postData.contents || '');
     var query = e && e.parameter || {};
-    var request = parsed(raw);
-    var diagnosticId = String(request.correlation_id || Utilities.getUuid());
-    trace(raw, query, 'received', 'dispatcher', null);
+
+    // Check a cheap character bound before allocating a Blob, hashing, parsing JSON,
+    // reading Script Properties, or emitting a log record. The byte check is then
+    // exact; deploy requests retain room for the bounded 2 MiB source bundle.
+    if (raw.length > MAX_DEPLOY_BODY_BYTES) return rejected('request-body-too-large');
+    var rawBytes;
+    try { rawBytes = byteLength(raw); } catch (_) { return rejected('request-body-unavailable'); }
+    if (rawBytes > MAX_DEPLOY_BODY_BYTES) return rejected('request-body-too-large');
+
+    var request;
+    try { request = JSON.parse(raw); } catch (_) { return originalDoPost(e); }
+    if (!isDeploymentOperation(request && request.operation)) {
+      // Federation has a much smaller protocol limit than deployment bundles.
+      if (rawBytes > MAX_FEDERATION_BODY_BYTES) return rejected('federation-body-too-large');
+      return originalDoPost(e);
+    }
+
+    // Only deployment traffic is traced. Federation requests do not trigger
+    // deployment-secret reads or diagnostic hashing/logging.
+    var diagnosticId = safeTrace(raw, query, 'received', 'dispatcher', null);
     var output = originalDoPost(e);
-    var text = output && output.getContent ? output.getContent() : '';
+    if (!diagnosticId) return output;
+    var text = '';
+    try { text = output && output.getContent ? output.getContent() : ''; } catch (_) { return output; }
     try {
       var result = JSON.parse(text);
       result.diagnostic_id = diagnosticId;
