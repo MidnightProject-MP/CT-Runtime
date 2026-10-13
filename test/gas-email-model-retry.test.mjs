@@ -22,12 +22,12 @@ test('one-off retry is snapshot guarded, immutable, atomic and never changes ori
   await pool.query('INSERT INTO gas_email_turns VALUES($1,1,$2)',[r.oldExecution,r.instance]);
   await pool.query("INSERT INTO gas_email_outbox(execution_id,instance_id,work_unit_id,input_seq,envelope,state,gmail_id) VALUES($1,$2,$3,1,'{}','sent',$4)",[r.oldExecution,r.instance,r.work,r.oldReply]);
   const before=async()=>({executions:(await pool.query('SELECT * FROM vnext_executions ORDER BY execution_id')).rows,inputs:(await pool.query('SELECT * FROM vnext_pilot_inputs ORDER BY input_seq')).rows,outbox:(await pool.query('SELECT * FROM gas_email_outbox')).rows});
-  const original=await before(),inspection=await retryModel(pool);assert.equal(inspection.status,'retry-ready');
+  const original=await before(),inspection=await retryModel(pool),attestation='https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/123456789';assert.equal(inspection.status,'retry-ready');
   await assert.rejects(retryModel(pool,{apply:true,expectedSnapshot:inspection.snapshot}));
-  await assert.rejects(retryModel(pool,{apply:true,deployed:true,expectedSnapshot:'wrong'}));
+  await assert.rejects(retryModel(pool,{apply:true,deploymentAttestation:attestation,expectedSnapshot:'wrong'}));
   await pool.query("UPDATE gas_email_outbox SET state='pending'");await assert.rejects(retryModel(pool));await pool.query("UPDATE gas_email_outbox SET state='sent'");
   await pool.query("CREATE FUNCTION retry_test_reject() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected'; END $$; REVOKE ALL ON FUNCTION retry_test_reject() FROM PUBLIC,authenticated,anonymous; CREATE TRIGGER retry_test_reject BEFORE UPDATE ON vnext_pilot_progress FOR EACH ROW EXECUTE FUNCTION retry_test_reject()");
-  await assert.rejects(retryModel(pool,{apply:true,deployed:true,expectedSnapshot:inspection.snapshot}),/injected/);
+  await assert.rejects(retryModel(pool,{apply:true,deploymentAttestation:attestation,expectedSnapshot:inspection.snapshot}),/injected/);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM vnext_events WHERE event_type='gas-email-owner-model-retry'")).rows[0].n,0);
   await pool.query('DROP TRIGGER retry_test_reject ON vnext_pilot_progress; DROP FUNCTION retry_test_reject()');
   assert.equal((await retryModel(pool,{apply:true,deployed:true,expectedSnapshot:inspection.snapshot})).status,'retry-released');
