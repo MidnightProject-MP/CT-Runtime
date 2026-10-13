@@ -72,3 +72,29 @@ The deployment control plane is intentionally small. The primary surfaces are:
 - deployment contract/state/readback tests
 
 Before modifying deployment control-plane code, read this document and run the deployment contract tests. Changes must preserve the invariants above, especially single-mutation behavior, recovery/idempotency, bounded readback, GAS-native identity, and production concurrency serialization.
+
+
+## GAS entry-point qualification boundary
+
+The production bundle must contain exactly one `doPost` entry point. That entry
+point delegates at invocation time to the named dispatch and authentication-trace
+modules; the federation handler is named separately. Global file evaluation must
+not call Apps Script services or mutate configuration.
+
+The Node load-order test builds the bundle produced by
+`scripts/build-gas-bundle.mjs` and exercises multiple file orders, authentication,
+deployment identity rejection, qualification, and federation fallback. This is
+useful regression evidence, but it is **not** a real Apps Script runtime test.
+
+Before treating this change as runtime-qualified, deploy the reviewed bundle to
+a dedicated, isolated GAS sandbox and verify real dispatch, invalid-signature and
+wrong-target rejection, no cold-load side effects, and visible failure when a
+required module is absent. Record the exact Git commit, normalized bundle hash,
+GAS version, and deployment ID. Do not use the production project or production
+mail/database grants for this qualification. The intentionally modified
+missing-module bundle must have a separate hash and must not be reported as the
+release artifact.
+
+PR A does not add an autonomy activation route. Merging it must not enable the
+email runtime, install or modify triggers, expand Gmail consent, or mutate
+production Script Properties.
