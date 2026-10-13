@@ -6,7 +6,7 @@ export function gasEmailFixture(rpc) {
   const messages=new Map();let sends=0,loseSend=false,searchVisible=true,loseCheckpoint=false,loseAdmission=false;
   let model=()=>({disposition:'done',summary:'Here is a useful draft.',artifact:'A bounded answer.'});
   let ticks=0,now=Date.now();const triggers=[];
-  const unavailable=new Set();let listFailure=false,searchToken=false;const rawMessages=[];
+  const unavailable=new Set();let listFailure=false,searchToken=false,intakeTokenOnce=false;const rawMessages=[];
   function add(id,thread='thread1',body='Draft a brief thank-you.',sender='midnightprojectantigravity@gmail.com') {
     messages.set(id,{id,threadId:thread,labelIds:['queue'],payload:{mimeType:'text/plain',headers:[{name:'From',value:sender},{name:'To',value:'midnight.project.mp@gmail.com'},{name:'Subject',value:'A useful task'},{name:'Message-ID',value:`<${id}@example.com>`}],body:{data:Buffer.from(body).toString('base64url')}}});
   }
@@ -35,6 +35,7 @@ export function gasEmailFixture(rpc) {
           const all=[...messages.values()].filter(m=>q?searchVisible&&m.labelIds.includes('SENT')&&q.includes(m.payload.headers.find(h=>h.name==='Message-ID').value):m.labelIds.includes('queue'));
           const max=Number(u.searchParams.get('maxResults'));result={messages:all.slice(0,max).map(m=>({id:m.id}))};
           if(q&&(searchToken||all.length>max))result.nextPageToken='more-results';
+          if(!q&&intakeTokenOnce){result.nextPageToken='more-inputs';intakeTokenOnce=false;}
         }else if(route==='messages/send'){
           const data=JSON.parse(opts.payload),raw=Buffer.from(data.raw,'base64url').toString(),[head,body]=raw.split('\r\n\r\n'),id='sent'+(++sends);
           rawMessages.push(raw);
@@ -51,5 +52,5 @@ export function gasEmailFixture(rpc) {
       return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(result)};
     }}});
   function cold(){const ctx=context();for(const f of ['gas_vnext_email.js','gas_vnext_email_owner.js'])vm.runInContext(readFileSync(new URL('../gas/'+f,import.meta.url),'utf8'),ctx);return ctx;}
-  return {values,messages,add,cold,unavailable,rawMessages,failIntake(value=true){listFailure=value;},truncateSearch(value=true){searchToken=value;},tick(){ticks++;return cold().vnextEmailTick();},get sends(){return sends;},get ticks(){return ticks;},setModel(fn){model=fn;},advance(ms){now+=ms;},loseNextSend(){loseSend=true;},loseNextCheckpoint(){loseCheckpoint=true;},loseNextAdmission(){loseAdmission=true;},hideSearch(){searchVisible=false;},showSearch(){searchVisible=true;}};
+  return {values,messages,add,cold,unavailable,rawMessages,failIntake(value=true){listFailure=value;},truncateSearch(value=true){searchToken=value;},paginateIntakeOnce(){intakeTokenOnce=true;},tick(){ticks++;return cold().vnextEmailTick();},get sends(){return sends;},get ticks(){return ticks;},setModel(fn){model=fn;},advance(ms){now+=ms;},loseNextSend(){loseSend=true;},loseNextCheckpoint(){loseCheckpoint=true;},loseNextAdmission(){loseAdmission=true;},hideSearch(){searchVisible=false;},showSearch(){searchVisible=true;}};
 }
