@@ -7,7 +7,7 @@ export function authorizeRelease(env, resolveRef) {
     EXPECTED_LIVE_BUNDLE_HASH: predecessor } = env;
   if (env.GITHUB_EVENT_NAME !== 'workflow_dispatch') throw new Error('Manual release required');
   if (!/^[0-9a-f]{40}$/.test(commit || '') || commit !== env.GITHUB_SHA) throw new Error('Release commit mismatch');
-  if (!/^refs\/tags\/gas-release\/[A-Za-z0-9._-]+$/.test(ref || '') || resolveRef(ref) !== commit) throw new Error('Release ref mismatch');
+  if (!/^refs\/tags\/gas-release\/[A-Za-z0-9._-]+$/.test(ref || '') || env.GITHUB_REF !== ref || resolveRef(ref) !== commit) throw new Error('Release ref mismatch');
   if (![desired, predecessor].every(value => /^[0-9a-f]{64}$/.test(value || ''))) throw new Error('Both reviewed hashes required');
   if (desired !== env.GAS_BUNDLE_HASH) throw new Error('Desired bundle mismatch');
   if (env.APPROVED_RELEASE !== `${ref}:${commit}:${desired}:${predecessor}`) throw new Error('Per-release environment approval mismatch');
