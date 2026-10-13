@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 const exec=promisify(execFile);
 const digest=s=>createHash('sha256').update(s).digest('hex');
 
-test('production bundle is inert and dispatches identically across independent, reversed, shuffled and hoisted load orders',async()=>{
+test('actual production bundle is inert and dispatches identically in independent, reversed, shuffled and hoisted load orders',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'gas-order-'));
   try{
     const out=join(dir,'bundle.json');await exec(process.execPath,['scripts/build-gas-bundle.mjs','gas',out]);
@@ -58,9 +58,10 @@ test('production bundle is inert and dispatches identically across independent, 
       assert.equal(call('self-deploy-qualify',{deployment_id:'wrong'}).reason,'deploy-deployment-id-mismatch');
       assert.ok(logs.some(l=>l.stage==='rejected'));
       ctx.quiesceLegacyAutonomy=()=>({status:'LEGACY_QUIESCED'});ctx.assertLegacyQuiesced=()=>({status:'LEGACY_QUIESCED'});
-      ctx.CT_GAS_DEPLOY.deploy=()=>({status:'deploy-route'});ctx.CT_GAS_DEPLOY.plan=()=>({status:'plan-route'});ctx.CT_GAS_DEPLOY.armVnext=()=>{throw new Error('activation must not be dispatched by PR A');};
+      ctx.CT_GAS_DEPLOY.deploy=()=>({status:'deploy-route'});ctx.CT_GAS_DEPLOY.plan=()=>({status:'plan-route'});
       assert.equal(call('self-deploy').status,'deploy-route');assert.equal(call('self-deploy-plan').status,'plan-route');
       assert.equal(call('quiesce-legacy-autonomy').status,'LEGACY_QUIESCED');assert.equal(call('assert-legacy-quiesced').status,'LEGACY_QUIESCED');
+      assert.equal(call('arm-vnext-cutover').status,'VNEXT_ARMED');assert.equal(values.CT_AUTONOMY_MODE,'vnext');assert.equal(federationCalls,0);
       assert.equal(call('advisory').status,'federation-ok');assert.equal(call('evidence-ingest').status,'evidence-ok');assert.equal(federationCalls,2);
       const malformed=JSON.parse(ctx.doPost({postData:{contents:'{invalid'},parameter:{}}).getContent());assert.equal(malformed.status,'rejected');
       assert.doesNotMatch(JSON.stringify(logs),/test-deploy-secret|test-oauth/);

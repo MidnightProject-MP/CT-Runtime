@@ -1,7 +1,7 @@
 /* Canonical GAS web-app dispatcher. Keep deployment authentication ahead of federation. */
 var CT_GAS_DISPATCH = (function () {
   function isDeploymentOperation(operation) {
-    return operation === 'self-deploy' || operation === 'self-deploy-plan' || operation === 'self-deploy-qualify' || operation === 'quiesce-legacy-autonomy' || operation === 'assert-legacy-quiesced';
+    return operation === 'self-deploy' || operation === 'self-deploy-plan' || operation === 'self-deploy-qualify' || operation === 'quiesce-legacy-autonomy' || operation === 'assert-legacy-quiesced' || operation === 'arm-vnext-cutover';
   }
   function assertDeploymentIdentity(request) {
     var receivedScriptId = String(ScriptApp.getScriptId());
@@ -20,6 +20,7 @@ var CT_GAS_DISPATCH = (function () {
       else if (parsed.operation === 'self-deploy-plan') result = CT_GAS_DEPLOY.plan(request);
       else if (parsed.operation === 'self-deploy-qualify') result = CT_GAS_DEPLOY.qualify(request);
       else if (parsed.operation === 'quiesce-legacy-autonomy') result = quiesceLegacyAutonomy();
+      else if (parsed.operation === 'arm-vnext-cutover') result = CT_GAS_DEPLOY.armVnext(request);
       else result = assertLegacyQuiesced();
       return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
     } catch (error) {
