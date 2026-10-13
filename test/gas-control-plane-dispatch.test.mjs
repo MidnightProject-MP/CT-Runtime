@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const dispatch = await readFile('gas/gas_zz_a_dispatch.js', 'utf8');
+const deploy = await readFile('gas/gas_deploy.js', 'utf8');
 const federation = await readFile('gas/gas_federation.js', 'utf8');
 const trace = await readFile('gas/gas_zz_auth_trace.js', 'utf8');
 const quiesce = await readFile('scripts/quiesce-gas.mjs', 'utf8');
@@ -26,6 +27,7 @@ test('canonical dispatcher routes deployment operations before federation authen
   assert.match(dispatch, /quiesceLegacyAutonomy\(\)/);
   assert.match(dispatch, /assertLegacyQuiesced\(\)/);
   assert.doesNotMatch(dispatch, /arm-vnext-cutover|armVnext\(/);
+  assert.doesNotMatch(deploy, /arm-vnext-cutover|armVnext/);
   assert.match(dispatch, /return federationDoPost\(e\)/);
   assert.match(federation, /function federationDoPost\(e\)/);
 });
