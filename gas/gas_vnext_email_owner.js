@@ -117,7 +117,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
             preparedMatch=matches(snapshot);checkBindings();if(!snapshot.OPENROUTER_API_KEY)throw new Error('existing OpenRouter secret required');
           });
         }else skip('model-config');
-        // These independent read-only checks still diagnose Neon/property state
+        // These independent read-only checks diagnose data API/property state.
         // after a Gmail failure. Do not inspect labels from a mismatched mailbox.
         stage('data-api-health',function(){var h=rpc({instance:desired?desired.CT_VNEXT_EMAIL_INSTANCE:snapshot.CT_VNEXT_EMAIL_INSTANCE,url:desired?desired.CT_VNEXT_EMAIL_DATA_API_URL:snapshot.CT_VNEXT_EMAIL_DATA_API_URL},'health');if(typeof h.project!=='string'||!h.project.trim())throw new Error('prepare: project identity missing');summary.project=h.project;if(h.instance!==(desired?desired.CT_VNEXT_EMAIL_INSTANCE:snapshot.CT_VNEXT_EMAIL_INSTANCE)||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.blocked!==false)throw new Error('email grant not ready');});
         if(profile.ok)stage('gmail-labels',function(){summary.labelPresent=(api('labels').labels||[]).some(function(l){return l.name==='Celestan';});});else skip('gmail-labels');
@@ -145,10 +145,9 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function activate(){
     var stage='feedback-diagnostic',p,mutated=false,retired=0,creationAttempted=false,counts=null,model=null,result;
-       if(!feedback||typeof feedback.script_id!=='string'||!feedback.script_id||ScriptApp.getScriptId()!==feedback.script_id||props().getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID')!==ScriptApp.getScriptId())throw new Error('activation-script-mismatch');
       // Reality first, read-only: no Feedback setup, Sheets reads or legacy ledger.
       var feedback=diagnoseFeedbackInbox();
-      if(!feedback||typeof feedback.script_id!=='string'||!feedback.script_id||ScriptApp.getScriptId()!==feedback.script_id)throw new Error('activation-script-mismatch');
+       if(!feedback||typeof feedback.script_id!=='string'||!feedback.script_id||ScriptApp.getScriptId()!==feedback.script_id||props().getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID')!==ScriptApp.getScriptId())throw new Error('activation-script-mismatch');
       stage='script-lock';
       result=setupLock(function(){
         try{
