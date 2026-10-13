@@ -4,6 +4,11 @@ import { testPool } from './pilot-test-pool.mjs';
 import { bootstrap } from '../scripts/bootstrap-gas-email.mjs';
 import { configure,INSTANCE,probe } from '../scripts/configure-gas-email-data-api.mjs';
 const DATA_API_URL='https://isolated-test.example/data-api';
+test('isolated registration identity requires explicit values and supports a test mailbox',()=>{
+  assert.throws(()=>instanceFromEnv({}),/explicit email registration identity required/);
+  const identity=instanceFromEnv({CT_EMAIL_INSTANCE_ID:'test-instance',CT_EMAIL_PROJECT_ID:'isolated-project',CT_EMAIL_JWT_SUB:'1234567890123',CT_EMAIL_JWT_AUD:'test-audience.apps.googleusercontent.com',CT_EMAIL_MAILBOX:'gas-test@example.test',CT_EMAIL_ALLOWED_SENDER:'sender-test@example.test',CT_EMAIL_GRANT_REF:'owner-approved:test-only'});
+  assert.deepEqual(identity,{instance:'test-instance',project:'isolated-project',sub:'1234567890123',aud:'test-audience.apps.googleusercontent.com',mailbox:'gas-test@example.test',sender:'sender-test@example.test',grant:'owner-approved:test-only'});
+});
 test('HTTP negative probes are pinned, read-only health calls and never report response/token content',async()=>{
   const requests=[];const result=await probe(async(url,opts)=>{requests.push({url,opts});return {status:401,body:{cancel:async()=>{}}};},'test-google-kid',DATA_API_URL);
   assert.equal(requests.length,2);assert.ok(requests.every(r=>r.url===DATA_API_URL+'/rpc/gas_email_rpc'&&JSON.parse(r.opts.body).p_operation==='health'));
