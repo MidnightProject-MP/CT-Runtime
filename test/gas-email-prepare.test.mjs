@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-const source=readFileSync(new URL('../gas/gas_vnext_email.js',import.meta.url),'utf8');
+const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
 function fixture(overrides={}){
   const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
   const writes=[],logs=[],calls=[],responses={};let profile='midnight.project.mp@gmail.com',rpcFail=false,project='celestan-email',label=true,locked=false,writeMode='normal',readFailure=false,triggerFailure=false,lockFailure=false;

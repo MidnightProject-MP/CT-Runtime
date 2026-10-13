@@ -26,6 +26,7 @@ const DEPLOYABLE_FILES = new Set([
   'gas_v8.js',
   'gas_vnext_events.js',
   'gas_vnext_email.js',
+  'gas_vnext_email_owner.js',
   'gas_zz_a_dispatch.js',
   'gas_zz_auth_trace.js'
 ]);

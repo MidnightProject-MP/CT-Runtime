@@ -63,7 +63,7 @@ test('canonical workflow gates every legacy mutation/Execution API step and sour
   assert.doesNotMatch(source,/clasp push|method:'PUT'|method:'DELETE'/);assert.match(source,/method:'GET'/);
 });
 test('explicit owner configuration is disabled, grant-checked, fixed-field and refuses rotation',async()=>{
-  const source=await readFile(new URL('../gas/gas_vnext_email.js',import.meta.url),'utf8');
+  const source=(await Promise.all(['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFile(new URL('../gas/'+f,import.meta.url),'utf8')))).join('\n');
   const props={OPENROUTER_API_KEY:'private-existing-key'},writes=[];
   const health={instance:'reviewed',mailbox:'midnight.project.mp@gmail.com',allowed_sender:'midnightprojectantigravity@gmail.com',blocked:false};
   const ctx=vm.createContext({LockService:{getScriptLock:()=>({waitLock(){},releaseLock(){}})},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperties:(v,remove)=>{assert.equal(remove,false);writes.push(v);Object.assign(props,v);}})},ScriptApp:{getIdentityToken:()=> 'private-google-token'},UrlFetchApp:{fetch:()=>({getResponseCode:()=>200,getContentText:()=>JSON.stringify(health)})}});

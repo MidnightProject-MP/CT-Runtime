@@ -21,7 +21,7 @@ function fixture(){
       else forbidden();return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(data)};
     }}});
   // Actual legacy read-only diagnostic and retirement function, not a stub.
-  for(const f of ['gas_trigger.js','gas_vnext_email.js'])vm.runInContext(readFileSync(new URL('../gas/'+f,import.meta.url),'utf8'),ctx);
+  for(const f of ['gas_trigger.js','gas_vnext_email.js','gas_vnext_email_owner.js'])vm.runInContext(readFileSync(new URL('../gas/'+f,import.meta.url),'utf8'),ctx);
   assert.equal(effects.length,0);assert.equal(calls.length,0);load=false;
   return {values,effects,logs,calls,run:()=>ctx.activateVnextEmailRuntime(),pause:()=>ctx.pauseVnextEmailRuntime(),legacy:()=>ctx.gasSafetyWake(),labels:v=>{labels=v;},mailbox:v=>{mailbox=v;},script:v=>{scriptId=v;},handlers:names=>{triggers=names.map(t);},createMode:v=>{createMode=v;},writeFault:k=>{writeFault=k;},deleteFailure:()=>{deleteFails=true;},block:()=>{blocked=true;},handlersNow:()=>triggers.map(t=>t.getHandlerFunction())};
 }
