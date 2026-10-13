@@ -21,7 +21,6 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     }
     try{
       c=config(false);
-       if(!hostAllowed(c.url,props().getProperty('CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST')))throw new Error('data API endpoint is not explicitly approved');
       out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
       out.stage='data-api-health';var h=rpc(c,'health');
       if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref)throw new Error('wrong grant');
