@@ -19,7 +19,8 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function config(enabled) {
     var p=props(), c={instance:p.getProperty(CONFIG[1]),url:p.getProperty(CONFIG[2]),model:p.getProperty(CONFIG[3]),label:p.getProperty(CONFIG[4]),key:p.getProperty(CONFIG[5])};
     if(enabled && p.getProperty(CONFIG[0])!=='true')return null;
-    if(!c.instance||!/^https:\/\/[^\s/@?#]+(?:\/[^\s?#]*)?$/.test(c.url||'')||!c.model||!c.label||!c.key)throw new Error('email configuration incomplete');
+    var approvedHost=p.getProperty('CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST'),urlHost=(c.url||'').match(/^https:\/\/([^\/?#]+)(?:\/|$)/);
+    if(!c.instance||!urlHost||urlHost[1].indexOf('@')>=0||!approvedHost||urlHost[1].toLowerCase()!==approvedHost.toLowerCase()||!c.model||!c.label||!c.key)throw new Error('email configuration incomplete or unapproved endpoint');
     c.url=c.url.replace(/\/$/,'');return c;
   }
   function jsonFetch(url,options) {
