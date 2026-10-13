@@ -53,7 +53,7 @@ export async function repairDelivery(pool,{apply=false,expectedSnapshot,deployme
 }
 async function main(){
  const [mode,snapshot,confirmation]=process.argv.slice(2);
- if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||!validDeploymentAttestation(confirmation?.replace(/^--receipt-fix-attested=/,''))||!confirmation.startsWith('--receipt-fix-attested=')||process.argv.length!==4)))throw new Error('invalid repair command');
+ if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||!validDeploymentAttestation(confirmation?.replace(/^--receipt-fix-attested=/,''))||!confirmation.startsWith('--receipt-fix-attested=')||process.argv.length!==5)))throw new Error('invalid repair command');
  const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000});
  try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await repairDelivery(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deploymentAttestation:mode==='apply'?confirmation.slice('--receipt-fix-attested='.length):null)}));}finally{await pool.end();}
 }
