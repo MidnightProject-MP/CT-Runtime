@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
 function fixture(overrides={}){
-  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
+  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
   const writes=[],logs=[],calls=[],responses={};let profile='midnight.project.mp@gmail.com',rpcFail=false,project='celestan-email',label=true,locked=false,writeMode='normal',readFailure=false,triggerFailure=false,lockFailure=false;
   const noEffect=()=>{throw new Error('forbidden setup effect');};
   const ctx=vm.createContext({console:{log:s=>logs.push(JSON.parse(s))},
@@ -36,7 +36,7 @@ test('preparation never writes on invalid/missing model, identity, conflicting b
   const absent=fixture({CT_GAS_PROOF_MODEL:null});assert.throws(()=>absent.run(),/set CT_VNEXT_EMAIL_MODEL/);assert.equal(absent.writes.length,0);
   for(const value of ['', 'not-a-provider-model','vendor/model\n']){const f=fixture({CT_VNEXT_EMAIL_MODEL:value});assert.throws(()=>f.run(),/set CT_VNEXT_EMAIL_MODEL/);assert.equal(f.writes.length,0);}
   const wrong=fixture();wrong.profile('other@example.com');assert.throws(()=>wrong.run(),/wrong execution mailbox/);assert.equal(wrong.writes.length,0);assert.ok(wrong.calls.every(u=>u.endsWith('/profile')||u.endsWith('/rpc/gas_email_rpc')));
-  const conflict=fixture({CT_VNEXT_EMAIL_INSTANCE:'another'});assert.throws(()=>conflict.run(),/binding conflict/);assert.equal(conflict.writes.length,0);
+  const conflict=fixture({CT_VNEXT_EMAIL_INSTANCE:'another'});assert.throws(()=>conflict.run(),/grant not ready/);assert.equal(conflict.writes.length,0);
   const p=fixture();p.project('another');assert.throws(()=>p.run(),/project mismatch/);assert.equal(p.writes.length,0);
   const unavailable=fixture();unavailable.rpcFail();assert.throws(()=>unavailable.run(),/outcome unavailable/);assert.equal(unavailable.writes.length,0);assert.doesNotMatch(JSON.stringify(unavailable.logs),/test-secret/);
   const missingKey=fixture({OPENROUTER_API_KEY:null});assert.throws(()=>missingKey.run(),/existing OpenRouter secret/);assert.equal(missingKey.writes.length,0);
@@ -48,7 +48,7 @@ test('read-only diagnostic identifies Gmail service/consent errors without copyi
     const d=f.diagnose(),failure=d.stages.find(s=>s.stage==='gmail-profile');assert.equal(d.status,'blocked');assert.equal(d.configWriteAttempted,false);assert.equal(f.writes.length,0);
     assert.equal(failure.httpStatus,403);assert.equal(failure.providerReason,reason);assert.equal(failure.classification,'authorization-denied');
     if(reason==='SERVICE_DISABLED'||reason==='accessNotConfigured')assert.equal(failure.projectNumber,'788761466843');
-    assert.ok(d.stages.some(s=>s.stage==='neon-health'&&s.status==='ok'));
+    assert.ok(d.stages.some(s=>s.stage==='data-api-health'&&s.status==='ok'));
     assert.doesNotMatch(JSON.stringify(f.logs),/test-secret|private-oauth|secret-project-value|PRIVATE_UNKNOWN_PROPERTY/);
   }
 });
