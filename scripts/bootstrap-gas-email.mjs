@@ -5,11 +5,11 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 
-export const TARGET=Object.freeze({project:'steep-fog-88521756',branch:'br-falling-sky-b4d1fow0',host:'ep-weathered-tree-b4v72i6c.c-6.us-east-2.aws.neon.tech',database:'neondb',owner:'neondb_owner'});
 const sha=s=>createHash('sha256').update(s).digest('hex');
-export function validateTarget(value){
+export function validateTarget(value,target){
+  if(!target||typeof target.host!=='string'||!target.host||typeof target.database!=='string'||!target.database||typeof target.owner!=='string'||!target.owner)throw new Error('explicit bootstrap target identity required');
   const u=new URL(value);
-  if(!['postgres:','postgresql:'].includes(u.protocol)||u.hostname!==TARGET.host||u.pathname!==`/${TARGET.database}`||decodeURIComponent(u.username)!==TARGET.owner||!u.password||(u.port&&u.port!=='5432')||!['require','verify-full'].includes(u.searchParams.get('sslmode'))||u.hash)throw new Error('bootstrap target rejected');
+  if(!['postgres:','postgresql:'].includes(u.protocol)||u.hostname!==target.host||u.pathname!==`/${target.database}`||decodeURIComponent(u.username)!==target.owner||!u.password||(u.port&&u.port!=='5432')||!['require','verify-full'].includes(u.searchParams.get('sslmode'))||u.hash)throw new Error('bootstrap target rejected');
   for(const k of u.searchParams.keys())if(!['sslmode','channel_binding'].includes(k))throw new Error('bootstrap connection option rejected');
   return value;
 }
@@ -95,11 +95,12 @@ export async function bootstrap(pool,{apply=false,validate=false,manifest}={}){
 }
 async function main(){
   const mode=process.argv[2];if(!['inspect','validate','apply'].includes(mode))throw new Error('explicit bootstrap mode required');
-  const url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});
+  const target={host:process.env.CT_BOOTSTRAP_DATABASE_HOST,database:process.env.CT_BOOTSTRAP_DATABASE_NAME,owner:process.env.CT_BOOTSTRAP_DATABASE_OWNER};
+  const url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});
   try{
     const identity=await pool.query('SELECT current_database() AS database,current_user AS owner');
-    if(identity.rows[0].database!==TARGET.database||identity.rows[0].owner!==TARGET.owner)throw new Error('bootstrap database identity mismatch');
-    const result=await bootstrap(pool,{apply:mode==='apply',validate:mode==='validate'});console.log(JSON.stringify({target:TARGET,...result}));
+    if(identity.rows[0].database!==target.database||identity.rows[0].owner!==target.owner)throw new Error('bootstrap database identity mismatch');
+    const result=await bootstrap(pool,{apply:mode==='apply',validate:mode==='validate'});console.log(JSON.stringify({target,...result}));
   }finally{await pool.end();}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(e=>{console.error(JSON.stringify({status:'failed-or-uncertain',phase:e.bootstrapPhase||'connection-or-target',sqlstate:/^[0-9A-Z]{5}$/.test(e.code||'')?e.code:null,check:['unsafe existing API roles','API role inheritance rejected','bootstrap privilege readback failed','unauthenticated principal was not denied'].includes(e.message)?e.message:null,next:'inspect before retry; credentials and SQL errors withheld'}));process.exitCode=1;});
