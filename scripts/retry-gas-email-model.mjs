@@ -7,7 +7,8 @@ import { TARGET,validateTarget } from './bootstrap-gas-email.mjs';
 import { upgradeDelivery } from './upgrade-gas-email-delivery.mjs';
 export const RETRY=Object.freeze({instance:'gas-vnext-email',project:'celestan-email',execution:'gas-turn-963627a2-09f8-48b6-8c29-1ad46f8005cc',work:'gas-email-aeddebba6b1523e1ba05a2ffb9d10fa7',message:'1a1308e396490afd',input:'2',fence:'2',oldExecution:'gas-turn-479896e4-aea4-4e10-9d01-bb90ff715326',oldReply:'1a12116729e4a391'});
 const retryId='owner-model-retry:'+RETRY.execution+':2';
-export async function retryModel(pool,{apply=false,expectedSnapshot,deployed=false}={}){
+const validDeploymentAttestation=v=>typeof v==='string'&&v.length<=500&&/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[0-9]+(?:\/attempts\/[0-9]+)?$/.test(v);
+export async function retryModel(pool,{apply=false,expectedSnapshot,deploymentAttestation=null}={}){
  if((await upgradeDelivery(pool)).status!=='already-applied')throw new Error('diagnostics extension required');
  const c=await pool.connect();try{
   await c.query('BEGIN');await c.query("SET LOCAL lock_timeout='10s'; SET LOCAL statement_timeout='30s'");
@@ -32,8 +33,8 @@ export async function retryModel(pool,{apply=false,expectedSnapshot,deployed=fal
   if((await c.query('SELECT 1 FROM vnext_pilot_results WHERE execution_id=$1',[RETRY.execution])).rows.length)throw new Error('unexpected result');
   const snapshot=createHash('sha256').update(JSON.stringify({e,w,p,inputs,receipts,outbox})).digest('hex');
   if(!apply){await c.query('ROLLBACK');return {status:'retry-ready',retryId,snapshot,requiresModelDiagnosticsDeployed:true,effect:false};}
-  if(!deployed||expectedSnapshot!==snapshot)throw new Error('deployed confirmation and exact snapshot required');
-  await c.query("INSERT INTO vnext_events(event_type,payload) VALUES('gas-email-owner-model-retry',$1::jsonb)",[JSON.stringify({retryId,failedExecution:RETRY.execution,inputSeq:2,workUnitId:RETRY.work,snapshot,modelDiagnosticsDeployed:true,authorization:'user-authorized:pr69:one-text-only-retry'})]);
+  if(!validDeploymentAttestation(deploymentAttestation)||expectedSnapshot!==snapshot)throw new Error('deployment attestation reference and exact snapshot required');
+  await c.query("INSERT INTO vnext_events(event_type,payload) VALUES('gas-email-owner-model-retry',$1::jsonb)",[JSON.stringify({retryId,failedExecution:RETRY.execution,inputSeq:2,workUnitId:RETRY.work,snapshot,modelDiagnosticsDeploymentAttestation:deploymentAttestation,authorization:'user-authorized:pr69:one-text-only-retry'})]);
   await c.query('UPDATE vnext_pilot_progress SET failed_through_seq=consumed_input_seq,next_wake_at=clock_timestamp(),updated_at=clock_timestamp() WHERE work_unit_id=$1',[RETRY.work]);
   await c.query("UPDATE vnext_work_units SET state='actionable',updated_at=clock_timestamp() WHERE work_unit_id=$1",[RETRY.work]);
   await c.query('COMMIT');return {status:'retry-released',retryId,auditRecorded:true,modelCalled:false,sendAttempted:false};
@@ -41,8 +42,8 @@ export async function retryModel(pool,{apply=false,expectedSnapshot,deployed=fal
 }
 async function main(){
  const [mode,snapshot,confirmation]=process.argv.slice(2);
- if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||confirmation!=='--model-diagnostics-deployed'||process.argv.length!==5)))throw new Error('invalid command');
+ if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||!confirmation?.startsWith('--model-diagnostics-attested=')||!validDeploymentAttestation(confirmation.slice('--model-diagnostics-attested='.length))||process.argv.length!==4)))throw new Error('invalid command');
  const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000});
- try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await retryModel(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deployed:confirmation==='--model-diagnostics-deployed'})}));}finally{await pool.end();}
+ try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await retryModel(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deploymentAttestation:mode==='apply'?confirmation.slice('--model-diagnostics-attested='.length):null})}));}finally{await pool.end();}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Scoped retry rejected or uncertain; inspect before retry. Credentials and content withheld.');process.exitCode=1;});
