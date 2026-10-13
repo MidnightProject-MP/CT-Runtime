@@ -1,8 +1,9 @@
 /* Owner-only controls. Resolve runtime dependencies only when invoked, never at GAS cold load. */
 var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   function deps(){if(typeof CT_GAS_VNEXT_EMAIL==='undefined'||!CT_GAS_VNEXT_EMAIL.owner)throw new Error('email runtime module unavailable');return CT_GAS_VNEXT_EMAIL.owner;}
-  var CONFIG=['CT_VNEXT_EMAIL_ENABLED','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_MODEL','CT_VNEXT_EMAIL_LABEL','OPENROUTER_API_KEY','CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID'];
-  var MAILBOX='midnight.project.mp@gmail.com', SENDER='midnightprojectantigravity@gmail.com';
+  var CONFIG=['CT_VNEXT_EMAIL_ENABLED','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_MODEL','CT_VNEXT_EMAIL_LABEL','OPENROUTER_API_KEY','CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID','CT_VNEXT_EMAIL_APPROVED_MAILBOX','CT_VNEXT_EMAIL_APPROVED_SENDER'];
+  function mailbox(){return props().getProperty('CT_VNEXT_EMAIL_APPROVED_MAILBOX')||'';}
+  function sender(){return props().getProperty('CT_VNEXT_EMAIL_APPROVED_SENDER')||'';}
   function props(){return deps().props();} function config(x){return deps().config(x);}
   function hostAllowed(url,approved){var m=String(url||'').match(/^https:\/\/([^\/?#]+)(?:\/|$)/);return !!m&&m[1].indexOf('@')<0&&typeof approved==='string'&&approved.length>0&&m[1].toLowerCase()===approved.toLowerCase();}
   function rpc(){return deps().rpc.apply(null,arguments);} function api(){return deps().api.apply(null,arguments);}
@@ -15,15 +16,15 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     function id(v){return typeof v==='string'&&/^[a-f0-9]{1,100}$/.test(v)?v:null;}
     function compare(m,source){
       var row={source:source,id:id(m&&m.id),threadId:id(m&&m.threadId),comparisons:{},mismatchFields:[]};
-      var checks={sent:function(){return (m.labelIds||[]).indexOf('SENT')>=0;},thread:function(){return m.threadId===e.threadId;},from:function(){return address(header(m,'From'))===MAILBOX;},to:function(){return address(header(m,'To'))===SENDER;},messageId:function(){return header(m,'Message-ID')===e.messageId;},reference:function(){return header(m,'In-Reply-To')===e.reference;},subject:function(){return subject(m)===e.subject;},normalizedBody:function(){return text(m.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();}};
+      var checks={sent:function(){return (m.labelIds||[]).indexOf('SENT')>=0;},thread:function(){return m.threadId===e.threadId;},from:function(){return address(header(m,'From'))===mailbox();},to:function(){return address(header(m,'To'))===sender();},messageId:function(){return header(m,'Message-ID')===e.messageId;},reference:function(){return header(m,'In-Reply-To')===e.reference;},subject:function(){return subject(m)===e.subject;},normalizedBody:function(){return text(m.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();}};
       Object.keys(checks).forEach(function(k){try{row.comparisons[k]=checks[k]();}catch(err){row.comparisons[k]=false;row.failure=safeFailure(err);}if(!row.comparisons[k])row.mismatchFields.push(k);});
       out.candidates.push(row);
     }
     try{
       c=config(false);
-      out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
+      out.stage='gmail-profile';if(address(api('profile').emailAddress)!==mailbox())throw new Error('wrong mailbox');
       out.stage='data-api-health';var h=rpc(c,'health');
-      if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref)throw new Error('wrong grant');
+      if(h.instance!==c.instance||!h.project||h.mailbox!==mailbox()||h.allowed_sender!==sender()||!h.grant_ref)throw new Error('wrong grant');
       out.stage='delivery-peek';var d=rpc(c,'delivery-peek');
       if(['idle','prepare','reconcile'].indexOf(d.status)<0)throw new Error('unexpected peek');
       out.outboxStatus=d.status==='reconcile'?'admitted':d.status==='prepare'?'pending':'none';
@@ -56,8 +57,8 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function install() {
     var c=config(true);if(!c)throw new Error('email must be explicitly enabled before installation');
-    if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong execution mailbox');
-    var h=rpc(c,'health');if(h.mailbox!==MAILBOX||h.allowed_sender!==SENDER)throw new Error('email registration mismatch');
+    if(address(api('profile').emailAddress)!==mailbox())throw new Error('wrong execution mailbox');
+    var h=rpc(c,'health');if(h.mailbox!==mailbox()||h.allowed_sender!==sender())throw new Error('email registration mismatch');
     var all=ScriptApp.getProjectTriggers();
     if(all.some(function(t){return t.getHandlerFunction()!=='vnextEmailTick';}))throw new Error('other triggers require explicit cutover review');
     var triggers=all.filter(function(t){return t.getHandlerFunction()==='vnextEmailTick';});
@@ -84,7 +85,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     var desired={CT_VNEXT_EMAIL_ENABLED:'false',CT_VNEXT_EMAIL_INSTANCE:input.instance,CT_VNEXT_EMAIL_DATA_API_URL:input.url.replace(/\/$/,''),CT_VNEXT_EMAIL_MODEL:input.model,CT_VNEXT_EMAIL_LABEL:input.label};
     Object.keys(desired).forEach(function(k){var old=p.getProperty(k);if(old!==null&&old!==desired[k])throw new Error('existing binding conflict; explicit owner review required');});
     var h=rpc({instance:input.instance,url:desired.CT_VNEXT_EMAIL_DATA_API_URL},'health');
-    if(h.instance!==input.instance||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.blocked!==false)throw new Error('email grant not ready');
+    if(h.instance!==input.instance||h.mailbox!==mailbox()||h.allowed_sender!==sender()||h.blocked!==false)throw new Error('email grant not ready');
     var result=inspectReady?inspectReady(h,desired):{status:'configured',enabled:false,instance:input.instance};
     p.setProperties(desired,false); // Explicit owner invocation only; never a tick/deploy side effect.
     return result;
@@ -102,7 +103,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     try{
       locked=stage('script-lock',function(){lock=LockService.getScriptLock();lock.waitLock(10000);return true;}).ok;
       if(locked){
-        var profile=stage('gmail-profile',function(){if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('prepare: wrong execution mailbox');});
+        var profile=stage('gmail-profile',function(){if(address(api('profile').emailAddress)!==mailbox())throw new Error('prepare: wrong execution mailbox');});
         var propertyRead=stage('property-read',function(){p=props();snapshot=p.getProperties();summary.propertyCounts=countsOf(snapshot);CONFIG.forEach(function(k){properties[k]={present:!!snapshot[k]};});});
      var approvedScriptId=stage('approved-script-identity',function(){var expected=p&&p.getProperty?p.getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID'):props().getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID');if(expected!==ScriptApp.getScriptId())throw new Error('prepare: approved script identity mismatch');return expected;});
         var modelCheck={ok:false};
@@ -118,7 +119,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
         }else skip('model-config');
         // These independent read-only checks diagnose data API/property state.
         // after a Gmail failure. Do not inspect labels from a mismatched mailbox.
-        stage('data-api-health',function(){var h=rpc({instance:desired?desired.CT_VNEXT_EMAIL_INSTANCE:snapshot.CT_VNEXT_EMAIL_INSTANCE,url:desired?desired.CT_VNEXT_EMAIL_DATA_API_URL:snapshot.CT_VNEXT_EMAIL_DATA_API_URL},'health');if(typeof h.project!=='string'||!h.project.trim())throw new Error('prepare: project identity missing');summary.project=h.project;if(h.instance!==(desired?desired.CT_VNEXT_EMAIL_INSTANCE:snapshot.CT_VNEXT_EMAIL_INSTANCE)||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.blocked!==false)throw new Error('email grant not ready');});
+        stage('data-api-health',function(){var h=rpc({instance:desired?desired.CT_VNEXT_EMAIL_INSTANCE:snapshot.CT_VNEXT_EMAIL_INSTANCE,url:desired?desired.CT_VNEXT_EMAIL_DATA_API_URL:snapshot.CT_VNEXT_EMAIL_DATA_API_URL},'health');if(typeof h.project!=='string'||!h.project.trim())throw new Error('prepare: project identity missing');summary.project=h.project;if(h.instance!==(desired?desired.CT_VNEXT_EMAIL_INSTANCE:snapshot.CT_VNEXT_EMAIL_INSTANCE)||h.mailbox!==mailbox()||h.allowed_sender!==sender()||h.blocked!==false)throw new Error('email grant not ready');});
         if(profile.ok)stage('gmail-labels',function(){summary.labelPresent=(api('labels').labels||[]).some(function(l){return l.name==='Celestan';});});else skip('gmail-labels');
         stage('trigger-inventory',function(){var handlers=ScriptApp.getProjectTriggers().map(function(t){var n=String(t.getHandlerFunction());return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(n)?n:'(invalid-handler)';}).sort();summary.triggerHandlerNames=handlers;summary.triggerCount=handlers.length;summary.emailTriggerCount=handlers.filter(function(n){return n==='vnextEmailTick';}).length;});
         if(mutate&&!failed&&modelCheck.ok){
@@ -129,7 +130,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
       }
     }finally{if(locked)stage('script-lock',function(){lock.releaseLock();});}
     var result=Object.assign({status:failed?'blocked':mutate?'prepared':'diagnosed',readOnly:!mutate,configWriteAttempted:writeAttempted,readbackConfirmed:readbackConfirmed,preparedConfigMatch:preparedMatch,properties:properties,stages:stages},summary);
-    if(mutate&&!failed)Object.assign(result,{enabled:false,instance:desired.CT_VNEXT_EMAIL_INSTANCE,mailbox:MAILBOX,allowedSender:SENDER,project:summary.project,model:model});
+    if(mutate&&!failed)Object.assign(result,{enabled:false,instance:desired.CT_VNEXT_EMAIL_INSTANCE,mailbox:mailbox(),allowedSender:sender(),project:summary.project,model:model});
     if(failed)result.reason=firstReason;
     console.log(JSON.stringify(result));if(mutate&&failed)throw new Error(firstReason);return result;
   }
@@ -153,9 +154,9 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
         try{
           stage='persisted-config';p=props();var c=config(false);model=c.model;
            if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model)||['false','true'].indexOf(p.getProperty('CT_VNEXT_EMAIL_ENABLED'))<0)throw new Error('activation-config-mismatch');
-          stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('activation-mailbox-mismatch');
+          stage='gmail-profile';if(address(api('profile').emailAddress)!==mailbox())throw new Error('activation-mailbox-mismatch');
           stage='data-api-health';var h=rpc(c,'health');
-          if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref||h.blocked!==false||h.uncertain!==0)throw new Error('activation-grant-not-ready');
+          if(h.instance!==c.instance||!h.project||h.mailbox!==mailbox()||h.allowed_sender!==sender()||!h.grant_ref||h.blocked!==false||h.uncertain!==0)throw new Error('activation-grant-not-ready');
           stage='gmail-labels';if(!(api('labels').labels||[]).some(function(l){return l.name==='Celestan';}))throw new Error('activation-label-missing-create-Celestan-filter-in-Gmail');
           stage='trigger-inventory';counts=activationTriggers();
           stage='retire-future-legacy';mutated=true;
@@ -175,7 +176,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
           // An ambiguous create is read back once, never blindly retried.
           stage='trigger-readback';counts=activationTriggers();if(counts.legacy.length||counts.email.length!==1)throw new Error('activation-trigger-outcome-unresolved');
           stage='enable';p.setProperty('CT_VNEXT_EMAIL_ENABLED','true');if(p.getProperty('CT_VNEXT_EMAIL_ENABLED')!=='true')throw new Error('activation-enabled-readback');
-          return {status:'active',enabled:true,mailbox:MAILBOX,allowedSender:SENDER,model:model,readiness:'verified',triggerCounts:{legacy:0,email:1},retiredLegacyCount:retired,creationAttempted:creationAttempted,inFlightLegacyCancelled:false};
+          return {status:'active',enabled:true,mailbox:mailbox(),allowedSender:sender(),model:model,readiness:'verified',triggerCounts:{legacy:0,email:1},retiredLegacyCount:retired,creationAttempted:creationAttempted,inFlightLegacyCancelled:false};
         }catch(e){
           var disabled=null;if(mutated){try{p.setProperty('CT_VNEXT_EMAIL_ENABLED','false');disabled=p.getProperty('CT_VNEXT_EMAIL_ENABLED')==='false';}catch(_){disabled=null;}}
           var reasons=['activation-config-mismatch','activation-mailbox-mismatch','activation-grant-not-ready','activation-label-missing-create-Celestan-filter-in-Gmail','activation-unknown-trigger','activation-duplicate-trigger','activation-mode-readback','activation-legacy-retirement-unresolved','activation-enabled-readback','activation-trigger-outcome-unresolved'];
