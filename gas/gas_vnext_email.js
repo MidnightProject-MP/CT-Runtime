@@ -255,7 +255,6 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       ['contentChars','contractBytes'].forEach(function(k){if(Number.isInteger(m[k])&&m[k]>=0&&m[k]<=1000000)out[k]=m[k];});
     }
     if(reason)out.reason=reason;
-    if(['serviceDisabled','accessNotConfigured','SERVICE_DISABLED'].indexOf(out.providerReason)>=0)out.projectNumber='788761466843';
     return out;
   }
   function tick(){
