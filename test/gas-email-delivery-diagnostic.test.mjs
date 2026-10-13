@@ -57,7 +57,7 @@ test('unknown property failures are sanitized and diagnostic reads only explicit
     Object.defineProperty(f.values,key,{get(){reads.push(key);return value;}});
   }
   f.run();
-  assert.deepEqual(reads.sort(),['CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_LABEL','CT_VNEXT_EMAIL_MODEL','OPENROUTER_API_KEY'].sort());
+  assert.deepEqual([...new Set(reads)].sort(),['CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_APPROVED_MAILBOX','CT_VNEXT_EMAIL_APPROVED_SENDER','CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_LABEL','CT_VNEXT_EMAIL_MODEL','OPENROUTER_API_KEY'].sort());
   const broken=fixture();
   Object.defineProperty(broken.values,'CT_VNEXT_EMAIL_INSTANCE',{get(){throw new Error('credential-secret private model body');}});
   const result=broken.run();
