@@ -37,7 +37,7 @@ test('preparation never writes on invalid/missing model, identity, conflicting b
   for(const value of ['', 'not-a-provider-model','vendor/model\n']){const f=fixture({CT_VNEXT_EMAIL_MODEL:value});assert.throws(()=>f.run(),/set CT_VNEXT_EMAIL_MODEL/);assert.equal(f.writes.length,0);}
   const wrong=fixture();wrong.profile('other@example.com');assert.throws(()=>wrong.run(),/wrong execution mailbox/);assert.equal(wrong.writes.length,0);assert.ok(wrong.calls.every(u=>u.endsWith('/profile')||u.endsWith('/rpc/gas_email_rpc')));
   const conflict=fixture({CT_VNEXT_EMAIL_INSTANCE:'another'});assert.throws(()=>conflict.run(),/grant not ready/);assert.equal(conflict.writes.length,0);
-  const p=fixture();p.project('another');assert.throws(()=>p.run(),/project mismatch/);assert.equal(p.writes.length,0);
+  const p=fixture();p.project('');assert.throws(()=>p.run(),/project identity missing/);assert.equal(p.writes.length,0);
   const unavailable=fixture();unavailable.rpcFail();assert.throws(()=>unavailable.run(),/outcome unavailable/);assert.equal(unavailable.writes.length,0);assert.doesNotMatch(JSON.stringify(unavailable.logs),/test-secret/);
   const missingKey=fixture({OPENROUTER_API_KEY:null});assert.throws(()=>missingKey.run(),/existing OpenRouter secret/);assert.equal(missingKey.writes.length,0);
   const missingLabel=fixture();missingLabel.missingLabel();assert.equal(missingLabel.run().labelPresent,false);assert.equal(missingLabel.writes.length,1);
@@ -54,8 +54,8 @@ test('read-only diagnostic identifies Gmail service/consent errors without copyi
 });
 test('Neon HTTP/SQLSTATE, non-JSON 503 and invalid JSON success are diagnosed at their own stages',()=>{
   for(const [suffix,status,body,stage,classification,sql] of [
-    ['/rpc/gas_email_rpc',401,{message:'secret JWT text'},'neon-health','authentication-denied',null],
-    ['/rpc/gas_email_rpc',403,{code:'42501',message:'private-value'},'neon-health','authorization-denied','42501'],
+    ['/rpc/gas_email_rpc',401,{message:'secret JWT text'},'data-api-health','authentication-denied',null],
+    ['/rpc/gas_email_rpc',403,{code:'42501',message:'private-value'},'data-api-health','authorization-denied','42501'],
     ['/labels',503,'<html>private-value</html>','gmail-labels','provider-unavailable',null],
     ['/profile',200,'{broken private-value','gmail-profile','invalid-json',null],
     ['/profile',403,{code:'SECRT',error:{errors:[{reason:'private-value'}],details:'private-oauth'}},'gmail-profile','authorization-denied',null]
