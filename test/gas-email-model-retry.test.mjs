@@ -30,8 +30,8 @@ test('one-off retry is snapshot guarded, immutable, atomic and never changes ori
   await assert.rejects(retryModel(pool,{apply:true,deploymentAttestation:attestation,expectedSnapshot:inspection.snapshot}),/injected/);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM vnext_events WHERE event_type='gas-email-owner-model-retry'")).rows[0].n,0);
   await pool.query('DROP TRIGGER retry_test_reject ON vnext_pilot_progress; DROP FUNCTION retry_test_reject()');
-  assert.equal((await retryModel(pool,{apply:true,deployed:true,expectedSnapshot:inspection.snapshot})).status,'retry-released');
-  assert.equal((await retryModel(pool,{apply:true,deployed:true,expectedSnapshot:inspection.snapshot})).status,'already-retried');
+  assert.equal((await retryModel(pool,{apply:true,deploymentAttestation:attestation,expectedSnapshot:inspection.snapshot})).status,'retry-released');
+  assert.equal((await retryModel(pool,{apply:true,deploymentAttestation:attestation,expectedSnapshot:inspection.snapshot})).status,'already-retried');
   assert.deepEqual(await before(),original);
   assert.equal((await pool.query('SELECT state FROM vnext_work_units')).rows[0].state,'actionable');
   await assert.rejects(pool.query("DELETE FROM vnext_events WHERE event_type='gas-email-owner-model-retry'"),/immutable/);
