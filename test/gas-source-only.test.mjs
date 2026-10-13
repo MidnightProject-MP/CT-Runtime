@@ -46,22 +46,20 @@ test('preflight is metadata-only; same canonical hashing binds preparation and r
     assert.deepEqual((await readdir(join(dir,'gas-source-only'))).sort(),['.clasp.json','appsscript.json','main.js']);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
-test('canonical workflow gates every legacy mutation/Execution API step and source-only is pinned and serialized',async()=>{
+test('legacy clasp deployment path remains retired until it implements canonical release authorization',async()=>{
   const w=await readFile(new URL('../.github/workflows/gas-clasp-deploy.yml',import.meta.url),'utf8');
-  assert.match(w,/source_only:[\s\S]*?default: false/);assert.match(w,/group: gas-production-deploy/);assert.match(w,/cancel-in-progress: false/);
-  const steps=w.split('      - name:');
-  for(const s of steps.filter(s=>/clasp run |Configure Apps Script project|Show clasp file status/.test(s)))assert.match(s,/if: \$\{\{ !inputs.source_only \}\}/);
-  const update=steps.find(s=>s.startsWith(' Update pinned source-only'));
-  assert.match(update,/--deploymentId "\$DEPLOYMENT_ID"/);assert.doesNotMatch(update,/else|clasp run/);
-  assert.match(w,/gas-source-only.mjs prepare/);assert.match(w,/gas-source-only.mjs head/);assert.match(w,/gas-source-only.mjs final/);
-  assert.match(w,/gas-source-only.mjs inspect/);
-  assert.match(steps.find(s=>s.startsWith(' Inspect source-only predecessor')),/!inputs.source_only_preflight/);
-  assert.match(steps.find(s=>s.startsWith(' Read-only source-only')),/inputs.source_only && inputs.source_only_preflight/);
-  for(const s of steps.filter(s=>/clasp push|clasp create-deployment/.test(s)))assert.match(s,/!inputs.source_only|source_prepare.outputs.needed == 'true'/);
-  assert.match(w,/Read-only preflight requires source_only=true/);
+  assert.match(w,/jobs:[\\s\\S]*?deploy:[\\s\\S]*?if: \\$\\{\\{ false \\}\\}/);
+  assert.match(w,/Retired: bypasses canonical predecessor comparison and signed readback/);
+  assert.match(w,/Re-enable only with the same reviewed release gate and fresh CAS as self-deploy/);
+  assert.match(w,/clasp push --force/);
+  assert.match(w,/clasp create-deployment/);
+  // The dangerous commands remain present only as historical implementation under
+  // an unconditional job-level false guard; no PR CI or dispatch can run them.
+  assert.match(w,/environment: gas-production/);
   const source=await readFile(new URL('../scripts/gas-source-only.mjs',import.meta.url),'utf8');
   assert.doesNotMatch(source,/clasp push|method:'PUT'|method:'DELETE'/);assert.match(source,/method:'GET'/);
 });
+
 test('explicit owner configuration is disabled, grant-checked, fixed-field and refuses rotation',async()=>{
   const source=(await Promise.all(['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFile(new URL('../gas/'+f,import.meta.url),'utf8')))).join('\n');
   const props={OPENROUTER_API_KEY:'private-existing-key'},writes=[];
