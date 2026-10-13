@@ -82,7 +82,7 @@ export async function configure(pool,mode,instance=INSTANCE){
     const proof=await readback(c);await c.query('COMMIT');return {status:'restricted-and-registered-inactive',instance,...proof};
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
 }
-async function main(){const instance=instanceFromEnv();if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe(fetch,undefined,DATA_API_URL,instance));return;}const target=targetFromEnv(),url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});try{
+async function main(){const instance=instanceFromEnv();if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe(fetch,undefined,DATA_API_URL,instance)));return;}const target=targetFromEnv(),url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});try{
   const id=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(id.db!==target.database||id.owner!==target.owner)throw new Error('wrong database');
   console.log(JSON.stringify({target,...await configure(pool,process.argv[2],instance)}));
 }finally{await pool.end();}}
