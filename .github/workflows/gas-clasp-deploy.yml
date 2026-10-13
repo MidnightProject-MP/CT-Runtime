@@ -25,6 +25,9 @@ env:
 
 jobs:
   deploy:
+    # Retired: bypasses canonical predecessor comparison and signed readback.
+    # Re-enable only with the same reviewed release gate and fresh CAS as self-deploy.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment: gas-production
     steps:
