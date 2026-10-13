@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
 function run(response,status=200,advance=0,claimDelay=0){
  const logs=[],calls=[];let now=0;
- const values={CT_VNEXT_EMAIL_ENABLED:'true',CT_VNEXT_EMAIL_INSTANCE:'test',CT_VNEXT_EMAIL_DATA_API_URL:'https://test.neon.tech',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'test.neon.tech',CT_VNEXT_EMAIL_MODEL:'nvidia/nemotron-3-nano-30b-a3b:free',CT_VNEXT_EMAIL_LABEL:'Celestan',OPENROUTER_API_KEY:'SECRET'};
+ const values={CT_VNEXT_EMAIL_ENABLED:'true',CT_VNEXT_EMAIL_INSTANCE:'test',CT_VNEXT_EMAIL_DATA_API_URL:'https://test.neon.tech',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'test.neon.tech',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'test-script',CT_VNEXT_EMAIL_APPROVED_MAILBOX:'midnight.project.mp@gmail.com',CT_VNEXT_EMAIL_APPROVED_SENDER:'midnightprojectantigravity@gmail.com',CT_VNEXT_EMAIL_MODEL:'nvidia/nemotron-3-nano-30b-a3b:free',CT_VNEXT_EMAIL_LABEL:'Celestan',OPENROUTER_API_KEY:'SECRET'};
  const ctx=vm.createContext({console:{log:x=>logs.push(x)},Date:class extends Date{static now(){return now;}},PropertiesService:{getScriptProperties:()=>({getProperty:k=>values[k]})},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},ScriptApp:{getIdentityToken:()=> 'jwt',getOAuthToken:()=> 'oauth'},UrlFetchApp:{fetch:(url,options)=>{
   let data,code=200;
   if(url.includes('openrouter.ai')){data=response;code=status;now+=advance;const p=JSON.parse(options.payload);assert.equal(p.model,values.CT_VNEXT_EMAIL_MODEL);assert.equal(p.max_tokens,2500);}
