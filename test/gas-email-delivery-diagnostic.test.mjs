@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
-const source=readFileSync(new URL('../gas/gas_vnext_email.js',import.meta.url),'utf8');
+const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
 function fixture(change=()=>{}){
   const execution='gas-turn-479896e4-aea4-4e10-9d01-bb90ff715326';
   const envelope={id:'1a121129847fa71a',threadId:'abcdef',messageId:`<${execution}@ct-runtime.invalid>`,reference:'<private-reference@example.com>',subject:'secret subject',body:'private model body'};
