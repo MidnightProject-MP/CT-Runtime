@@ -4,6 +4,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   var CONFIG=['CT_VNEXT_EMAIL_ENABLED','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_MODEL','CT_VNEXT_EMAIL_LABEL','OPENROUTER_API_KEY'];
   var MAILBOX='midnight.project.mp@gmail.com', SENDER='midnightprojectantigravity@gmail.com';
   function props(){return deps().props();} function config(x){return deps().config(x);}
+  function hostAllowed(url,approved){var m=String(url||'').match(/^https:\/\/([^\/?#]+)(?:\/|$)/);return !!m&&m[1].indexOf('@')<0&&typeof approved==='string'&&approved.length>0&&m[1].toLowerCase()===approved.toLowerCase();}
   function rpc(){return deps().rpc.apply(null,arguments);} function api(){return deps().api.apply(null,arguments);}
   function address(x){return deps().address(x);} function safeFailure(x){return deps().safeFailure(x);}
   function header(){return deps().header.apply(null,arguments);} function subject(x){return deps().subject(x);}
@@ -20,7 +21,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     }
     try{
       c=config(false);
-       if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');
+       !hostAllowed(input.url,p.getProperty('CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST'))||
       out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
       out.stage='data-api-health';var h=rpc(c,'health');
       if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref)throw new Error('wrong grant');
@@ -108,7 +109,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
             model=snapshot.CT_VNEXT_EMAIL_MODEL;if(model===undefined||model===null)model=snapshot.CT_GAS_PROOF_MODEL;
             if(typeof model!=='string'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model))throw new Error('prepare: set CT_VNEXT_EMAIL_MODEL to an explicit approved provider/model');
             var instance=snapshot.CT_VNEXT_EMAIL_INSTANCE,url=snapshot.CT_VNEXT_EMAIL_DATA_API_URL,label=snapshot.CT_VNEXT_EMAIL_LABEL;
-             if(!/^[A-Za-z0-9_-]{1,100}$/.test(instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(url||'')||typeof label!=='string'||!label.trim()||label.length>100||/[\x00-\x1f]/.test(label))throw new Error('prepare: explicit instance, HTTPS data API URL and queue label are required');
+             if(!/^[A-Za-z0-9_-]{1,100}$/.test(instance||'')||!hostAllowed(url,snapshot.CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST)||typeof label!=='string'||!label.trim()||label.length>100||/[\x00-\x1f]/.test(label))throw new Error('prepare: explicit instance, approved HTTPS data API URL and queue label are required');
              desired={CT_VNEXT_EMAIL_ENABLED:'false',CT_VNEXT_EMAIL_INSTANCE:instance,CT_VNEXT_EMAIL_DATA_API_URL:url.replace(/\/$/,''),CT_VNEXT_EMAIL_MODEL:model,CT_VNEXT_EMAIL_LABEL:label};
             preparedMatch=matches(snapshot);checkBindings();if(!snapshot.OPENROUTER_API_KEY)throw new Error('existing OpenRouter secret required');
           });
