@@ -244,52 +244,6 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     if(trace.intakeFailure)out.intakeFailure=trace.intakeFailure;
     console.log(JSON.stringify(out));return out;
   }
-  // Owner evidence only. No admission, record, send, model or configuration writes.
-  function diagnoseDelivery(){
-    var out={status:'uncertain',readOnly:true,stage:'persisted-config',candidates:[]},c,e;
-    function id(v){return typeof v==='string'&&/^[a-f0-9]{1,100}$/.test(v)?v:null;}
-    function compare(m,source){
-      var row={source:source,id:id(m&&m.id),threadId:id(m&&m.threadId),comparisons:{},mismatchFields:[]};
-      var checks={sent:function(){return (m.labelIds||[]).indexOf('SENT')>=0;},thread:function(){return m.threadId===e.threadId;},from:function(){return address(header(m,'From'))===MAILBOX;},to:function(){return address(header(m,'To'))===SENDER;},messageId:function(){return header(m,'Message-ID')===e.messageId;},reference:function(){return header(m,'In-Reply-To')===e.reference;},subject:function(){return subject(m)===e.subject;},normalizedBody:function(){return text(m.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();}};
-      Object.keys(checks).forEach(function(k){try{row.comparisons[k]=checks[k]();}catch(err){row.comparisons[k]=false;row.failure=safeFailure(err);}if(!row.comparisons[k])row.mismatchFields.push(k);});
-      out.candidates.push(row);
-    }
-    try{
-      c=config(false);
-      if(c.instance!=='gas-vnext-email'||c.url!=='https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1'||c.label!=='Celestan'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');
-      out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
-      out.stage='neon-health';var h=rpc(c,'health');
-      if(h.instance!==c.instance||h.project!=='celestan-email'||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.grant_ref!=='user-authorized:pr69:gas-text-only:v1')throw new Error('wrong grant');
-      out.stage='delivery-peek';var d=rpc(c,'delivery-peek');
-      if(['idle','prepare','reconcile'].indexOf(d.status)<0)throw new Error('unexpected peek');
-      out.outboxStatus=d.status==='reconcile'?'admitted':d.status==='prepare'?'pending':'none';
-      if(d.status==='idle'){out.status='idle';}
-      else{
-        out.stage='expected-envelope';e=d.envelope;mime(e);
-        if(!id(e.threadId)||!id(e.id)||!/^gas-turn-[a-f0-9-]{36}$/.test(d.execution_id)||e.messageId!=='<'+d.execution_id+'@ct-runtime.invalid>')throw new Error('invalid envelope identifiers');
-        out.executionId=d.execution_id;out.expectedMessageId=e.messageId;out.expectedThreadId=e.threadId;out.inputMessageId=e.id;
-        out.expectedLengths={envelopeChars:JSON.stringify(e).length,envelopeBytes:utf8Bytes(JSON.stringify(e)),bodyChars:e.body.length,bodyBytes:utf8Bytes(e.body),subjectChars:e.subject.length,subjectBytes:utf8Bytes(e.subject)};
-        out.stage='sent-search';
-        try{
-          var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId)),refs=page.messages||[];
-          if(!Array.isArray(refs))throw new Error('invalid search');
-          out.searchHasNextPage=!!page.nextPageToken;out.searchTruncated=!!page.nextPageToken||refs.length>10;out.searchCandidateIds=refs.slice(0,10).map(function(r){return id(r.id);});
-          refs.slice(0,10).forEach(function(r){try{if(!id(r.id))throw new Error('invalid candidate');compare(api('messages/'+encodeURIComponent(r.id)+'?format=full'),'sent-search');}catch(err){out.candidates.push({source:'sent-search',id:id(r.id),failure:safeFailure(err)});}});
-        }catch(err){out.searchFailure=safeFailure(err);}
-        out.stage='thread-readback';
-        try{
-          var thread=api('threads/'+encodeURIComponent(e.threadId)+'?format=full'),messages=thread.messages||[];
-          if(!Array.isArray(messages))throw new Error('invalid thread');
-          out.threadTruncated=!!thread.nextPageToken||messages.length>10;out.threadMatches=thread.id===e.threadId;
-          out.threadCandidateIds=messages.slice(0,10).map(function(m){return id(m.id);});
-          messages.slice(0,10).forEach(function(m){compare(m,'thread');});
-        }catch(err){out.threadFailure=safeFailure(err);}
-        // Evidence is not delivery authorization, even when every comparison matches.
-        out.stage='complete';
-      }
-    }catch(err){out.status='blocked';out.failure=safeFailure(err);}
-    console.log(JSON.stringify(out));return out;
-  }
-  return {tick:tick,diagnoseDelivery:diagnoseDelivery,capsule:CAPSULE,owner:{props:props,config:config,rpc:rpc,api:api,address:address,safeFailure:safeFailure,configKeys:CONFIG,mailbox:MAILBOX,sender:SENDER}};
+  return {tick:tick,capsule:CAPSULE,owner:{props:props,config:config,rpc:rpc,api:api,address:address,safeFailure:safeFailure,configKeys:CONFIG,mailbox:MAILBOX,sender:SENDER,header:header,subject:subject,text:text,mime:mime,utf8Bytes:utf8Bytes}};
 }());
 function vnextEmailTick(){return CT_GAS_VNEXT_EMAIL.tick();}

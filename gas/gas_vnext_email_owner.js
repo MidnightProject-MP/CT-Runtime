@@ -6,6 +6,54 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   function props(){return deps().props();} function config(x){return deps().config(x);}
   function rpc(){return deps().rpc.apply(null,arguments);} function api(){return deps().api.apply(null,arguments);}
   function address(x){return deps().address(x);} function safeFailure(x){return deps().safeFailure(x);}
+  function header(){return deps().header.apply(null,arguments);} function subject(x){return deps().subject(x);}
+  function text(x){return deps().text(x);} function mime(x){return deps().mime(x);} function utf8Bytes(x){return deps().utf8Bytes(x);}
+  // Owner evidence only. No admission, record, send, model or configuration writes.
+  function diagnoseDelivery(){
+    var out={status:'uncertain',readOnly:true,stage:'persisted-config',candidates:[]},c,e;
+    function id(v){return typeof v==='string'&&/^[a-f0-9]{1,100}$/.test(v)?v:null;}
+    function compare(m,source){
+      var row={source:source,id:id(m&&m.id),threadId:id(m&&m.threadId),comparisons:{},mismatchFields:[]};
+      var checks={sent:function(){return (m.labelIds||[]).indexOf('SENT')>=0;},thread:function(){return m.threadId===e.threadId;},from:function(){return address(header(m,'From'))===MAILBOX;},to:function(){return address(header(m,'To'))===SENDER;},messageId:function(){return header(m,'Message-ID')===e.messageId;},reference:function(){return header(m,'In-Reply-To')===e.reference;},subject:function(){return subject(m)===e.subject;},normalizedBody:function(){return text(m.payload).replace(/\r\n/g,'\n').trim()===e.body.replace(/\r\n/g,'\n').trim();}};
+      Object.keys(checks).forEach(function(k){try{row.comparisons[k]=checks[k]();}catch(err){row.comparisons[k]=false;row.failure=safeFailure(err);}if(!row.comparisons[k])row.mismatchFields.push(k);});
+      out.candidates.push(row);
+    }
+    try{
+      c=config(false);
+      if(c.instance!=='gas-vnext-email'||c.url!=='https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1'||c.label!=='Celestan'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');
+      out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
+      out.stage='neon-health';var h=rpc(c,'health');
+      if(h.instance!==c.instance||h.project!=='celestan-email'||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||h.grant_ref!=='user-authorized:pr69:gas-text-only:v1')throw new Error('wrong grant');
+      out.stage='delivery-peek';var d=rpc(c,'delivery-peek');
+      if(['idle','prepare','reconcile'].indexOf(d.status)<0)throw new Error('unexpected peek');
+      out.outboxStatus=d.status==='reconcile'?'admitted':d.status==='prepare'?'pending':'none';
+      if(d.status==='idle'){out.status='idle';}
+      else{
+        out.stage='expected-envelope';e=d.envelope;mime(e);
+        if(!id(e.threadId)||!id(e.id)||!/^gas-turn-[a-f0-9-]{36}$/.test(d.execution_id)||e.messageId!=='<'+d.execution_id+'@ct-runtime.invalid>')throw new Error('invalid envelope identifiers');
+        out.executionId=d.execution_id;out.expectedMessageId=e.messageId;out.expectedThreadId=e.threadId;out.inputMessageId=e.id;
+        out.expectedLengths={envelopeChars:JSON.stringify(e).length,envelopeBytes:utf8Bytes(JSON.stringify(e)),bodyChars:e.body.length,bodyBytes:utf8Bytes(e.body),subjectChars:e.subject.length,subjectBytes:utf8Bytes(e.subject)};
+        out.stage='sent-search';
+        try{
+          var page=api('messages?maxResults=10&q='+encodeURIComponent('in:sent rfc822msgid:'+e.messageId)),refs=page.messages||[];
+          if(!Array.isArray(refs))throw new Error('invalid search');
+          out.searchHasNextPage=!!page.nextPageToken;out.searchTruncated=!!page.nextPageToken||refs.length>10;out.searchCandidateIds=refs.slice(0,10).map(function(r){return id(r.id);});
+          refs.slice(0,10).forEach(function(r){try{if(!id(r.id))throw new Error('invalid candidate');compare(api('messages/'+encodeURIComponent(r.id)+'?format=full'),'sent-search');}catch(err){out.candidates.push({source:'sent-search',id:id(r.id),failure:safeFailure(err)});}});
+        }catch(err){out.searchFailure=safeFailure(err);}
+        out.stage='thread-readback';
+        try{
+          var thread=api('threads/'+encodeURIComponent(e.threadId)+'?format=full'),messages=thread.messages||[];
+          if(!Array.isArray(messages))throw new Error('invalid thread');
+          out.threadTruncated=!!thread.nextPageToken||messages.length>10;out.threadMatches=thread.id===e.threadId;
+          out.threadCandidateIds=messages.slice(0,10).map(function(m){return id(m.id);});
+          messages.slice(0,10).forEach(function(m){compare(m,'thread');});
+        }catch(err){out.threadFailure=safeFailure(err);}
+        // Evidence is not delivery authorization, even when every comparison matches.
+        out.stage='complete';
+      }
+    }catch(err){out.status='blocked';out.failure=safeFailure(err);}
+    console.log(JSON.stringify(out));return out;
+  }
   function install() {
     var c=config(true);if(!c)throw new Error('email must be explicitly enabled before installation');
     if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong execution mailbox');
@@ -134,7 +182,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function pause(){var result;try{result=setupLock(function(){var p=props();p.setProperty('CT_VNEXT_EMAIL_ENABLED','false');if(p.getProperty('CT_VNEXT_EMAIL_ENABLED')!=='false')throw new Error('pause-readback-unresolved');return {status:'paused',enabled:false,inFlightCancelled:false};});}catch(_){result={status:'blocked',reason:'pause-outcome-unresolved',enabled:null};}console.log(JSON.stringify(result));return result;}
 
-  return {install:install,inventory:inventory,health:health,configure:configure,prepare:prepare,diagnose:diagnose,activate:activate,pause:pause};
+  return {diagnoseDelivery:diagnoseDelivery,install:install,inventory:inventory,health:health,configure:configure,prepare:prepare,diagnose:diagnose,activate:activate,pause:pause};
 }());
 function ownerEmailCall(name,args){if(typeof CT_GAS_VNEXT_EMAIL_OWNER==='undefined')throw new Error('email owner module unavailable');return CT_GAS_VNEXT_EMAIL_OWNER[name].apply(null,args||[]);}
 function installVnextEmailTrigger(){return ownerEmailCall('install');}
@@ -143,6 +191,6 @@ function healthVnextEmailRuntime(){return ownerEmailCall('health');}
 function configureVnextEmailRuntime(config){return ownerEmailCall('configure',[config]);}
 function prepareVnextEmailRuntime(){return ownerEmailCall('prepare');}
 function diagnoseVnextEmailPreparation(){return ownerEmailCall('diagnose');}
-function diagnoseVnextEmailDelivery(){if(typeof CT_GAS_VNEXT_EMAIL==='undefined')throw new Error('email runtime module unavailable');return CT_GAS_VNEXT_EMAIL.diagnoseDelivery();}
+function diagnoseVnextEmailDelivery(){return ownerEmailCall('diagnoseDelivery');}
 function activateVnextEmailRuntime(){return ownerEmailCall('activate');}
 function pauseVnextEmailRuntime(){return ownerEmailCall('pause');}
