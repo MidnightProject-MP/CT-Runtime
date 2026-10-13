@@ -13,6 +13,8 @@ env:
   
 jobs:
   push:
+    # Retired: source-only replacement can erase a live full email bundle.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment: gas-production
     steps:

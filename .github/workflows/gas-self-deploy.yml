@@ -4,20 +4,23 @@
 name: GAS self-deploy
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'gas/**'
-      - 'scripts/build-gas-bundle.mjs'
-      - 'scripts/deploy-gas.mjs'
-      - 'lib/gas-deploy-contract.mjs'
   workflow_dispatch:
     inputs:
+      release_commit:
+        description: 'Full reviewed aggregate commit; must equal the dispatched workflow SHA'
+        required: true
+        type: string
+      release_ref:
+        description: 'Reviewed refs/tags/gas-release/* tag resolving to release_commit'
+        required: true
+        type: string
+      desired_bundle_hash:
+        description: 'Reviewed canonical normalized bundle SHA-256'
+        required: true
+        type: string
       expected_live_bundle_hash:
-        description: 'Expected hash of the currently live GAS deployment; leave empty to use the observed live predecessor'
-        required: false
-        default: ''
+        description: 'Fresh independently inspected live predecessor SHA-256; no automatic fallback'
+        required: true
         type: string
       qualify_only:
         description: 'Run qualification only; do not plan or deploy'
@@ -61,15 +64,16 @@ jobs:
           node scripts/build-gas-bundle.mjs gas "$RUNNER_TEMP/gas-bundle.json"
           echo "GAS_BUNDLE_HASH=$(node -e "const b=require('fs').readFileSync(process.env.RUNNER_TEMP+'/gas-bundle.json','utf8'); const x=JSON.parse(b); const c=require('node:crypto'); const n=[...x.files].sort((a,b)=>a.name.localeCompare(b.name)); console.log(c.createHash('sha256').update(JSON.stringify(n)).digest('hex'))")" >> "$GITHUB_ENV"
 
-      - name: Establish expected live predecessor
+      - name: Authorize exact reviewed release
         env:
-          EXPECTED_INPUT: ${{ inputs.expected_live_bundle_hash }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_REF: ${{ inputs.release_ref }}
+          DESIRED_BUNDLE_HASH: ${{ inputs.desired_bundle_hash }}
+          EXPECTED_LIVE_BUNDLE_HASH: ${{ inputs.expected_live_bundle_hash }}
+          APPROVED_RELEASE: ${{ vars.GAS_APPROVED_RELEASE }}
         run: |
-          if [ -n "$EXPECTED_INPUT" ]; then
-            echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_INPUT" >> "$GITHUB_ENV"
-          else
-            echo 'No predecessor override supplied; deploy script will use the just-observed live predecessor.'
-          fi
+          node scripts/authorize-gas-release.mjs
+          echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_LIVE_BUNDLE_HASH" >> "$GITHUB_ENV"
 
       - name: Submit signed deployment and verify readback
         env:

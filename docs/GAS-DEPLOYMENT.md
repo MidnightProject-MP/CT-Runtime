@@ -98,3 +98,24 @@ release artifact.
 PR A does not add an autonomy activation route. Merging it must not enable the
 email runtime, install or modify triggers, expand Gmail consent, or mutate
 production Script Properties.
+# Reviewed release gate (PR split)
+
+Merging control-plane A or runtime B does **not** deploy anything. Main push
+deployment is removed. Only manual `gas-self-deploy.yml` is a supported release
+writer; legacy clasp deploy/push are explicitly disabled, including fallback
+source-only writes. Do not re-enable them to work around an HTTP 403.
+
+Dispatch the workflow at the full reviewed aggregate commit and supply that exact
+`release_commit`, a `refs/tags/gas-release/*` `release_ref` resolving to it, the
+canonical normalized desired bundle hash from the builder, and an independently
+freshly inspected expected live predecessor hash. The `gas-production` environment
+must approve this exact tuple in `GAS_APPROVED_RELEASE`:
+`<release_ref>:<commit>:<desired_hash>:<predecessor_hash>`. Missing/stale approval,
+wrong ref, wrong commit, wrong built hash, or a changed live predecessor fails
+closed. Environment protection/review and tag protection are operator prerequisites;
+this change does not configure cloud resources or repository environments.
+The shared production concurrency and signed compare-and-swap/readback remain.
+
+Pending: exact A sandbox signed-dispatch smoke, then final aggregate sandbox
+qualification recording commit/hash/version/deployment. Historical email activity
+does not prove signed dispatch; no split artifact is claimed live-qualified.
