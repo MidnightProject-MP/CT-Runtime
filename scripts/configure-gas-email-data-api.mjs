@@ -3,7 +3,7 @@
 import { Pool } from 'pg';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { validateTarget,loadManifest,bootstrap,readback } from './bootstrap-gas-email.mjs';
+import { targetFromEnv,validateTarget,loadManifest,bootstrap,readback } from './bootstrap-gas-email.mjs';
 export const INSTANCE={instance:'gas-vnext-email',project:'celestan-email',sub:'101290949094805660136',aud:'788761466843-bqaho4ssrgp2ahif41uacv3o832o7hoo.apps.googleusercontent.com',mailbox:'midnight.project.mp@gmail.com',sender:'midnightprojectantigravity@gmail.com',grant:'user-authorized:pr69:gas-text-only:v1'};
 export const DATA_API_URL=process.env.CT_EMAIL_DATA_API_URL||null;
 export async function probe(fetchImpl=fetch,kidOverride,baseUrl=DATA_API_URL){
@@ -76,7 +76,7 @@ export async function configure(pool,mode){
     const proof=await readback(c);await c.query('COMMIT');return {status:'restricted-and-registered-inactive',instance:INSTANCE,...proof};
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
 }
-async function main(){if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe()));return;}const target={host:process.env.CT_BOOTSTRAP_DATABASE_HOST,database:process.env.CT_BOOTSTRAP_DATABASE_NAME,owner:process.env.CT_BOOTSTRAP_DATABASE_OWNER};const url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});try{
+async function main(){if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe()));return;}const target=targetFromEnv(),url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});try{
   const id=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(id.db!==target.database||id.owner!==target.owner)throw new Error('wrong database');
   console.log(JSON.stringify({target,...await configure(pool,process.argv[2])}));
 }finally{await pool.end();}}
