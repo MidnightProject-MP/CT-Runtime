@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
 function fixture(overrides={}){
-  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'isolated-test.example',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'isolated-test-script',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
+  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'isolated-test.example',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'isolated-test-script',CT_VNEXT_EMAIL_APPROVED_MAILBOX:'midnight.project.mp@gmail.com',CT_VNEXT_EMAIL_APPROVED_SENDER:'midnightprojectantigravity@gmail.com',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
   const writes=[],logs=[],calls=[],responses={};let profile='midnight.project.mp@gmail.com',rpcFail=false,project='celestan-email',label=true,locked=false,writeMode='normal',readFailure=false,triggerFailure=false,lockFailure=false;
   const noEffect=()=>{throw new Error('forbidden setup effect');};
   const ctx=vm.createContext({console:{log:s=>logs.push(JSON.parse(s))},
@@ -27,7 +27,7 @@ test('no-argument preparation pins reviewed bindings, reuses exact model, logs r
   const f=fixture(),r=f.run();assert.equal(r.status,'prepared');assert.equal(r.enabled,false);assert.equal(r.model,'openrouter/vendor/exact-approved-model');assert.equal(r.project,'celestan-email');assert.equal(r.labelPresent,true);assert.equal(r.triggerCount,1);
   assert.equal(f.values.CT_VNEXT_EMAIL_ENABLED,'false');assert.equal(f.values.OPENROUTER_API_KEY,'test-secret-never-log');
   assert.equal(Object.keys(f.writes[0]).length,5);assert.equal(f.writes[0].CT_VNEXT_EMAIL_INSTANCE,'gas-vnext-email');
-  assert.equal(r.propertyCounts.total,Object.keys(f.values).length);assert.equal(r.propertyCounts.stable,8);
+  assert.equal(r.propertyCounts.total,Object.keys(f.values).length);assert.equal(r.propertyCounts.stable,10);
   assert.doesNotMatch(JSON.stringify(f.logs),/test-secret|private-value|PRIVATE_UNKNOWN_PROPERTY|private-oauth|private-identity/);
   f.values.CT_GAS_PROOF_MODEL='vendor/new-proof-model';assert.equal(f.run().model,r.model,'already configured exact selection wins');assert.equal(f.writes.length,2);
   f.values.CT_VNEXT_EMAIL_ENABLED='true';assert.throws(()=>f.run(),/binding conflict/);assert.equal(f.writes.length,2);assert.equal(f.values.CT_VNEXT_EMAIL_ENABLED,'true');
@@ -95,7 +95,7 @@ test('property inventory emits a sanitized log and keeps cleanup fail-closed',()
   assert.equal(f.logs.length,1);
   assert.deepEqual(f.logs[0],JSON.parse(JSON.stringify(result)));
   assert.equal(result.total,Object.keys(f.values).length);
-  assert.equal(result.counts.stable,8);
+  assert.equal(result.counts.stable,10);
   assert.equal(result.counts.legacy_runtime,0);
   assert.equal(result.counts.unknown,3);
   assert.ok(result.properties.some(p=>p.name==='OPENROUTER_API_KEY'&&p.classification==='stable'));
