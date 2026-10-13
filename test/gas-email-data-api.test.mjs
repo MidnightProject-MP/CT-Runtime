@@ -2,19 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testPool } from './pilot-test-pool.mjs';
 import { bootstrap } from '../scripts/bootstrap-gas-email.mjs';
-import { configure,INSTANCE,probe,instanceFromEnv } from '../scripts/configure-gas-email-data-api.mjs';
+import { configure as configureRegistration,probe,instanceFromEnv } from '../scripts/configure-gas-email-data-api.mjs';
 const DATA_API_URL='https://isolated-test.example/data-api';
+const INSTANCE=instanceFromEnv({CT_EMAIL_INSTANCE_ID:'test-instance',CT_EMAIL_PROJECT_ID:'isolated-project',CT_EMAIL_JWT_SUB:'1234567890123',CT_EMAIL_JWT_AUD:'test-audience.apps.googleusercontent.com',CT_EMAIL_MAILBOX:'gas-test@example.test',CT_EMAIL_ALLOWED_SENDER:'sender-test@example.test',CT_EMAIL_GRANT_REF:'owner-approved:test-only'});
+const configure=(pool,mode)=>configureRegistration(pool,mode,INSTANCE);
 test('isolated registration identity requires explicit values and supports a test mailbox',()=>{
   assert.throws(()=>instanceFromEnv({}),/explicit email registration identity required/);
   const identity=instanceFromEnv({CT_EMAIL_INSTANCE_ID:'test-instance',CT_EMAIL_PROJECT_ID:'isolated-project',CT_EMAIL_JWT_SUB:'1234567890123',CT_EMAIL_JWT_AUD:'test-audience.apps.googleusercontent.com',CT_EMAIL_MAILBOX:'gas-test@example.test',CT_EMAIL_ALLOWED_SENDER:'sender-test@example.test',CT_EMAIL_GRANT_REF:'owner-approved:test-only'});
   assert.deepEqual(identity,{instance:'test-instance',project:'isolated-project',sub:'1234567890123',aud:'test-audience.apps.googleusercontent.com',mailbox:'gas-test@example.test',sender:'sender-test@example.test',grant:'owner-approved:test-only'});
 });
 test('HTTP negative probes are pinned, read-only health calls and never report response/token content',async()=>{
-  const requests=[];const result=await probe(async(url,opts)=>{requests.push({url,opts});return {status:401,body:{cancel:async()=>{}}};},'test-google-kid',DATA_API_URL);
+  const requests=[];const result=await probe(async(url,opts)=>{requests.push({url,opts});return {status:401,body:{cancel:async()=>{}}};},'test-google-kid',DATA_API_URL,INSTANCE);
   assert.equal(requests.length,2);assert.ok(requests.every(r=>r.url===DATA_API_URL+'/rpc/gas_email_rpc'&&JSON.parse(r.opts.body).p_operation==='health'));
   assert.equal(result.matchingGoogleToken,'not-available-not-tested');assert.doesNotMatch(JSON.stringify(result),/invalid-signature\./);
-  await assert.rejects(probe(async()=>({status:200}),'test-google-kid',DATA_API_URL),/unexpected/);
-  const rejected=await probe(async(url,opts)=>({status:400,text:async()=>opts.headers.Authorization?'SignatureError':'Missing required Authorization JWT token'}),'test-google-kid',DATA_API_URL);
+  await assert.rejects(probe(async()=>({status:200}),'test-google-kid',DATA_API_URL,INSTANCE),/unexpected/);
+  const rejected=await probe(async(url,opts)=>({status:400,text:async()=>opts.headers.Authorization?'SignatureError':'Missing required Authorization JWT token'}),'test-google-kid',DATA_API_URL,INSTANCE);
   assert.equal(rejected.probes[1].denial,'gateway-invalid-signature');
 });
 test('explicit role handoff preserves bootstrap identities and restores sole RPC grant with inactive exact registration',{timeout:60000},async()=>{
@@ -35,8 +37,8 @@ test('explicit role handoff preserves bootstrap identities and restores sole RPC
       for(const aud of [INSTANCE.aud,'wrong-audience']){
         await c.query('BEGIN');await c.query('UPDATE gas_email_instances SET active=true');
         await c.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify({sub:INSTANCE.sub,aud,iss:'https://accounts.google.com',exp:4102444800})]);
-        if(aud===INSTANCE.aud){const h=await c.query("SELECT gas_email_rpc('gas-vnext-email','health','{}') AS health");assert.equal(h.rows[0].health.project,'celestan-email');}
-        else await assert.rejects(c.query("SELECT gas_email_rpc('gas-vnext-email','health','{}')"),/principal denied/);
+        if(aud===INSTANCE.aud){const h=await c.query("SELECT gas_email_rpc($1,'health','{}') AS health",[INSTANCE.instance]);assert.equal(h.rows[0].health.project,INSTANCE.project);}
+        else await assert.rejects(c.query("SELECT gas_email_rpc($1,'health','{}')",[INSTANCE.instance]),/principal denied/);
         await c.query('ROLLBACK');
       }
     }finally{c.release();}
