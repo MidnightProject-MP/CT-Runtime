@@ -183,7 +183,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
     });
     await t.test('a later Gmail intake page prevents admission until unseen correction is ingested',()=>{
       reset();const f=fixture();f.add('original');f.loseNextCheckpoint();assert.equal(f.tick().status,'blocked');
-      f.add('page1');f.add('page2');f.add('page3');f.add('correction','thread1','Use the corrected requirement.');
+      f.add('page1');f.messages.get('page1').padding='x'.repeat(250001);f.add('page2','thread1','unsupported','attacker@example.com');f.add('page3','thread1','invalid\u0000body');f.add('correction','thread1','Use the corrected requirement.');
       f.paginateIntakeOnce();
       assert.equal(f.tick().status,'intake-unavailable');assert.equal(f.sends,0);
       assert.equal(sql("SELECT state FROM gas_email_outbox")[0].state,'pending');
