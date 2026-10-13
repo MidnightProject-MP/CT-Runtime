@@ -240,7 +240,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
       return {status:Date.now()<deadline-20000?deliver(c,false,trace):'checkpointed'};
     }catch(e){trace.failure=safeFailure(e);return {status:'blocked',reason:'email-operation-failed'};}finally{lock.releaseLock();}
   }
-  var PREPARE_REASONS=['prepare: wrong execution mailbox','prepare: set CT_VNEXT_EMAIL_MODEL to an explicit approved provider/model','prepare: project mismatch','existing binding conflict; explicit owner review required','existing OpenRouter secret required','email grant not ready','prepare: property readback mismatch'];
+  var PREPARE_REASONS=['prepare: wrong execution mailbox','prepare: set CT_VNEXT_EMAIL_MODEL to an explicit approved provider/model','prepare: project mismatch','prepare: project identity missing','prepare: approved script identity mismatch','prepare: explicit instance, approved HTTPS data API URL and queue label are required','existing binding conflict; explicit owner review required','existing OpenRouter secret required','email grant not ready','prepare: property readback mismatch'];
   function safeFailure(e){
     var f=e&&e.emailFailure||{},classes=['transport-error','response-too-large','invalid-json','authentication-denied','authorization-denied','rate-limited','provider-unavailable','http-error'];
     var reason=PREPARE_REASONS.indexOf(e&&e.message)>=0?e.message:null;
