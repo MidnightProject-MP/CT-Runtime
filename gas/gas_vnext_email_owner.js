@@ -1,7 +1,7 @@
 /* Owner-only controls. Resolve runtime dependencies only when invoked, never at GAS cold load. */
 var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   function deps(){if(typeof CT_GAS_VNEXT_EMAIL==='undefined'||!CT_GAS_VNEXT_EMAIL.owner)throw new Error('email runtime module unavailable');return CT_GAS_VNEXT_EMAIL.owner;}
-  var CONFIG=['CT_VNEXT_EMAIL_ENABLED','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_MODEL','CT_VNEXT_EMAIL_LABEL','OPENROUTER_API_KEY'];
+  var CONFIG=['CT_VNEXT_EMAIL_ENABLED','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_MODEL','CT_VNEXT_EMAIL_LABEL','OPENROUTER_API_KEY','CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID'];
   var MAILBOX='midnight.project.mp@gmail.com', SENDER='midnightprojectantigravity@gmail.com';
   function props(){return deps().props();} function config(x){return deps().config(x);}
   function hostAllowed(url,approved){var m=String(url||'').match(/^https:\/\/([^\/?#]+)(?:\/|$)/);return !!m&&m[1].indexOf('@')<0&&typeof approved==='string'&&approved.length>0&&m[1].toLowerCase()===approved.toLowerCase();}
