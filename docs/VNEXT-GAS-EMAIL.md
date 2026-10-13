@@ -42,7 +42,7 @@ state `review`, never `terminal`. There is deliberately no client-controlled
 terminal-authorization flag or automatic terminal promotion. Human follow-up in
 the same thread reopens the existing Work Unit.
 
-The data API endpoint is no longer pinned to one Neon instance or one Apps Script ID. Before owner configuration, set `CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST` to the exact hostname (hostname only, no scheme/path/userinfo). `CT_VNEXT_EMAIL_DATA_API_URL` must use HTTPS and match that approved host exactly; the runtime refuses to send its Google identity token to a different host. The instance, URL, model, and queue label must be supplied as explicit owner configuration. This is target binding, not proof of deployment qualification.
+The data API endpoint is no longer pinned to one Neon instance or one Apps Script ID. Before owner configuration, set `CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST` to the exact hostname (hostname only, no scheme/path/userinfo) and `CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID` to the exact intended Apps Script ID. `CT_VNEXT_EMAIL_DATA_API_URL` must use HTTPS and match the separately approved host exactly; the runtime refuses to send its Google identity token to a different host. Owner preparation and activation reject a script whose ID does not match the separately approved ID. The instance, URL, model, and queue label must be supplied as explicit owner configuration. These are target-binding checks, not proof of deployment qualification.
 
 Mailbox is fixed to `midnight.project.mp@gmail.com`; allowed From is fixed to
 `midnightprojectantigravity@gmail.com`. GAS verifies its actual Gmail profile and
