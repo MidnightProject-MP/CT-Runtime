@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
-import { TARGET,validateTarget,loadManifest,readback } from './bootstrap-gas-email.mjs';
+import { targetFromEnv,validateTarget,loadManifest,readback } from './bootstrap-gas-email.mjs';
 export const UPGRADE='002_delivery_provider_receipts';
 export const UPGRADES=[UPGRADE,'003_model_diagnostics'];
 export async function upgradeDelivery(pool,{apply=false}={}){
@@ -30,7 +30,7 @@ export async function upgradeDelivery(pool,{apply=false}={}){
 }
 async function main(){
  const mode=process.argv[2];if(!['inspect','apply'].includes(mode)||process.argv.length!==3)throw new Error('explicit mode required');
- const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000});
- try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await upgradeDelivery(pool,{apply:mode==='apply'})}));}finally{await pool.end();}
+ const target=targetFromEnv(),pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),max:1,connectionTimeoutMillis:15000});
+ try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==target.database||r.owner!==target.owner)throw new Error('wrong target');console.log(JSON.stringify({target,...await upgradeDelivery(pool,{apply:mode==='apply'})}));}finally{await pool.end();}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Delivery upgrade failed or uncertain; inspect before retry. Credentials and SQL errors withheld.');process.exitCode=1;});
