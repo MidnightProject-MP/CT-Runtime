@@ -48,7 +48,7 @@ test('preflight is metadata-only; same canonical hashing binds preparation and r
 });
 test('legacy clasp deployment path remains retired until it implements canonical release authorization',async()=>{
   const w=await readFile(new URL('../.github/workflows/gas-clasp-deploy.yml',import.meta.url),'utf8');
-  assert.match(w,/jobs:[\\s\\S]*?deploy:[\\s\\S]*?if: \\$\\{\\{ false \\}\\}/);
+  assert.match(w,/jobs:[\s\S]*?deploy:[\s\S]*?if: \$\{\{ false \}\}/);
   assert.match(w,/Retired: bypasses canonical predecessor comparison and signed readback/);
   assert.match(w,/Re-enable only with the same reviewed release gate and fresh CAS as self-deploy/);
   assert.match(w,/clasp push --force/);
