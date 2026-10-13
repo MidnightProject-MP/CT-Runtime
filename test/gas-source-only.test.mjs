@@ -67,7 +67,7 @@ test('explicit owner configuration is disabled, grant-checked, fixed-field and r
   const ctx=vm.createContext({LockService:{getScriptLock:()=>({waitLock(){},releaseLock(){}})},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperties:(v,remove)=>{assert.equal(remove,false);writes.push(v);Object.assign(props,v);}})},ScriptApp:{getIdentityToken:()=> 'private-google-token'},UrlFetchApp:{fetch:()=>({getResponseCode:()=>200,getContentText:()=>JSON.stringify(health)})}});
   vm.runInContext(source,ctx);assert.equal(writes.length,0);
   const c={instance:'reviewed',url:'https://reviewed.neon.tech',model:'vendor/explicit-model',label:'Celestan'};
-  for(const bad of [null,{...c,enabled:true},{...c,url:'https://attacker.invalid'},{...c,model:''},{...c,label:'bad\nlabel'}])assert.throws(()=>ctx.configureVnextEmailRuntime(bad),/bindings/);
+  for(const bad of [null,{...c,enabled:true},{...c,url:'http://attacker.invalid'},{...c,model:''},{...c,label:'bad\nlabel'}])assert.throws(()=>ctx.configureVnextEmailRuntime(bad),/bindings/);
   health.blocked=true;assert.throws(()=>ctx.configureVnextEmailRuntime(c),/grant not ready/);health.blocked=false;
   health.instance='other';assert.throws(()=>ctx.configureVnextEmailRuntime(c),/grant not ready/);health.instance='reviewed';
   assert.equal(writes.length,0);assert.deepEqual(Object.keys(props),['OPENROUTER_API_KEY']);
