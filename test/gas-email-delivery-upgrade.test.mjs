@@ -52,7 +52,7 @@ test('forward delivery upgrade preserves bootstrap and scoped owner repair is at
   await pool.query("INSERT INTO vnext_project_reconciliation_blocks(project_id,work_unit_id,execution_id,fence,reason) VALUES($1,$2,$3,1,'external-effect-uncertain')",[REPAIR.project,work,REPAIR.execution]);
   const inspect=await repairDelivery(pool);assert.equal(inspect.status,'repair-ready');
   assert.equal(inspect.evidence.automaticIdentityVerified,false);
-  for(const options of [{apply:true},{apply:true,expectedSnapshot:inspect.snapshot},{apply:true,deployed:true,expectedSnapshot:'wrong'}])await assert.rejects(repairDelivery(pool,options));
+  for(const options of [{apply:true},{apply:true,expectedSnapshot:inspect.snapshot},{apply:true,deploymentAttestation:'https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/123456789',expectedSnapshot:'wrong'}])await assert.rejects(repairDelivery(pool,options));
   await pool.query("UPDATE gas_email_outbox SET envelope=jsonb_set(envelope,'{subject}','\"87654321\"')");
   await assert.rejects(repairDelivery(pool,{apply:true,deployed:true,expectedSnapshot:inspect.snapshot}));
   await pool.query('UPDATE gas_email_outbox SET envelope=$1',[JSON.stringify(e)]);
