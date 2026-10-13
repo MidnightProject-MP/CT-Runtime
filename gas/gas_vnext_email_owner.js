@@ -56,15 +56,17 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     console.log(JSON.stringify(out));return out;
   }
   function install() {
-    var c=config(true);if(!c)throw new Error('email must be explicitly enabled before installation');
-    if(address(api('profile').emailAddress)!==mailbox())throw new Error('wrong execution mailbox');
-    var h=rpc(c,'health');if(h.mailbox!==mailbox()||h.allowed_sender!==sender())throw new Error('email registration mismatch');
-    var all=ScriptApp.getProjectTriggers();
-    if(all.some(function(t){return t.getHandlerFunction()!=='vnextEmailTick';}))throw new Error('other triggers require explicit cutover review');
-    var triggers=all.filter(function(t){return t.getHandlerFunction()==='vnextEmailTick';});
-    if(triggers.length>1)throw new Error('duplicate email triggers require manual reconciliation');
-    if(!triggers.length)createEmailTrigger();
-    return {status:'installed'};
+    return setupLock(function(){
+      var c=config(true);if(!c)throw new Error('email must be explicitly enabled before installation');
+      if(address(api('profile').emailAddress)!==mailbox())throw new Error('wrong execution mailbox');
+      var h=rpc(c,'health');if(h.mailbox!==mailbox()||h.allowed_sender!==sender())throw new Error('email registration mismatch');
+      var all=ScriptApp.getProjectTriggers();
+      if(all.some(function(t){return t.getHandlerFunction()!=='vnextEmailTick';}))throw new Error('other triggers require explicit cutover review');
+      var triggers=all.filter(function(t){return t.getHandlerFunction()==='vnextEmailTick';});
+      if(triggers.length>1)throw new Error('duplicate email triggers require manual reconciliation');
+      if(!triggers.length)createEmailTrigger();
+      return {status:'installed'};
+    });
   }
   function inventory() {
     var names=Object.keys(props().getProperties()).sort(),counts={stable:0,legacy_runtime:0,unknown:0};
