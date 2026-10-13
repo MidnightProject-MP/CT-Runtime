@@ -21,7 +21,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     }
     try{
       c=config(false);
-       !hostAllowed(input.url,p.getProperty('CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST'))||
+       if(!hostAllowed(c.url,props().getProperty('CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST')))throw new Error('data API endpoint is not explicitly approved');
       out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
       out.stage='data-api-health';var h=rpc(c,'health');
       if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref)throw new Error('wrong grant');
@@ -77,7 +77,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     var p=props();
     if(!input||Object.keys(input).sort().join(',')!=='instance,label,model,url'||
        !/^[A-Za-z0-9_-]{1,100}$/.test(input.instance||'')||
-       !/^https:\/\/[^\s/?#]+(?:\/[A-Za-z0-9._~!!/^https:\/\/[A-Za-z0-9.-]+\.neon\.tech(?:\/[A-Za-z0-9._/-]*)?$/.test(input.url||'')'()*+,;=:@%-]*)*$/.test(input.url||'')||
+        !hostAllowed(input.url,p.getProperty('CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST'))||
        !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(input.model||'')||
        typeof input.label!=='string'||!input.label.trim()||input.label.length>100||/[\x00-\x1f]/.test(input.label))throw new Error('invalid explicit email bindings');
     if(!p.getProperty('OPENROUTER_API_KEY'))throw new Error('existing OpenRouter secret required');
