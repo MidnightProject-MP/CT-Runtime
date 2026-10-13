@@ -19,13 +19,13 @@ test('actual production bundle is inert and dispatches identically in independen
     const shuffled=seed=>{const a=[...files];for(let n=a.length-1;n>0;n--){seed=(seed*1664525+1013904223)>>>0;const j=seed%(n+1);[a[n],a[j]]=[a[j],a[n]];}return a;};
     const orders=[files,[...files].reverse(),shuffled(1),shuffled(43),shuffled(2026)];
     for(const order of orders)for(const concatenate of [false,true]){
-      let loading=true,serviceCalls=0,federationCalls=0,nonce=0;
+      let loading=true,serviceCalls=0,federationCalls=0,nonce=0,failNextLog=false,failNextTracePropertyRead=false;
       const values={CT_GAS_DEPLOYMENT_ID:'deployment',CT_GAS_DEPLOY_HMAC_SECRET:'test-deploy-secret'},logs=[];
       const guard=()=>{assert.equal(loading,false,'no service calls during global initialization');serviceCalls++;};
       const forbidden=new Proxy({},{get(){guard();throw new Error('unexpected effect');}});
       const contentFiles=[{name:'appsscript',type:'JSON',source:'{}'},{name:'main',type:'SERVER_JS',source:'function example(){}'}];
-      const ctx=vm.createContext({console:{log:s=>{guard();logs.push(JSON.parse(s));}},
-        PropertiesService:{getScriptProperties(){guard();return {getProperty:k=>values[k]??null,getProperties:()=>({...values}),setProperty:(k,v)=>{values[k]=v;},deleteProperty:k=>{delete values[k];}};}},
+      const ctx=vm.createContext({console:{log:s=>{guard();if(failNextLog){failNextLog=false;throw new Error('logger unavailable');}logs.push(JSON.parse(s));}},
+        PropertiesService:{getScriptProperties(){guard();return {getProperty:k=>{if(failNextTracePropertyRead&&k==='CT_GAS_DEPLOY_HMAC_SECRET'){failNextTracePropertyRead=false;throw new Error('trace property read unavailable');}return values[k]??null;},getProperties:()=>({...values}),setProperty:(k,v)=>{values[k]=v;},deleteProperty:k=>{delete values[k];}};}},
         ScriptApp:{getScriptId(){guard();return 'script';},getOAuthToken(){guard();return 'test-oauth';},getIdentityToken(){guard();return 'header.'+Buffer.from(JSON.stringify({sub:'owner-sub',aud:'google-aud'})).toString('base64url')+'.signature';}},
         LockService:{getScriptLock(){guard();return {waitLock(){},releaseLock(){}};}},
         SpreadsheetApp:forbidden,DriveApp:forbidden,GmailApp:forbidden,
@@ -52,6 +52,17 @@ test('actual production bundle is inert and dispatches identically in independen
       ctx.CT_GAS_FEDERATION.ingest=()=>({status:'evidence-ok'});
       const q=call('self-deploy-qualify',{files:contentFiles});
       assert.equal(q.status,'qualified');assert.equal(q.desiredBundleHash,digest(JSON.stringify(contentFiles)));
+      // Diagnostic failures are observational only: a valid request still reaches
+      // the real authenticator and the authenticator remains responsible for rejection.
+      failNextLog=true;assert.equal(call('self-deploy-qualify',{files:contentFiles}).status,'qualified');
+      failNextTracePropertyRead=true;assert.equal(call('self-deploy-qualify',{files:contentFiles}).status,'qualified');
+      const logsBeforeOversize=logs.length;
+      const oversized=JSON.parse(ctx.doPost({postData:{contents:'x'.repeat(3*1024*1024+1)},parameter:{}}).getContent());
+      assert.equal(oversized.status,'rejected');assert.equal(oversized.reason,'request-body-too-large');
+      assert.equal(logs.length,logsBeforeOversize,'oversized request must be rejected before tracing');
+      const oversizedFederation=JSON.parse(ctx.doPost({postData:{contents:JSON.stringify({operation:'advisory',payload:'x'.repeat(9000)})},parameter:{}}).getContent());
+      assert.equal(oversizedFederation.status,'rejected');assert.equal(oversizedFederation.reason,'federation-body-too-large');
+      assert.equal(logs.length,logsBeforeOversize,'federation traffic must not enter deployment tracing');
       assert.equal(q.diagnostic_id,'correlated');assert.equal(federationCalls,0);
       assert.ok(logs.some(l=>l.stage==='received'));assert.ok(logs.some(l=>l.stage==='authenticated'));
       assert.equal(call('self-deploy-qualify',{},true).status,'rejected');assert.equal(federationCalls,0);
