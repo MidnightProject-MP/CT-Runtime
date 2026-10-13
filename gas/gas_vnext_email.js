@@ -81,7 +81,8 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function poll(c,deadline,trace) {
     var complete=true;
     var label=(api('labels').labels||[]).filter(function(x){return x.name===c.label;})[0];if(!label)throw new Error('email queue label missing');
-    var refs=api('messages?labelIds='+encodeURIComponent(label.id)+'&maxResults=3').messages||[];
+    var page=api('messages?labelIds='+encodeURIComponent(label.id)+'&maxResults=3');
+    var refs=page.messages||[],hasNextPage=!!page.nextPageToken;
     for(var n=0;n<refs.length&&Date.now()<deadline;n++){
       var id=refs[n].id;
       try{
@@ -109,7 +110,10 @@ var CT_GAS_VNEXT_EMAIL = (function () {
         if(trace)trace.intakeFailure=safeFailure(err);
       }
     }
-    return complete&&n===refs.length;
+    // A page token means intake is incomplete even if every visible message succeeded.
+    // Successfully handled messages lose the queue label, so the next bounded tick
+    // can advance to the next page. Never admit a reply while later input is unseen.
+    return complete&&!hasNextPage&&n===refs.length;
   }
   function model(c,claim,deadline) {
     var meta={};
