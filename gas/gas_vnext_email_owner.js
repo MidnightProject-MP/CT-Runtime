@@ -42,22 +42,6 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function setupLock(fn){var lock=LockService.getScriptLock();lock.waitLock(10000);try{return fn();}finally{lock.releaseLock();}}
   function configure(input){return setupLock(function(){return configureChecked(input);});}
-  var PREPARE_REASONS=['prepare: wrong execution mailbox','prepare: set CT_VNEXT_EMAIL_MODEL to an explicit approved provider/model','prepare: project mismatch','existing binding conflict; explicit owner review required','existing OpenRouter secret required','email grant not ready','prepare: property readback mismatch'];
-  function safeFailure(e){
-    var f=e&&e.emailFailure||{},classes=['transport-error','response-too-large','invalid-json','authentication-denied','authorization-denied','rate-limited','provider-unavailable','http-error'];
-    var reason=PREPARE_REASONS.indexOf(e&&e.message)>=0?e.message:null;
-    var out={classification:classes.indexOf(f.classification)>=0?f.classification:reason?'readiness-rejected':'unclassified-error',httpStatus:Number.isInteger(f.httpStatus)&&f.httpStatus>=100&&f.httpStatus<=599?f.httpStatus:null,providerReason:PROVIDER_REASONS.indexOf(f.providerReason)>=0?f.providerReason:null,sqlState:SQL_STATES.indexOf(f.sqlState)>=0?f.sqlState:null};
-    var m=e&&e.modelFailure||{};
-    if(['budget-before','budget-after','embedded-provider-error','missing-choice','missing-content','empty-content','truncated','content-filter','non-json','malformed-contract','field-bounds','utf8-byte-bounds','invalid-text'].indexOf(m.code)>=0){
-      out.classification='model-validation';out.code=m.code;if(m.httpStatus===200)out.httpStatus=200;
-      if(['stop','length','content_filter','tool_calls','function_call','unknown'].indexOf(m.finishReason)>=0)out.finishReason=m.finishReason;
-      ['choicePresent','contentPresent'].forEach(function(k){if(typeof m[k]==='boolean')out[k]=m[k];});
-      ['contentChars','contractBytes'].forEach(function(k){if(Number.isInteger(m[k])&&m[k]>=0&&m[k]<=1000000)out[k]=m[k];});
-    }
-    if(reason)out.reason=reason;
-    if(['serviceDisabled','accessNotConfigured','SERVICE_DISABLED'].indexOf(out.providerReason)>=0)out.projectNumber='788761466843';
-    return out;
-  }
   function preparation(mutate){
     var stages=[],failed=false,firstReason=null,lock,locked=false,desired=null,summary={},properties={},preparedMatch=null,writeAttempted=false,readbackConfirmed=false,p,snapshot,model;
     function stage(name,fn){try{var v=fn();stages.push({stage:name,status:'ok'});return {ok:true,value:v};}catch(e){var detail=safeFailure(e);stages.push(Object.assign({stage:name,status:'failed'},detail));failed=true;if(!firstReason)firstReason=detail.reason||'prepare: readiness/configuration outcome unavailable; inspect before retry';return {ok:false};}}
