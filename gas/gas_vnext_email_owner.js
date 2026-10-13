@@ -74,6 +74,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function health(){return rpc(config(false),'health');}
   function configureChecked(input,inspectReady){
+     if(props().getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID')!==ScriptApp.getScriptId())throw new Error('approved script identity mismatch');
     var p=props();
     if(!input||Object.keys(input).sort().join(',')!=='instance,label,model,url'||
        !/^[A-Za-z0-9_-]{1,100}$/.test(input.instance||'')||
@@ -91,6 +92,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function setupLock(fn){var lock=LockService.getScriptLock();lock.waitLock(10000);try{return fn();}finally{lock.releaseLock();}}
   function configure(input){return setupLock(function(){return configureChecked(input);});}
+     // The owner must explicitly pin this script before any property preparation write.
   function preparation(mutate){
     var stages=[],failed=false,firstReason=null,lock,locked=false,desired=null,summary={},properties={},preparedMatch=null,writeAttempted=false,readbackConfirmed=false,p,snapshot,model;
     function stage(name,fn){try{var v=fn();stages.push({stage:name,status:'ok'});return {ok:true,value:v};}catch(e){var detail=safeFailure(e);stages.push(Object.assign({stage:name,status:'failed'},detail));failed=true;if(!firstReason)firstReason=detail.reason||'prepare: readiness/configuration outcome unavailable; inspect before retry';return {ok:false};}}
@@ -103,6 +105,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
       if(locked){
         var profile=stage('gmail-profile',function(){if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('prepare: wrong execution mailbox');});
         var propertyRead=stage('property-read',function(){p=props();snapshot=p.getProperties();summary.propertyCounts=countsOf(snapshot);CONFIG.forEach(function(k){properties[k]={present:!!snapshot[k]};});});
+     var approvedScriptId=stage('approved-script-identity',function(){var expected=p&&p.getProperty?p.getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID'):props().getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID');if(expected!==ScriptApp.getScriptId())throw new Error('prepare: approved script identity mismatch');return expected;});
         var modelCheck={ok:false};
         if(propertyRead.ok){
           modelCheck=stage('model-config',function(){
@@ -142,7 +145,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function activate(){
     var stage='feedback-diagnostic',p,mutated=false,retired=0,creationAttempted=false,counts=null,model=null,result;
-    try{
+       if(!feedback||typeof feedback.script_id!=='string'||!feedback.script_id||ScriptApp.getScriptId()!==feedback.script_id||props().getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID')!==ScriptApp.getScriptId())throw new Error('activation-script-mismatch');
       // Reality first, read-only: no Feedback setup, Sheets reads or legacy ledger.
       var feedback=diagnoseFeedbackInbox();
       if(!feedback||typeof feedback.script_id!=='string'||!feedback.script_id||ScriptApp.getScriptId()!==feedback.script_id)throw new Error('activation-script-mismatch');
