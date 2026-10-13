@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { TARGET,validateTarget } from './bootstrap-gas-email.mjs';
+import { targetFromEnv,validateTarget } from './bootstrap-gas-email.mjs';
 import { modelFailureMetadata } from './model-failure-metadata.mjs';
 const INSTANCE='gas-vnext-email',PROJECT='celestan-email';
 const stamp=v=>{const d=new Date(v);return v!=null&&!Number.isNaN(d.valueOf())?d.toISOString():null;};
@@ -50,7 +50,7 @@ export async function inspectRuntime(pool){
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
 }
 async function main(){
-  const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000,statement_timeout:15000});
-  try{const r=await pool.query('SELECT current_database() AS database,current_user AS owner');if(r.rows[0].database!==TARGET.database||r.rows[0].owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await inspectRuntime(pool)}));}finally{await pool.end();}
+  const target=targetFromEnv(),pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),max:1,connectionTimeoutMillis:15000,statement_timeout:15000});
+  try{const r=await pool.query('SELECT current_database() AS database,current_user AS owner');if(r.rows[0].database!==target.database||r.rows[0].owner!==target.owner)throw new Error('wrong target');console.log(JSON.stringify({target,...await inspectRuntime(pool)}));}finally{await pool.end();}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Read-only email status unavailable; credentials and query errors withheld.');process.exitCode=1;});
