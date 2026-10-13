@@ -23,7 +23,7 @@ function fixture(){
   // Actual legacy read-only diagnostic and retirement function, not a stub.
   for(const f of ['gas_trigger.js','gas_vnext_email.js','gas_vnext_email_owner.js'])vm.runInContext(readFileSync(new URL('../gas/'+f,import.meta.url),'utf8'),ctx);
   assert.equal(effects.length,0);assert.equal(calls.length,0);load=false;
-  return {values,effects,logs,calls,run:()=>ctx.activateVnextEmailRuntime(),pause:()=>ctx.pauseVnextEmailRuntime(),legacy:()=>ctx.gasSafetyWake(),labels:v=>{labels=v;},mailbox:v=>{mailbox=v;},script:v=>{scriptId=v;},handlers:names=>{triggers=names.map(t);},createMode:v=>{createMode=v;},writeFault:k=>{writeFault=k;},deleteFailure:()=>{deleteFails=true;},block:()=>{blocked=true;},handlersNow:()=>triggers.map(t=>t.getHandlerFunction())};
+  return {values,effects,logs,calls,run:()=>ctx.activateVnextEmailRuntime(),install:()=>ctx.installVnextEmailTrigger(),inventory:()=>ctx.inventoryVnextEmailProperties(),pause:()=>ctx.pauseVnextEmailRuntime(),legacy:()=>ctx.gasSafetyWake(),labels:v=>{labels=v;},mailbox:v=>{mailbox=v;},script:v=>{scriptId=v;},handlers:names=>{triggers=names.map(t);},createMode:v=>{createMode=v;},writeFault:k=>{writeFault=k;},deleteFailure:()=>{deleteFails=true;},block:()=>{blocked=true;},handlersNow:()=>triggers.map(t=>t.getHandlerFunction())};
 }
 test('owner activation retires exact legacy future wake and creates one five-minute email trigger idempotently',()=>{
   const f=fixture(),r=f.run();assert.equal(r.status,'active');assert.equal(r.enabled,true);assert.equal(r.retiredLegacyCount,1);assert.equal(r.inFlightLegacyCancelled,false);
@@ -44,4 +44,17 @@ test('ambiguous create reconciles one visible trigger or disables without retry;
   for(const mode of ['before','duplicate']){const f=fixture();f.createMode(mode);const r=f.run();assert.equal(r.status,'blocked');assert.equal(r.disabledConfirmed,true);assert.equal(f.values.CT_VNEXT_EMAIL_ENABLED,'false');assert.equal(f.effects.filter(x=>x[0]==='create-trigger').length,1);assert.doesNotMatch(JSON.stringify(f.logs),/private-error/);}
   const f=fixture();f.deleteFailure();assert.equal(f.run().status,'blocked');assert.equal(f.values.CT_GAS_SAFETY_TRIGGER,'present');assert.equal(f.values.CT_VNEXT_EMAIL_ENABLED,'false');assert.equal(f.effects.filter(x=>x[0]==='create-trigger').length,0);
   for(const key of ['CT_AUTONOMY_MODE','CT_VNEXT_EMAIL_ENABLED']){const failed=fixture();failed.writeFault(key);const r=failed.run();assert.equal(r.status,'blocked');assert.equal(r.disabledConfirmed,true);assert.equal(failed.values.CT_VNEXT_EMAIL_ENABLED,'false');assert.equal(failed.effects.filter(x=>x[0]==='create-trigger').length,key==='CT_AUTONOMY_MODE'?0:1);assert.doesNotMatch(JSON.stringify(failed.logs),/private-write-response/);}
+});
+
+test('property inventory is read-only and lower-level installation remains explicit and idempotent',()=>{
+  const f=fixture();
+  const inventory=f.inventory();
+  assert.equal(inventory.counts.stable,10);
+  assert.equal(inventory.cleanup_apply_available,false);
+  assert.equal(f.effects.length,0);
+  f.handlers([]);f.values.CT_VNEXT_EMAIL_ENABLED='true';
+  assert.equal(f.install().status,'installed');
+  assert.deepEqual(f.handlersNow(),['vnextEmailTick']);
+  assert.equal(f.install().status,'installed');
+  assert.equal(f.effects.filter(x=>x[0]==='create-trigger').length,1);
 });
