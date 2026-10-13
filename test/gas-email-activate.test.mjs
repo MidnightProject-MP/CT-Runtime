@@ -46,6 +46,7 @@ test('ambiguous create reconciles one visible trigger or disables without retry;
   for(const key of ['CT_AUTONOMY_MODE','CT_VNEXT_EMAIL_ENABLED']){const failed=fixture();failed.writeFault(key);const r=failed.run();assert.equal(r.status,'blocked');assert.equal(r.disabledConfirmed,true);assert.equal(failed.values.CT_VNEXT_EMAIL_ENABLED,'false');assert.equal(failed.effects.filter(x=>x[0]==='create-trigger').length,key==='CT_AUTONOMY_MODE'?0:1);assert.doesNotMatch(JSON.stringify(failed.logs),/private-write-response/);}
 });
 
+// The low-level installer is a separate explicit owner operation; activation has stricter disabled-first guarantees.
 test('property inventory is read-only and lower-level installation remains explicit and idempotent',()=>{
   const f=fixture();
   const inventory=f.inventory();
