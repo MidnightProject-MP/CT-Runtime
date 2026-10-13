@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
 function fixture(overrides={}){
-  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
+  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'isolated-test.example',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
   const writes=[],logs=[],calls=[],responses={};let profile='midnight.project.mp@gmail.com',rpcFail=false,project='celestan-email',label=true,locked=false,writeMode='normal',readFailure=false,triggerFailure=false,lockFailure=false;
   const noEffect=()=>{throw new Error('forbidden setup effect');};
   const ctx=vm.createContext({console:{log:s=>logs.push(JSON.parse(s))},
