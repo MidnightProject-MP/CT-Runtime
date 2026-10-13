@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
-import { TARGET,validateTarget } from './bootstrap-gas-email.mjs';
+import { targetFromEnv,validateTarget } from './bootstrap-gas-email.mjs';
 import { upgradeDelivery } from './upgrade-gas-email-delivery.mjs';
 export const RETRY=Object.freeze({instance:'gas-vnext-email',project:'celestan-email',execution:'gas-turn-963627a2-09f8-48b6-8c29-1ad46f8005cc',work:'gas-email-aeddebba6b1523e1ba05a2ffb9d10fa7',message:'1a1308e396490afd',input:'2',fence:'2',oldExecution:'gas-turn-479896e4-aea4-4e10-9d01-bb90ff715326',oldReply:'1a12116729e4a391'});
 const retryId='owner-model-retry:'+RETRY.execution+':2';
@@ -43,7 +43,7 @@ export async function retryModel(pool,{apply=false,expectedSnapshot,deploymentAt
 async function main(){
  const [mode,snapshot,confirmation]=process.argv.slice(2);
  if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||!confirmation?.startsWith('--model-diagnostics-attested=')||!validDeploymentAttestation(confirmation.slice('--model-diagnostics-attested='.length))||process.argv.length!==5)))throw new Error('invalid command');
- const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000});
- try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await retryModel(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deploymentAttestation:mode==='apply'?confirmation.slice('--model-diagnostics-attested='.length):null})}));}finally{await pool.end();}
+ const target=targetFromEnv(),pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),max:1,connectionTimeoutMillis:15000});
+ try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==target.database||r.owner!==target.owner)throw new Error('wrong target');console.log(JSON.stringify({target,...await retryModel(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deploymentAttestation:mode==='apply'?confirmation.slice('--model-diagnostics-attested='.length):null})}));}finally{await pool.end();}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Scoped retry rejected or uncertain; inspect before retry. Credentials and content withheld.');process.exitCode=1;});
