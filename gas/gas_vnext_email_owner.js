@@ -22,7 +22,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
       c=config(false);
        if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');
       out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
-      out.stage='neon-health';var h=rpc(c,'health');
+      out.stage='data-api-health';var h=rpc(c,'health');
       if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref)throw new Error('wrong grant');
       out.stage='delivery-peek';var d=rpc(c,'delivery-peek');
       if(['idle','prepare','reconcile'].indexOf(d.status)<0)throw new Error('unexpected peek');
@@ -151,7 +151,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
           stage='persisted-config';p=props();var c=config(false);model=c.model;
            if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model)||['false','true'].indexOf(p.getProperty('CT_VNEXT_EMAIL_ENABLED'))<0)throw new Error('activation-config-mismatch');
           stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('activation-mailbox-mismatch');
-          stage='neon-health';var h=rpc(c,'health');
+          stage='data-api-health';var h=rpc(c,'health');
           if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref||h.blocked!==false||h.uncertain!==0)throw new Error('activation-grant-not-ready');
           stage='gmail-labels';if(!(api('labels').labels||[]).some(function(l){return l.name==='Celestan';}))throw new Error('activation-label-missing-create-Celestan-filter-in-Gmail');
           stage='trigger-inventory';counts=activationTriggers();
