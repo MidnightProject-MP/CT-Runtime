@@ -6,15 +6,21 @@ import { pathToFileURL } from 'node:url';
 import { targetFromEnv,validateTarget,loadManifest,bootstrap,readback } from './bootstrap-gas-email.mjs';
 export const INSTANCE={instance:'gas-vnext-email',project:'celestan-email',sub:'101290949094805660136',aud:'788761466843-bqaho4ssrgp2ahif41uacv3o832o7hoo.apps.googleusercontent.com',mailbox:'midnight.project.mp@gmail.com',sender:'midnightprojectantigravity@gmail.com',grant:'user-authorized:pr69:gas-text-only:v1'};
 export const DATA_API_URL=process.env.CT_EMAIL_DATA_API_URL||null;
-export async function probe(fetchImpl=fetch,kidOverride,baseUrl=DATA_API_URL){
+export function instanceFromEnv(env=process.env){
+  const value={instance:env.CT_EMAIL_INSTANCE_ID,project:env.CT_EMAIL_PROJECT_ID,sub:env.CT_EMAIL_JWT_SUB,aud:env.CT_EMAIL_JWT_AUD,mailbox:env.CT_EMAIL_MAILBOX,sender:env.CT_EMAIL_ALLOWED_SENDER,grant:env.CT_EMAIL_GRANT_REF};
+  if(!/^[A-Za-z0-9_-]{1,100}$/.test(value.instance||'')||!value.project||!/^\d{5,30}$/.test(value.sub||'')||!value.aud||!/^\S+@\S+\.\S+$/.test(value.mailbox||'')||!/^\S+@\S+\.\S+$/.test(value.sender||'')||!value.grant)throw new Error('explicit email registration identity required');
+  return Object.freeze(value);
+}
+
+export async function probe(fetchImpl=fetch,kidOverride,baseUrl=DATA_API_URL,instance=INSTANCE){
   if(typeof baseUrl!=='string'||!/^https:\/\/[^\s/@?#]+(?:\/[^\s?#]*)?$/.test(baseUrl))throw new Error('explicit HTTPS data API URL required');
   let kid=kidOverride;
   if(!kid){const keys=await fetchImpl('https://www.googleapis.com/oauth2/v3/certs',{method:'GET',redirect:'error',signal:AbortSignal.timeout(30000)});if(!keys.ok)throw new Error('public Google keys unavailable');kid=(await keys.json()).keys?.[0]?.kid;}
   if(typeof kid!=='string'||! /^[A-Za-z0-9_-]{1,200}$/.test(kid))throw new Error('public Google key identity invalid');
-  const fake=[Buffer.from(JSON.stringify({alg:'RS256',kid})).toString('base64url'),Buffer.from(JSON.stringify({iss:'https://accounts.google.com',sub:INSTANCE.sub,aud:INSTANCE.aud,exp:Math.floor(Date.now()/1000)+300})).toString('base64url'),Buffer.alloc(256,1).toString('base64url')].join('.');
+  const fake=[Buffer.from(JSON.stringify({alg:'RS256',kid})).toString('base64url'),Buffer.from(JSON.stringify({iss:'https://accounts.google.com',sub:instance.sub,aud:instance.aud,exp:Math.floor(Date.now()/1000)+300})).toString('base64url'),Buffer.alloc(256,1).toString('base64url')].join('.');
   const result=[];
   for(const [name,token] of [['missing-bearer',null],['invalid-signature',fake]]){
-    const r=await fetchImpl(baseUrl.replace(/\/$/,'')+'/rpc/gas_email_rpc',{method:'POST',redirect:'error',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:JSON.stringify({p_instance:INSTANCE.instance,p_operation:'health',p_input:{}})});
+    const r=await fetchImpl(baseUrl.replace(/\/$/,'')+'/rpc/gas_email_rpc',{method:'POST',redirect:'error',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:JSON.stringify({p_instance:instance.instance,p_operation:'health',p_input:{}})});
     const body=typeof r.text==='function'?String(await r.text()).slice(0,12000):'';
     const markers=['missing','required','authorization','jwt','token','signature','invalid','role','schema','function','verify','validation','validate','failed','error','jwk','key','malformed','decode','parse','bearer','format','auth','not','found','valid','sign','credential'].filter(k=>body.toLowerCase().includes(k));
     const missingJwt=r.status===400&&name==='missing-bearer'&&['missing','authorization','jwt','token'].every(k=>markers.includes(k));
@@ -30,7 +36,7 @@ export async function roleState(client){
     (SELECT coalesce(json_agg(parent.rolname),'[]'::json) FROM pg_auth_members m JOIN pg_roles parent ON parent.oid=m.roleid WHERE m.member=r.oid) AS inherits
     FROM pg_roles r WHERE r.rolname IN ('authenticated','anonymous','ct_gas_bootstrap_authenticated','ct_gas_bootstrap_anonymous') ORDER BY r.rolname`)).rows;
 }
-export async function configure(pool,mode){
+export async function configure(pool,mode,instance=INSTANCE){
   if(!['inspect','prepare-roles','restrict-register','activate-for-qualification'].includes(mode))throw new Error('invalid mode');
   if(mode==='prepare-roles')await bootstrap(pool); // Exact ledger and current ACL proof before handoff.
   const c=await pool.connect();try{
@@ -54,12 +60,12 @@ export async function configure(pool,mode){
     const managed=roles.filter(r=>['authenticated','anonymous'].includes(r.name));
     if(managed.length!==2||managed.some(r=>r.superuser||r.create_role||r.create_db||r.bypass_rls||r.owned_objects||r.other_database_dependencies||r.inherits.length))throw new Error('unexpected managed role authority');
     if(mode==='activate-for-qualification'){
-      const expected=[INSTANCE.instance,INSTANCE.sub,INSTANCE.aud,INSTANCE.project,INSTANCE.mailbox,INSTANCE.sender,INSTANCE.grant];
+      const expected=[instance.instance,instance.sub,instance.aud,instance.project,instance.mailbox,instance.sender,instance.grant];
       const rows=(await c.query('SELECT * FROM gas_email_instances FOR UPDATE')).rows,r=rows[0];
       if(rows.length!==1||JSON.stringify([r.instance_id,r.jwt_sub,r.jwt_aud,r.project_id,r.mailbox,r.allowed_sender,r.grant_ref])!==JSON.stringify(expected))throw new Error('qualification identity conflict');
       await readback(c); // Verify existing permissions; this mode repairs none.
-      if(!r.active)await c.query('UPDATE gas_email_instances SET active=true WHERE instance_id=$1 AND active=false',[INSTANCE.instance]);
-      const proof=await readback(c);await c.query('COMMIT');return {status:r.active?'already-active-for-qualification':'activated-for-qualification',instance:INSTANCE,...proof};
+      if(!r.active)await c.query('UPDATE gas_email_instances SET active=true WHERE instance_id=$1 AND active=false',[instance.instance]);
+      const proof=await readback(c);await c.query('COMMIT');return {status:r.active?'already-active-for-qualification':'activated-for-qualification',instance,...proof};
     }
     for(const r of managed)if(r.login)await c.query(r.name==='authenticated'?'ALTER ROLE authenticated NOLOGIN':'ALTER ROLE anonymous NOLOGIN');
     await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC,authenticated,anonymous;
@@ -68,16 +74,16 @@ export async function configure(pool,mode){
       REVOKE CREATE ON SCHEMA public FROM PUBLIC,authenticated,anonymous;
       GRANT USAGE ON SCHEMA public TO authenticated;
       GRANT EXECUTE ON FUNCTION public.gas_email_rpc(text,text,jsonb) TO authenticated`);
-    const values=[INSTANCE.instance,INSTANCE.sub,INSTANCE.aud,INSTANCE.project,INSTANCE.mailbox,INSTANCE.sender,INSTANCE.grant];
+    const values=[instance.instance,instance.sub,instance.aud,instance.project,instance.mailbox,instance.sender,instance.grant];
     const found=(await c.query('SELECT * FROM gas_email_instances')).rows;
     if(found.length){
       const r=found[0];if(found.length!==1||r.active||JSON.stringify([r.instance_id,r.jwt_sub,r.jwt_aud,r.project_id,r.mailbox,r.allowed_sender,r.grant_ref])!==JSON.stringify(values))throw new Error('instance registration conflict');
     }else await c.query('INSERT INTO gas_email_instances(instance_id,jwt_sub,jwt_aud,project_id,mailbox,allowed_sender,grant_ref,active) VALUES($1,$2,$3,$4,$5,$6,$7,false)',values);
-    const proof=await readback(c);await c.query('COMMIT');return {status:'restricted-and-registered-inactive',instance:INSTANCE,...proof};
+    const proof=await readback(c);await c.query('COMMIT');return {status:'restricted-and-registered-inactive',instance,...proof};
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
 }
-async function main(){if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe()));return;}const target=targetFromEnv(),url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});try{
+async function main(){const instance=instanceFromEnv();if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe(fetch,undefined,DATA_API_URL,instance));return;}const target=targetFromEnv(),url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});try{
   const id=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(id.db!==target.database||id.owner!==target.owner)throw new Error('wrong database');
-  console.log(JSON.stringify({target,...await configure(pool,process.argv[2])}));
+  console.log(JSON.stringify({target,...await configure(pool,process.argv[2],instance)}));
 }finally{await pool.end();}}
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(e=>{console.error(JSON.stringify({status:'failed-or-uncertain',sqlstate:/^[A-Z0-9]{5}$/.test(e.code||'')?e.code:null,httpStatus:Number.isInteger(e.httpStatus)?e.httpStatus:null,probe:e.probe||null,markers:e.markers||[],next:'inspect target before retry; details withheld'}));process.exitCode=1;});
