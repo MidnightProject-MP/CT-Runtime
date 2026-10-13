@@ -97,7 +97,7 @@ test('property inventory emits a sanitized log and keeps cleanup fail-closed',()
   assert.equal(result.total,Object.keys(f.values).length);
   assert.equal(result.counts.stable,6);
   assert.equal(result.counts.legacy_runtime,0);
-  assert.equal(result.counts.unknown,3);
+  assert.equal(result.counts.unknown,4);
   assert.ok(result.properties.some(p=>p.name==='OPENROUTER_API_KEY'&&p.classification==='stable'));
   assert.ok(result.properties.some(p=>p.name==='CT_GAS_SAFETY_TRIGGER'&&p.classification==='unknown'));
   assert.ok(result.properties.some(p=>p.name==='CT_GAS_PROOF_MODEL'&&p.classification==='unknown'));
