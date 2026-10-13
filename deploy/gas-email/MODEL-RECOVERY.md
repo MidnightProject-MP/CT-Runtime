@@ -20,8 +20,10 @@ permitted target is the pinned new database in `bootstrap-gas-email.mjs`.
 2. After tests, `node scripts/upgrade-gas-email-delivery.mjs apply`
 3. Deploy the reviewed GAS through GitHub Actions, with a fresh preflight.
 4. `node scripts/retry-gas-email-model.mjs inspect`
-5. Only after confirming the diagnostics source is deployed:
-   `node scripts/retry-gas-email-model.mjs apply <snapshot> --model-diagnostics-deployed`
+5. Only after independently inspecting the exact deployed artifact, the owner may attest by passing the immutable GitHub Actions run URL that records that inspection:
+   `node scripts/retry-gas-email-model.mjs apply <snapshot> --model-diagnostics-attested=https://github.com/OWNER/REPO/actions/runs/RUN_ID`
+
+This is a recorded owner attestation, not cryptographic proof that GAS currently serves that artifact. The script records the evidence URL in its immutable audit event; do not apply without fresh read-only GAS deployment/source-hash evidence. The same rule applies to `repair-gas-email-delivery.mjs` with `--receipt-fix-attested=<run URL>`.
 6. Let the existing five-minute trigger perform the single eligible text turn.
    `node scripts/inspect-gas-email-runtime.mjs` observes the result without model,
    Gmail, or configuration effects.
