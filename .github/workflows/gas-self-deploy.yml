@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       release_ref:
-        description: 'Reviewed refs/tags/gas-release/* tag resolving to release_commit'
+        description: 'Reviewed refs/tags/gas-release/* tag; workflow must be dispatched on this exact tag'
         required: true
         type: string
       desired_bundle_hash:
