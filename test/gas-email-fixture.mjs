@@ -2,7 +2,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 export function gasEmailFixture(rpc) {
-  const values={CT_VNEXT_EMAIL_ENABLED:'true',CT_VNEXT_EMAIL_INSTANCE:'gas-test',CT_VNEXT_EMAIL_DATA_API_URL:'https://test.neon.tech',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'test.neon.tech',CT_VNEXT_EMAIL_MODEL:'test/model',CT_VNEXT_EMAIL_LABEL:'Celestan',OPENROUTER_API_KEY:'test-openrouter-secret'};
+  const values={CT_VNEXT_EMAIL_ENABLED:'true',CT_VNEXT_EMAIL_INSTANCE:'gas-test',CT_VNEXT_EMAIL_DATA_API_URL:'https://test.neon.tech',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'test.neon.tech',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'test-script',CT_VNEXT_EMAIL_MODEL:'test/model',CT_VNEXT_EMAIL_LABEL:'Celestan',OPENROUTER_API_KEY:'test-openrouter-secret'};
   const messages=new Map();let sends=0,loseSend=false,searchVisible=true,loseCheckpoint=false,loseAdmission=false;
   let model=()=>({disposition:'done',summary:'Here is a useful draft.',artifact:'A bounded answer.'});
   let ticks=0,now=Date.now();const triggers=[];
