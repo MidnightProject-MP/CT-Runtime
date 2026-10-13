@@ -62,7 +62,7 @@ test('legacy clasp deployment path remains retired until it implements canonical
 
 test('explicit owner configuration is disabled, grant-checked, fixed-field and refuses rotation',async()=>{
   const source=(await Promise.all(['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFile(new URL('../gas/'+f,import.meta.url),'utf8')))).join('\n');
-  const props={OPENROUTER_API_KEY:'private-existing-key',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'reviewed.neon.tech',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'reviewed-script'},writes=[];
+  const props={OPENROUTER_API_KEY:'private-existing-key',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'reviewed.neon.tech',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'reviewed-script',CT_VNEXT_EMAIL_APPROVED_MAILBOX:'midnight.project.mp@gmail.com',CT_VNEXT_EMAIL_APPROVED_SENDER:'midnightprojectantigravity@gmail.com'},writes=[];
   const health={instance:'reviewed',mailbox:'midnight.project.mp@gmail.com',allowed_sender:'midnightprojectantigravity@gmail.com',blocked:false};
   const ctx=vm.createContext({LockService:{getScriptLock:()=>({waitLock(){},releaseLock(){}})},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperties:(v,remove)=>{assert.equal(remove,false);writes.push(v);Object.assign(props,v);}})},ScriptApp:{getScriptId:()=> 'reviewed-script',getIdentityToken:()=> 'private-google-token'},UrlFetchApp:{fetch:()=>({getResponseCode:()=>200,getContentText:()=>JSON.stringify(health)})}});
   vm.runInContext(source,ctx);assert.equal(writes.length,0);
@@ -70,7 +70,7 @@ test('explicit owner configuration is disabled, grant-checked, fixed-field and r
   for(const bad of [null,{...c,enabled:true},{...c,url:'http://attacker.invalid'},{...c,model:''},{...c,label:'bad\nlabel'}])assert.throws(()=>ctx.configureVnextEmailRuntime(bad),/bindings/);
   health.blocked=true;assert.throws(()=>ctx.configureVnextEmailRuntime(c),/grant not ready/);health.blocked=false;
   health.instance='other';assert.throws(()=>ctx.configureVnextEmailRuntime(c),/grant not ready/);health.instance='reviewed';
-  assert.equal(writes.length,0);assert.deepEqual(Object.keys(props).sort(),['CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID','OPENROUTER_API_KEY']);
+  assert.equal(writes.length,0);assert.deepEqual(Object.keys(props).sort(),['CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_APPROVED_MAILBOX','CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID','CT_VNEXT_EMAIL_APPROVED_SENDER','OPENROUTER_API_KEY']);
   assert.equal(ctx.configureVnextEmailRuntime(c).enabled,false);assert.equal(props.CT_VNEXT_EMAIL_ENABLED,'false');assert.equal(props.OPENROUTER_API_KEY,'private-existing-key');
   assert.throws(()=>ctx.configureVnextEmailRuntime({...c,model:'vendor/other'}),/conflict/);
   assert.throws(()=>ctx.configureVnextEmailRuntime({...c,enabled:true}),/bindings/);
