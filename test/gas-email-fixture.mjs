@@ -50,6 +50,6 @@ export function gasEmailFixture(rpc) {
       if(result===undefined)throw new Error('unexpected request');
       return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(result)};
     }}});
-  function cold(){const ctx=context();vm.runInContext(readFileSync(new URL('../gas/gas_vnext_email.js',import.meta.url),'utf8'),ctx);return ctx;}
+  function cold(){const ctx=context();for(const f of ['gas_vnext_email.js','gas_vnext_email_owner.js'])vm.runInContext(readFileSync(new URL('../gas/'+f,import.meta.url),'utf8'),ctx);return ctx;}
   return {values,messages,add,cold,unavailable,rawMessages,failIntake(value=true){listFailure=value;},truncateSearch(value=true){searchToken=value;},tick(){ticks++;return cold().vnextEmailTick();},get sends(){return sends;},get ticks(){return ticks;},setModel(fn){model=fn;},advance(ms){now+=ms;},loseNextSend(){loseSend=true;},loseNextCheckpoint(){loseCheckpoint=true;},loseNextAdmission(){loseAdmission=true;},hideSearch(){searchVisible=false;},showSearch(){searchVisible=true;}};
 }
