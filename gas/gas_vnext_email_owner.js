@@ -20,7 +20,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
     }
     try{
       c=config(false);
-      if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/?#]+(?:\/[A-Za-z0-9._~!if(c.instance!=='gas-vnext-email'||c.url!=='https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1'||c.label!=='Celestan'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');
+       if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(c.model))throw new Error('diagnostic configuration mismatch');
       out.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong mailbox');
       out.stage='neon-health';var h=rpc(c,'health');
       if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref)throw new Error('wrong grant');
@@ -108,7 +108,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
             model=snapshot.CT_VNEXT_EMAIL_MODEL;if(model===undefined||model===null)model=snapshot.CT_GAS_PROOF_MODEL;
             if(typeof model!=='string'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model))throw new Error('prepare: set CT_VNEXT_EMAIL_MODEL to an explicit approved provider/model');
             var instance=snapshot.CT_VNEXT_EMAIL_INSTANCE,url=snapshot.CT_VNEXT_EMAIL_DATA_API_URL,label=snapshot.CT_VNEXT_EMAIL_LABEL;
-             if(!/^[A-Za-z0-9_-]{1,100}$/.test(instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!desired={CT_VNEXT_EMAIL_ENABLED:'false',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1',CT_VNEXT_EMAIL_MODEL:model,CT_VNEXT_EMAIL_LABEL:'Celestan'};'()*+,;=:@%-]*)*$/.test(url||'')||typeof label!=='string'||!label.trim()||label.length>100||/[\x00-\x1f]/.test(label))throw new Error('prepare: explicit instance, HTTPS data API URL and queue label are required');
+             if(!/^[A-Za-z0-9_-]{1,100}$/.test(instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(url||'')||typeof label!=='string'||!label.trim()||label.length>100||/[\x00-\x1f]/.test(label))throw new Error('prepare: explicit instance, HTTPS data API URL and queue label are required');
              desired={CT_VNEXT_EMAIL_ENABLED:'false',CT_VNEXT_EMAIL_INSTANCE:instance,CT_VNEXT_EMAIL_DATA_API_URL:url.replace(/\/$/,''),CT_VNEXT_EMAIL_MODEL:model,CT_VNEXT_EMAIL_LABEL:label};
             preparedMatch=matches(snapshot);checkBindings();if(!snapshot.OPENROUTER_API_KEY)throw new Error('existing OpenRouter secret required');
           });
@@ -149,7 +149,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
       result=setupLock(function(){
         try{
           stage='persisted-config';p=props();var c=config(false);model=c.model;
-          if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/?#]+(?:\/[A-Za-z0-9._~!if(c.instance!=='gas-vnext-email'||c.url!=='https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1'||c.label!=='Celestan'||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model)||['false','true'].indexOf(p.getProperty('CT_VNEXT_EMAIL_ENABLED'))<0)throw new Error('activation-config-mismatch');'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model)||['false','true'].indexOf(p.getProperty('CT_VNEXT_EMAIL_ENABLED'))<0)throw new Error('activation-config-mismatch');
+           if(!/^[A-Za-z0-9_-]{1,100}$/.test(c.instance||'')||!/^https:\/\/[^\s/@?#]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*$/.test(c.url||'')||!c.label||c.label.length>100||! /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(model)||['false','true'].indexOf(p.getProperty('CT_VNEXT_EMAIL_ENABLED'))<0)throw new Error('activation-config-mismatch');
           stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('activation-mailbox-mismatch');
           stage='neon-health';var h=rpc(c,'health');
           if(h.instance!==c.instance||!h.project||h.mailbox!==MAILBOX||h.allowed_sender!==SENDER||!h.grant_ref||h.blocked!==false||h.uncertain!==0)throw new Error('activation-grant-not-ready');
