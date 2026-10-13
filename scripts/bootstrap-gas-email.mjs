@@ -6,6 +6,11 @@ import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 
 const sha=s=>createHash('sha256').update(s).digest('hex');
+export function targetFromEnv(env=process.env){
+  const target={host:env.CT_BOOTSTRAP_DATABASE_HOST,database:env.CT_BOOTSTRAP_DATABASE_NAME,owner:env.CT_BOOTSTRAP_DATABASE_OWNER};
+  if(!target.host||!target.database||!target.owner)throw new Error('explicit bootstrap target identity required');
+  return target;
+}
 export function validateTarget(value,target){
   if(!target||typeof target.host!=='string'||!target.host||typeof target.database!=='string'||!target.database||typeof target.owner!=='string'||!target.owner)throw new Error('explicit bootstrap target identity required');
   const u=new URL(value);
@@ -95,7 +100,7 @@ export async function bootstrap(pool,{apply=false,validate=false,manifest}={}){
 }
 async function main(){
   const mode=process.argv[2];if(!['inspect','validate','apply'].includes(mode))throw new Error('explicit bootstrap mode required');
-  const target={host:process.env.CT_BOOTSTRAP_DATABASE_HOST,database:process.env.CT_BOOTSTRAP_DATABASE_NAME,owner:process.env.CT_BOOTSTRAP_DATABASE_OWNER};
+  const target=targetFromEnv();
   const url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});
   try{
     const identity=await pool.query('SELECT current_database() AS database,current_user AS owner');
