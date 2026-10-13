@@ -11,6 +11,17 @@ const repairId='owner-delivery-repair:'+REPAIR.execution;
 const evidence={repairId,executionId:REPAIR.execution,providerId:REPAIR.gmailId,evidenceKind:'user-supplied-owner-readback-and-receipt-confirmation',ownerConfirmedReceipt:true,completeThread:true,exactlyOneSentCandidate:true,sent:true,thread:true,from:true,to:true,reference:true,subject:true,normalizedBody:true,syntheticMessageId:false,automaticIdentityVerified:false};
 const sha=v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const validDeploymentAttestation=v=>typeof v==='string'&&v.length<=500&&/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[0-9]+(?:\/attempts\/[0-9]+)?$/.test(v);
+const requireArtifactBinding=()=>{
+  // A URL is only a locator, not evidence that the reviewed bundle was deployed.
+  // Until the owner supplies a separately verified artifact/deployment binding,
+  // keep historical mutation paths fail-closed.
+  const commit=process.env.CT_EMAIL_ATTESTED_COMMIT_SHA||'';
+  const bundle=process.env.CT_EMAIL_ATTESTED_BUNDLE_SHA256||'';
+  const deployment=process.env.CT_EMAIL_ATTESTED_DEPLOYMENT_ID||'';
+  const version=process.env.CT_EMAIL_ATTESTED_DEPLOYMENT_VERSION||'';
+  if(!/^[a-f0-9]{40}$/.test(commit)||!/^[a-f0-9]{64}$/.test(bundle)||!/^[-A-Za-z0-9_]{10,200}$/.test(deployment)||!/^[1-9][0-9]*$/.test(version))
+    throw new Error('independent exact-artifact deployment binding required; mutation disabled');
+};
 export async function repairDelivery(pool,{apply=false,expectedSnapshot,deploymentAttestation=null}={}){
  if((await upgradeDelivery(pool)).status!=='already-applied')throw new Error('delivery extension required');
  const c=await pool.connect();try{
@@ -44,6 +55,7 @@ export async function repairDelivery(pool,{apply=false,expectedSnapshot,deployme
   const snapshot=sha({outbox:o,block:b,evidence});
   if(!apply){await c.query('ROLLBACK');return {status:'repair-ready',executionId:REPAIR.execution,gmailId:REPAIR.gmailId,snapshot,evidence,requiresDeployedReceiptFix:true};}
   if(!validDeploymentAttestation(deploymentAttestation)||expectedSnapshot!==snapshot)throw new Error('deployment attestation reference and exact inspected snapshot required');
+  requireArtifactBinding();
   await c.query("INSERT INTO public.vnext_events(event_type,payload) VALUES('gas-email-owner-delivery-repair',$1::jsonb)",[JSON.stringify({...evidence,deploymentAttestation})]);
   const updated=await c.query("UPDATE public.gas_email_outbox SET state='sent',gmail_id=$2 WHERE execution_id=$1 AND state='admitted' AND gmail_id IS NULL",[REPAIR.execution,REPAIR.gmailId]);
   const deleted=await c.query('DELETE FROM public.vnext_project_reconciliation_blocks WHERE project_id=$1 AND execution_id=$2 AND work_unit_id=$3 AND fence=$4',[REPAIR.project,REPAIR.execution,o.work_unit_id,o.fence]);
