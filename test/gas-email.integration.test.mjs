@@ -181,6 +181,17 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
         fail=false;f.unavailable.clear();assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
       }
     });
+    await t.test('a later Gmail intake page prevents admission until unseen correction is ingested',()=>{
+      reset();const f=fixture();f.add('original');f.loseNextCheckpoint();assert.equal(f.tick().status,'blocked');
+      f.add('page1');f.add('page2');f.add('page3');f.add('correction','thread1','Use the corrected requirement.');
+      f.paginateIntakeOnce();
+      assert.equal(f.tick().status,'intake-unavailable');assert.equal(f.sends,0);
+      assert.equal(sql("SELECT state FROM gas_email_outbox")[0].state,'pending');
+      assert.ok(f.messages.get('correction').labelIds.includes('queue'));
+      f.setModel(request=>{assert.equal(JSON.parse(request.messages[1].content).inputs[0].message,'Use the corrected requirement.');return {disposition:'done',summary:'Corrected reply.'};});
+      assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
+      assert.equal(Number(sql("SELECT count(*) AS n FROM gas_email_outbox WHERE state='superseded'")[0].n),1);
+    });
     await t.test('unconsumed correction with transient ingest failure prevents admission of an older pending reply',()=>{
       reset();let fail=false;const f=gasEmailFixture((op,data)=>{if(op==='ingest'&&data.id==='correction'&&fail)throw new Error('before-commit outage');return rawRpc(op,data);});
       f.add('original');f.loseNextCheckpoint();assert.equal(f.tick().status,'blocked');
