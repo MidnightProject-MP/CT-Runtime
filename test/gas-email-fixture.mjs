@@ -12,7 +12,7 @@ export function gasEmailFixture(rpc) {
   }
   const forbidden=()=>{throw new Error('forbidden runtime persistence');};
   const context=()=>vm.createContext({Date:class extends Date {static now(){return now;}},PropertiesService:{getScriptProperties:()=>({getProperty:k=>values[k]??null,getProperties:()=>({...values}),setProperty:forbidden,setProperties:forbidden,deleteProperty:forbidden})},SpreadsheetApp:new Proxy({},{get:forbidden}),
-    ScriptApp:{getIdentityToken:()=> 'test-google-jwt',getOAuthToken:()=> 'test-oauth',getProjectTriggers:()=>triggers,newTrigger:name=>({timeBased(){return this;},everyMinutes(){return this;},create(){triggers.push({getHandlerFunction:()=>name});}})},
+    ScriptApp:{getScriptId:()=> 'test-script',getIdentityToken:()=> 'test-google-jwt',getOAuthToken:()=> 'test-oauth',getProjectTriggers:()=>triggers,newTrigger:name=>({timeBased(){return this;},everyMinutes(){return this;},create(){triggers.push({getHandlerFunction:()=>name});}})},
     LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
     Utilities:{Charset:{UTF_8:'UTF-8'},base64Encode:s=>Buffer.from(s).toString('base64'),base64EncodeWebSafe:s=>Buffer.from(s).toString('base64url'),base64DecodeWebSafe:s=>Buffer.from(s,'base64url'),newBlob:s=>({getDataAsString:()=>Buffer.from(s).toString('utf8')})},
     UrlFetchApp:{fetch:(url,opts)=>{
