@@ -3,24 +3,25 @@
 import { Pool } from 'pg';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { TARGET,validateTarget,loadManifest,bootstrap,readback } from './bootstrap-gas-email.mjs';
+import { validateTarget,loadManifest,bootstrap,readback } from './bootstrap-gas-email.mjs';
 export const INSTANCE={instance:'gas-vnext-email',project:'celestan-email',sub:'101290949094805660136',aud:'788761466843-bqaho4ssrgp2ahif41uacv3o832o7hoo.apps.googleusercontent.com',mailbox:'midnight.project.mp@gmail.com',sender:'midnightprojectantigravity@gmail.com',grant:'user-authorized:pr69:gas-text-only:v1'};
-export const DATA_API_URL='https://ep-weathered-tree-b4v72i6c.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1';
-export async function probe(fetchImpl=fetch,kidOverride){
+export const DATA_API_URL=process.env.CT_EMAIL_DATA_API_URL||null;
+export async function probe(fetchImpl=fetch,kidOverride,baseUrl=DATA_API_URL){
+  if(typeof baseUrl!=='string'||!/^https:\/\/[^\s/@?#]+(?:\/[^\s?#]*)?$/.test(baseUrl))throw new Error('explicit HTTPS data API URL required');
   let kid=kidOverride;
   if(!kid){const keys=await fetchImpl('https://www.googleapis.com/oauth2/v3/certs',{method:'GET',redirect:'error',signal:AbortSignal.timeout(30000)});if(!keys.ok)throw new Error('public Google keys unavailable');kid=(await keys.json()).keys?.[0]?.kid;}
   if(typeof kid!=='string'||! /^[A-Za-z0-9_-]{1,200}$/.test(kid))throw new Error('public Google key identity invalid');
   const fake=[Buffer.from(JSON.stringify({alg:'RS256',kid})).toString('base64url'),Buffer.from(JSON.stringify({iss:'https://accounts.google.com',sub:INSTANCE.sub,aud:INSTANCE.aud,exp:Math.floor(Date.now()/1000)+300})).toString('base64url'),Buffer.alloc(256,1).toString('base64url')].join('.');
   const result=[];
   for(const [name,token] of [['missing-bearer',null],['invalid-signature',fake]]){
-    const r=await fetchImpl(DATA_API_URL+'/rpc/gas_email_rpc',{method:'POST',redirect:'error',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:JSON.stringify({p_instance:INSTANCE.instance,p_operation:'health',p_input:{}})});
+    const r=await fetchImpl(baseUrl.replace(/\/$/,'')+'/rpc/gas_email_rpc',{method:'POST',redirect:'error',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:JSON.stringify({p_instance:INSTANCE.instance,p_operation:'health',p_input:{}})});
     const body=typeof r.text==='function'?String(await r.text()).slice(0,12000):'';
     const markers=['missing','required','authorization','jwt','token','signature','invalid','role','schema','function','verify','validation','validate','failed','error','jwk','key','malformed','decode','parse','bearer','format','auth','not','found','valid','sign','credential'].filter(k=>body.toLowerCase().includes(k));
     const missingJwt=r.status===400&&name==='missing-bearer'&&['missing','authorization','jwt','token'].every(k=>markers.includes(k));
     const invalidSignature=r.status===400&&name==='invalid-signature'&&markers.includes('signature')&&['invalid','failed','verify','validation','error'].some(k=>markers.includes(k));
     if(![401,403].includes(r.status)&&!missingJwt&&!invalidSignature){const e=new Error('unexpected unauthenticated HTTP outcome');e.httpStatus=r.status;e.probe=name;e.markers=markers;throw e;}result.push({probe:name,status:r.status,denial:missingJwt?'gateway-missing-jwt':invalidSignature?'gateway-invalid-signature':'unauthorized'});
   }
-  return {url:DATA_API_URL,probes:result,matchingGoogleToken:'not-available-not-tested'};
+  return {url:baseUrl.replace(/\/$/,''),probes:result,matchingGoogleToken:'not-available-not-tested'};
 }
 export async function roleState(client){
   return (await client.query(`SELECT r.rolname AS name,r.rolcanlogin AS login,r.rolsuper AS superuser,r.rolcreaterole AS create_role,r.rolcreatedb AS create_db,r.rolbypassrls AS bypass_rls,
@@ -75,8 +76,8 @@ export async function configure(pool,mode){
     const proof=await readback(c);await c.query('COMMIT');return {status:'restricted-and-registered-inactive',instance:INSTANCE,...proof};
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
 }
-async function main(){if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe()));return;}const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000});try{
-  const id=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(id.db!==TARGET.database||id.owner!==TARGET.owner)throw new Error('wrong database');
-  console.log(JSON.stringify({target:TARGET,...await configure(pool,process.argv[2])}));
+async function main(){if(process.argv[2]==='probe'){console.log(JSON.stringify(await probe()));return;}const target={host:process.env.CT_BOOTSTRAP_DATABASE_HOST,database:process.env.CT_BOOTSTRAP_DATABASE_NAME,owner:process.env.CT_BOOTSTRAP_DATABASE_OWNER};const url=validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL,target),pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:15000});try{
+  const id=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(id.db!==target.database||id.owner!==target.owner)throw new Error('wrong database');
+  console.log(JSON.stringify({target,...await configure(pool,process.argv[2])}));
 }finally{await pool.end();}}
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(e=>{console.error(JSON.stringify({status:'failed-or-uncertain',sqlstate:/^[A-Z0-9]{5}$/.test(e.code||'')?e.code:null,httpStatus:Number.isInteger(e.httpStatus)?e.httpStatus:null,probe:e.probe||null,markers:e.markers||[],next:'inspect target before retry; details withheld'}));process.exitCode=1;});
