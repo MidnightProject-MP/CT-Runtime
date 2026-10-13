@@ -47,7 +47,7 @@ test('read-only diagnostic identifies Gmail service/consent errors without copyi
     const f=fixture();f.http('/profile',403,{error:{message:'test-secret-never-log private-oauth',errors:[{reason}],details:[{reason,metadata:{consumer:'secret-project-value'}}]}});
     const d=f.diagnose(),failure=d.stages.find(s=>s.stage==='gmail-profile');assert.equal(d.status,'blocked');assert.equal(d.configWriteAttempted,false);assert.equal(f.writes.length,0);
     assert.equal(failure.httpStatus,403);assert.equal(failure.providerReason,reason);assert.equal(failure.classification,'authorization-denied');
-    if(reason==='SERVICE_DISABLED'||reason==='accessNotConfigured')assert.equal(failure.projectNumber,'788761466843');
+    assert.equal(Object.hasOwn(failure,'projectNumber'),false);
     assert.ok(d.stages.some(s=>s.stage==='data-api-health'&&s.status==='ok'));
     assert.doesNotMatch(JSON.stringify(f.logs),/test-secret|private-oauth|secret-project-value|PRIVATE_UNKNOWN_PROPERTY/);
   }
