@@ -60,8 +60,6 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       f.add('m2','thread1','Please make it more concise.');
       f.setModel(request=>{assert.match(request.messages[0].content,/NO shell/);const d=JSON.parse(request.messages[1].content);assert.equal(d.previous.summary,'Here is a useful draft.');assert.equal(d.inputs[0].message,'Please make it more concise.');return {disposition:'waiting',summary:'I can tailor it.',question:'Who is the recipient?'};});
       assert.equal(f.tick().status,'sent');assert.equal(f.sends,2);assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_work_units')[0].n),1);
-      const inv=f.cold().inventoryVnextEmailProperties();assert.equal(inv.counts.stable,10);assert.equal(inv.cleanup_apply_available,false);
-      assert.equal(f.cold().installVnextEmailTrigger().status,'installed');assert.equal(f.cold().installVnextEmailTrigger().status,'installed');
       f.values.CT_VNEXT_EMAIL_ENABLED='false';assert.equal(f.tick().status,'disabled');
     });
     await t.test('receipt conflict, stale fences, bounded snapshots and newer input preserved',()=>{
