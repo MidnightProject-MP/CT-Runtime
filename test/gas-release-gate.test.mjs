@@ -14,7 +14,8 @@ test('only the exact approved manual release tuple passes', () => {
   for (const key of Object.keys(env)) {
     assert.throws(() => authorizeRelease({ ...env, [key]: '' }, () => commit), undefined, key);
   }
-  assert.throws(() => authorizeRelease(env, () => 'd'.repeat(40)));\n  assert.throws(() => authorizeRelease({ ...env, GITHUB_REF: 'refs/heads/main' }, () => commit), /Release ref mismatch/);
+  assert.throws(() => authorizeRelease(env, () => 'd'.repeat(40)));
+  assert.throws(() => authorizeRelease({ ...env, GITHUB_REF: 'refs/heads/main' }, () => commit), /Release ref mismatch/);
   assert.throws(() => authorizeRelease({ ...env, GITHUB_EVENT_NAME: 'push' }, () => commit));
 });
 test('partial merges cannot auto-deploy and legacy writes fail closed', () => {
