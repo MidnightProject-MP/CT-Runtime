@@ -10,7 +10,8 @@ export const REPAIR=Object.freeze({instance:'gas-vnext-email',project:'celestan-
 const repairId='owner-delivery-repair:'+REPAIR.execution;
 const evidence={repairId,executionId:REPAIR.execution,providerId:REPAIR.gmailId,evidenceKind:'user-supplied-owner-readback-and-receipt-confirmation',ownerConfirmedReceipt:true,completeThread:true,exactlyOneSentCandidate:true,sent:true,thread:true,from:true,to:true,reference:true,subject:true,normalizedBody:true,syntheticMessageId:false,automaticIdentityVerified:false};
 const sha=v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
-export async function repairDelivery(pool,{apply=false,expectedSnapshot,deployed=false}={}){
+const validDeploymentAttestation=v=>typeof v==='string'&&v.length<=500&&/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[0-9]+(?:\/attempts\/[0-9]+)?$/.test(v);
+export async function repairDelivery(pool,{apply=false,expectedSnapshot,deploymentAttestation=null}={}){
  if((await upgradeDelivery(pool)).status!=='already-applied')throw new Error('delivery extension required');
  const c=await pool.connect();try{
   await c.query('BEGIN');await c.query("SET LOCAL lock_timeout='10s'; SET LOCAL statement_timeout='30s'");
@@ -42,8 +43,8 @@ export async function repairDelivery(pool,{apply=false,expectedSnapshot,deployed
   if((await c.query('SELECT 1 FROM public.vnext_project_mutation_authority WHERE project_id=$1',[REPAIR.project])).rows.length)throw new Error('active authority');
   const snapshot=sha({outbox:o,block:b,evidence});
   if(!apply){await c.query('ROLLBACK');return {status:'repair-ready',executionId:REPAIR.execution,gmailId:REPAIR.gmailId,snapshot,evidence,requiresDeployedReceiptFix:true};}
-  if(!deployed||expectedSnapshot!==snapshot)throw new Error('deploy confirmation and exact inspected snapshot required');
-  await c.query("INSERT INTO public.vnext_events(event_type,payload) VALUES('gas-email-owner-delivery-repair',$1::jsonb)",[JSON.stringify(evidence)]);
+  if(!validDeploymentAttestation(deploymentAttestation)||expectedSnapshot!==snapshot)throw new Error('deployment attestation reference and exact inspected snapshot required');
+  await c.query("INSERT INTO public.vnext_events(event_type,payload) VALUES('gas-email-owner-delivery-repair',$1::jsonb)",[JSON.stringify({...evidence,deploymentAttestation})]);
   const updated=await c.query("UPDATE public.gas_email_outbox SET state='sent',gmail_id=$2 WHERE execution_id=$1 AND state='admitted' AND gmail_id IS NULL",[REPAIR.execution,REPAIR.gmailId]);
   const deleted=await c.query('DELETE FROM public.vnext_project_reconciliation_blocks WHERE project_id=$1 AND execution_id=$2 AND work_unit_id=$3 AND fence=$4',[REPAIR.project,REPAIR.execution,o.work_unit_id,o.fence]);
   if(updated.rowCount!==1||deleted.rowCount!==1)throw new Error('repair atomicity conflict');
@@ -52,8 +53,8 @@ export async function repairDelivery(pool,{apply=false,expectedSnapshot,deployed
 }
 async function main(){
  const [mode,snapshot,confirmation]=process.argv.slice(2);
- if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||confirmation!=='--receipt-fix-deployed'||process.argv.length!==5)))throw new Error('invalid repair command');
+ if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||!validDeploymentAttestation(confirmation?.replace(/^--receipt-fix-attested=/,''))||!confirmation.startsWith('--receipt-fix-attested=')||process.argv.length!==4)))throw new Error('invalid repair command');
  const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000});
- try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await repairDelivery(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deployed:confirmation==='--receipt-fix-deployed'})}));}finally{await pool.end();}
+ try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await repairDelivery(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deploymentAttestation:mode==='apply'?confirmation.slice('--receipt-fix-attested='.length):null)}));}finally{await pool.end();}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Scoped repair rejected or uncertain; inspect reality before retry. Credentials and content withheld.');process.exitCode=1;});
