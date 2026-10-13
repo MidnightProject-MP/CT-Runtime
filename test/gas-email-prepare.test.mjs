@@ -4,13 +4,13 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
 function fixture(overrides={}){
-  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'isolated-test.example',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
+  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'isolated-test.example',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'isolated-test-script',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
   const writes=[],logs=[],calls=[],responses={};let profile='midnight.project.mp@gmail.com',rpcFail=false,project='celestan-email',label=true,locked=false,writeMode='normal',readFailure=false,triggerFailure=false,lockFailure=false;
   const noEffect=()=>{throw new Error('forbidden setup effect');};
   const ctx=vm.createContext({console:{log:s=>logs.push(JSON.parse(s))},
     LockService:{getScriptLock:()=>({waitLock(){if(lockFailure)throw new Error('private-oauth lock error');assert.equal(locked,false);locked=true;},releaseLock(){locked=false;}})},
     PropertiesService:{getScriptProperties:()=>({getProperty:k=>values[k]??null,getProperties:()=>{if(readFailure)throw new Error('test-secret-never-log');return {...values};},setProperties(v,remove){assert.equal(locked,true);assert.equal(remove,false);writes.push({...v});if(writeMode==='before')throw new Error('test-secret-never-log');if(writeMode==='partial'){values.CT_VNEXT_EMAIL_ENABLED='false';throw new Error('private-value');}Object.assign(values,v);if(writeMode==='after')throw new Error('private-oauth');},setProperty:noEffect,deleteProperty:noEffect})},
-    ScriptApp:{getOAuthToken:()=> 'private-oauth',getIdentityToken:()=> 'private-identity',getProjectTriggers:()=>{if(triggerFailure)throw new Error('private-identity');return [{getHandlerFunction:()=> 'legacySafetyWake'}];},newTrigger:noEffect},
+    ScriptApp:{getScriptId:()=> 'isolated-test-script',getOAuthToken:()=> 'private-oauth',getIdentityToken:()=> 'private-identity',getProjectTriggers:()=>{if(triggerFailure)throw new Error('private-identity');return [{getHandlerFunction:()=> 'legacySafetyWake'}];},newTrigger:noEffect},
     SpreadsheetApp:new Proxy({},{get:noEffect}),GmailApp:new Proxy({},{get:noEffect}),
     UrlFetchApp:{fetch(url,opts){calls.push(url);let data;
       const suffix=Object.keys(responses).find(s=>url.endsWith(s));if(suffix){const r=responses[suffix];return {getResponseCode:()=>r.status,getContentText:()=>typeof r.body==='string'?r.body:JSON.stringify(r.body)};}
@@ -97,7 +97,7 @@ test('property inventory emits a sanitized log and keeps cleanup fail-closed',()
   assert.equal(result.total,Object.keys(f.values).length);
   assert.equal(result.counts.stable,6);
   assert.equal(result.counts.legacy_runtime,0);
-  assert.equal(result.counts.unknown,4);
+  assert.equal(result.counts.unknown,5);
   assert.ok(result.properties.some(p=>p.name==='OPENROUTER_API_KEY'&&p.classification==='stable'));
   assert.ok(result.properties.some(p=>p.name==='CT_GAS_SAFETY_TRIGGER'&&p.classification==='unknown'));
   assert.ok(result.properties.some(p=>p.name==='CT_GAS_PROOF_MODEL'&&p.classification==='unknown'));
