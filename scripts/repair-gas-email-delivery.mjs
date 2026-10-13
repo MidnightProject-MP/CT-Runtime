@@ -34,7 +34,7 @@ export async function repairDelivery(pool,{apply=false,expectedSnapshot,deployme
   const audits=(await c.query("SELECT payload FROM public.vnext_events WHERE event_type='gas-email-owner-delivery-repair' AND payload->>'repairId'=$1",[repairId])).rows;
   const blocks=(await c.query('SELECT project_id,work_unit_id,execution_id,fence,reason FROM public.vnext_project_reconciliation_blocks WHERE project_id=$1 FOR UPDATE',[REPAIR.project])).rows;
   if(o.state==='sent'){
-   if(o.gmail_id!==REPAIR.gmailId||audits.length!==1||!(await c.query('SELECT $1::jsonb=$2::jsonb AS same',[JSON.stringify(audits[0]?.payload),JSON.stringify(evidence)])).rows[0].same)throw new Error('resolved evidence conflict');
+   if(o.gmail_id!==REPAIR.gmailId||audits.length!==1||!(await c.query('SELECT $1::jsonb=$2::jsonb AS same',[JSON.stringify(audits[0]?.payload),JSON.stringify({...evidence,deploymentAttestation})])).rows[0].same)throw new Error('resolved evidence conflict');
    if(blocks.some(b=>b.execution_id===REPAIR.execution))throw new Error('resolved block conflict');
    await c.query('ROLLBACK');return {status:'already-resolved',executionId:REPAIR.execution,gmailId:REPAIR.gmailId};
   }
