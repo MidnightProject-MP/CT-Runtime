@@ -19,7 +19,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function config(enabled) {
     var p=props(), c={instance:p.getProperty(CONFIG[1]),url:p.getProperty(CONFIG[2]),model:p.getProperty(CONFIG[3]),label:p.getProperty(CONFIG[4]),key:p.getProperty(CONFIG[5])};
     if(enabled && p.getProperty(CONFIG[0])!=='true')return null;
-    if(!c.instance||!/^https:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/.test(c.url||'')||!c.model||!c.label||!c.key)throw new Error('email configuration incomplete');
+    if(!c.instance||!/^https:\/\/[^\s/@?#]+(?:\/[^\s?#]*)?$/.test(c.url||'')||!c.model||!c.label||!c.key)throw new Error('email configuration incomplete');
     c.url=c.url.replace(/\/$/,'');return c;
   }
   function jsonFetch(url,options) {
@@ -226,7 +226,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     try{
       var deadline=Date.now()+240000;
       trace.stage='gmail-profile';if(address(api('profile').emailAddress)!==MAILBOX)throw new Error('wrong execution mailbox');
-      trace.stage='neon-health';var health=rpc(c,'health');if(health.mailbox!==MAILBOX||health.allowed_sender!==SENDER)throw new Error('email registration mismatch');
+      trace.stage='data-api-health';var health=rpc(c,'health');if(health.mailbox!==MAILBOX||health.allowed_sender!==SENDER)throw new Error('email registration mismatch');
       trace.stage='intake';var intake=true;try{intake=poll(c,deadline-120000,trace);}catch(err){intake=false;trace.intakeFailure=safeFailure(err);}
       trace.stage='delivery';var delivery=deliver(c,!intake,trace);if(!intake||delivery==='uncertain'||delivery==='blocked')return {status:delivery};
       if(Date.now()>deadline-90000)return {status:'budget'};
