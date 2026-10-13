@@ -50,6 +50,11 @@ test('actual production bundle is inert and dispatches identically in independen
       ctx.CT_GAS_FEDERATION.verify=()=>{federationCalls++;return {};};
       ctx.CT_GAS_FEDERATION.consume=()=>({status:'federation-ok'});
       ctx.CT_GAS_FEDERATION.ingest=()=>({status:'evidence-ok'});
+      for (const value of [null, true, false, 42, 'text', [], {}, {operation:null}]) {
+        const before=federationCalls;
+        assert.deepEqual(JSON.parse(ctx.doPost({postData:{contents:JSON.stringify(value)},parameter:{}}).getContent()),{status:'rejected',reason:'invalid-request'});
+        assert.equal(federationCalls,before,'invalid envelopes never reach federation execution');
+      }
       const q=call('self-deploy-qualify',{files:contentFiles});
       assert.equal(q.status,'qualified');assert.equal(q.desiredBundleHash,digest(JSON.stringify(contentFiles)));
       // Diagnostic failures are observational only: a valid request still reaches

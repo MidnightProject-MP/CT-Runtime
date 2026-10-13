@@ -12,6 +12,9 @@ var CT_GAS_DISPATCH = (function () {
   function handle(e) {
     var raw = String(e && e.postData && e.postData.contents || ''), parsed;
     try { parsed = JSON.parse(raw); } catch (_) { return federationDoPost(e); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.operation !== 'string' || !parsed.operation) {
+      return ContentService.createTextOutput(JSON.stringify({ status: 'rejected', reason: 'invalid-request' })).setMimeType(ContentService.MimeType.JSON);
+    }
     if (!isDeploymentOperation(parsed.operation)) return federationDoPost(e);
     try {
       var query = e && e.parameter || {}, request = CT_GAS_AUTH_TRACE.authenticate(raw, query, CT_GAS_DEPLOY.authenticate), result;
