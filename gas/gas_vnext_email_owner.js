@@ -145,6 +145,7 @@ var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   }
   function activate(){
     var stage='feedback-diagnostic',p,mutated=false,retired=0,creationAttempted=false,counts=null,model=null,result;
+     try{
       // Reality first, read-only: no Feedback setup, Sheets reads or legacy ledger.
       var feedback=diagnoseFeedbackInbox();
        if(!feedback||typeof feedback.script_id!=='string'||!feedback.script_id||ScriptApp.getScriptId()!==feedback.script_id||props().getProperty('CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID')!==ScriptApp.getScriptId())throw new Error('activation-script-mismatch');
