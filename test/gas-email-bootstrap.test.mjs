@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testPool } from './pilot-test-pool.mjs';
-import { bootstrap,loadManifest,validateTarget,TARGET } from '../scripts/bootstrap-gas-email.mjs';
+import { bootstrap,loadManifest,validateTarget } from '../scripts/bootstrap-gas-email.mjs';
+const target={host:'isolated-test.example',database:'testdb',owner:'test_owner'};
 
-test('bootstrap URL requires exact new host, database, owner and encrypted direct connection',()=>{
-  const url=`postgresql://${TARGET.owner}:test-only@${TARGET.host}/${TARGET.database}?sslmode=require`;
-  assert.equal(validateTarget(url),url);
-  for(const bad of [url.replace(TARGET.host,'archived.invalid'),url.replace('/neondb','/other'),url.replace('neondb_owner','other'),url.replace('require','disable'),url+'&options=-csearch_path=other'])assert.throws(()=>validateTarget(bad));
+test('bootstrap URL requires explicit host, database, owner and encrypted direct connection',()=>{
+  const url=`postgresql://${target.owner}:test-only@${target.host}/${target.database}?sslmode=require`;
+  assert.equal(validateTarget(url,target),url);
+  for(const bad of [url.replace(target.host,'archived.invalid'),url.replace('/testdb','/other'),url.replace('test_owner','other'),url.replace('require','disable'),url+'&options=-csearch_path=other'])assert.throws(()=>validateTarget(bad,target));
+  assert.throws(()=>validateTarget(url),/explicit bootstrap target identity required/);
 });
+
 test('fresh bootstrap is atomic, denies missing principal, checksummed and repeat-safe',{timeout:60000},async()=>{
   const pool=await testPool();
   try{
