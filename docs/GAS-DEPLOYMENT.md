@@ -79,7 +79,10 @@ Before modifying deployment control-plane code, read this document and run the d
 The production bundle must contain exactly one `doPost` entry point. That entry
 point delegates at invocation time to the named dispatch and authentication-trace
 modules; the federation handler is named separately. Global file evaluation must
-not call Apps Script services or mutate configuration.
+not call Apps Script services or mutate configuration. The dispatcher rejects
+request bodies over 3 MiB before parsing, hashing, or tracing; federation requests
+have a stricter 8 KiB limit. Authentication diagnostics are best-effort and must
+never authorize a request or prevent the real authenticator from running.
 
 The Node load-order test builds the bundle produced by
 `scripts/build-gas-bundle.mjs` and exercises multiple file orders, authentication,
@@ -105,15 +108,22 @@ deployment is removed. Only manual `gas-self-deploy.yml` is a supported release
 writer; legacy clasp deploy/push are explicitly disabled, including fallback
 source-only writes. Do not re-enable them to work around an HTTP 403.
 
-Dispatch the workflow at the full reviewed aggregate commit and supply that exact
-`release_commit`, a `refs/tags/gas-release/*` `release_ref` resolving to it, the
-canonical normalized desired bundle hash from the builder, and an independently
-freshly inspected expected live predecessor hash. The `gas-production` environment
+Create a `refs/tags/gas-release/*` tag pointing to the full reviewed aggregate
+commit, then dispatch the workflow with that exact tag selected as the workflow
+ref. Supply that exact `release_commit`, the same `release_ref`, the canonical
+normalized desired bundle hash from the builder, and an independently freshly
+inspected expected live predecessor hash. The authorization script rejects a run
+whose actual `GITHUB_REF` differs from `release_ref`. The `gas-production` environment
 must approve this exact tuple in `GAS_APPROVED_RELEASE`:
 `<release_ref>:<commit>:<desired_hash>:<predecessor_hash>`. Missing/stale approval,
 wrong ref, wrong commit, wrong built hash, or a changed live predecessor fails
 closed. Environment protection/review and tag protection are operator prerequisites;
-this change does not configure cloud resources or repository environments.
+this change does not configure cloud resources or repository environments. The
+available GitHub integration cannot read the `gas-production` environment's
+protection settings, and no `gas-release/*` tags are currently visible. Treat both
+controls as **unverified blockers** until a repository administrator confirms
+required independent reviewers on `gas-production` and a protected release-tag
+rule; the workflow/code changes are not a substitute for those controls.
 The shared production concurrency and signed compare-and-swap/readback remain.
 
 Pending: exact A sandbox signed-dispatch smoke, then final aggregate sandbox
