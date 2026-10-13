@@ -42,7 +42,7 @@ export async function retryModel(pool,{apply=false,expectedSnapshot,deploymentAt
 }
 async function main(){
  const [mode,snapshot,confirmation]=process.argv.slice(2);
- if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||!confirmation?.startsWith('--model-diagnostics-attested=')||!validDeploymentAttestation(confirmation.slice('--model-diagnostics-attested='.length))||process.argv.length!==4)))throw new Error('invalid command');
+ if(!['inspect','apply'].includes(mode)||(mode==='inspect'&&process.argv.length!==3)||(mode==='apply'&&(!/^[a-f0-9]{64}$/.test(snapshot||'')||!confirmation?.startsWith('--model-diagnostics-attested=')||!validDeploymentAttestation(confirmation.slice('--model-diagnostics-attested='.length))||process.argv.length!==5)))throw new Error('invalid command');
  const pool=new Pool({connectionString:validateTarget(process.env.CT_BOOTSTRAP_DATABASE_URL),max:1,connectionTimeoutMillis:15000});
  try{const r=(await pool.query('SELECT current_database() AS db,current_user AS owner')).rows[0];if(r.db!==TARGET.database||r.owner!==TARGET.owner)throw new Error('wrong target');console.log(JSON.stringify({target:TARGET,...await retryModel(pool,{apply:mode==='apply',expectedSnapshot:snapshot,deploymentAttestation:mode==='apply'?confirmation.slice('--model-diagnostics-attested='.length):null})}));}finally{await pool.end();}
 }
