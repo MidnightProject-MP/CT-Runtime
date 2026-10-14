@@ -22,7 +22,23 @@ test('known 002 prefix upgrades without relabeling its checksum; unknown prefix 
  }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
 });
 
-test('forward delivery upgrade preserves bootstrap and scoped owner repair is atomic and evidence-bound',{timeout:120000},async()=>{
+test('historically applied 003 checksum is immutable and read-only inspection accepts it, rejects divergence',async()=>{
+ const hash='5a8a7d3c5cd5440190ce799e7cb15a2be2f72c14826269a219396ac05a09b818';
+ const sql=(await readFile(new URL('../deploy/gas-email/003_model_diagnostics.sql',import.meta.url),'utf8')).replace(/\r\n/g,'\n');
+ assert.equal(createHash('sha256').update(sql).digest('hex'),hash);
+ const pool=await testPool();try{
+  await bootstrap(pool,{apply:true});await upgradeDelivery(pool,{apply:true});
+  // Model the historical ledger explicitly, rather than deriving its expected hash from today's file.
+  await pool.query("UPDATE gas_email_upgrade_ledger SET sha256=$1 WHERE upgrade_id='003_model_diagnostics'",[hash]);
+  const queries=[],wrapped={connect:async()=>{const c=await pool.connect();return {release:()=>c.release(),query:(q,a)=>{queries.push(q);return c.query(q,a);}};}};
+  assert.equal((await upgradeDelivery(wrapped)).status,'already-applied');
+  assert.equal(queries.at(-1),'ROLLBACK');assert.ok(queries.every(q=>!/^\s*(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|COMMIT)\b/i.test(q)));
+  await pool.query("UPDATE gas_email_upgrade_ledger SET sha256='8ff3e75d6935f3572bfe124b0a014403d67aa75f29b1b6a5fe306d3d6f0b5353' WHERE upgrade_id='003_model_diagnostics'");
+  await assert.rejects(upgradeDelivery(wrapped),/ledger mismatch/);
+ }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
+});
+
+test('forward delivery upgrade rolls back failures; historical repair remains inspect-only',{timeout:120000},async()=>{
  const pool=await testPool();try{
   await bootstrap(pool,{apply:true});
   const original=(await pool.query('SELECT * FROM gas_email_bootstrap_ledger')).rows;
@@ -58,18 +74,15 @@ test('forward delivery upgrade preserves bootstrap and scoped owner repair is at
   await pool.query('UPDATE gas_email_outbox SET envelope=$1',[JSON.stringify(e)]);
   await pool.query("UPDATE gas_email_outbox SET provider_receipt='unreviewed'");await assert.rejects(repairDelivery(pool));
   await pool.query('UPDATE gas_email_outbox SET provider_receipt=NULL');
-  await pool.query("CREATE FUNCTION reject_repair_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected repair failure'; END $$; REVOKE ALL ON FUNCTION reject_repair_test() FROM PUBLIC,authenticated,anonymous; CREATE TRIGGER reject_repair_test BEFORE UPDATE ON gas_email_outbox FOR EACH ROW EXECUTE FUNCTION reject_repair_test()");
-  await assert.rejects(repairDelivery(pool,{apply:true,deploymentAttestation:'https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/123456789',expectedSnapshot:inspect.snapshot}),/injected/);
+   // No historical mutable path is supported without independent exact-artifact
+   // binding. Assert the gate before database writes, rather than spoof approval.
+   const queries=[],guarded={connect:async()=>{const c=await pool.connect();return {release:()=>c.release(),query:(q,a)=>{queries.push(q);assert.doesNotMatch(q,/^\s*(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|COMMIT)\b/i);return c.query(q,a);}};}};
+   await assert.rejects(repairDelivery(guarded,{apply:true,deploymentAttestation:'https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/123456789',expectedSnapshot:inspect.snapshot}),/independent exact-artifact deployment binding required; mutation disabled/);
+   assert.equal(queries.at(-1),'ROLLBACK');
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM vnext_events WHERE event_type='gas-email-owner-delivery-repair'")).rows[0].n,0);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM vnext_project_reconciliation_blocks')).rows[0].n,1);
-  await pool.query('DROP TRIGGER reject_repair_test ON gas_email_outbox; DROP FUNCTION reject_repair_test()');
-  assert.equal((await repairDelivery(pool,{apply:true,deploymentAttestation:'https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/123456789',expectedSnapshot:inspect.snapshot})).status,'repaired');
-  assert.equal((await repairDelivery(pool,{apply:true,deploymentAttestation:'https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/123456789',expectedSnapshot:inspect.snapshot})).status,'already-resolved');
-  assert.equal((await pool.query('SELECT count(*)::int AS n FROM vnext_project_reconciliation_blocks')).rows[0].n,0);
-  assert.deepEqual((await pool.query('SELECT state,gmail_id,provider_receipt FROM gas_email_outbox')).rows,[{state:'sent',gmail_id:REPAIR.gmailId,provider_receipt:null}]);
-  assert.equal((await pool.query("SELECT count(*)::int AS n FROM vnext_events WHERE event_type='gas-email-owner-delivery-repair'")).rows[0].n,1);
-  await assert.rejects(pool.query("DELETE FROM vnext_events WHERE event_type='gas-email-owner-delivery-repair'"),/immutable/);
-  await assert.rejects(pool.query("UPDATE vnext_events SET payload='{}' WHERE event_type='gas-email-owner-delivery-repair'"),/immutable/);
+   assert.equal((await repairDelivery(pool)).status,'repair-ready');
+   assert.deepEqual((await pool.query('SELECT state,gmail_id,provider_receipt FROM gas_email_outbox')).rows,[{state:'admitted',gmail_id:null,provider_receipt:null}]);
   await pool.query("UPDATE gas_email_upgrade_ledger SET sha256='changed'");await assert.rejects(upgradeDelivery(pool),/ledger mismatch/);
  }finally{await pool.end();}
 });

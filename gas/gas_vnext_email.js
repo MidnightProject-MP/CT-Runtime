@@ -21,8 +21,8 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function config(enabled) {
     var p=props(), c={instance:p.getProperty(CONFIG[1]),url:p.getProperty(CONFIG[2]),model:p.getProperty(CONFIG[3]),label:p.getProperty(CONFIG[4]),key:p.getProperty(CONFIG[5]),mailbox:p.getProperty(CONFIG[8]),sender:p.getProperty(CONFIG[9]),approvedScriptId:p.getProperty(CONFIG[7])};
     if(enabled && p.getProperty(CONFIG[0])!=='true')return null;
-    var approvedHost=p.getProperty('CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST'),urlHost=(c.url||'').match(/^https:\/\/([^\/?#]+)(?:\/|$)/);
-    if(!c.instance||!urlHost||urlHost[1].indexOf('@')>=0||!approvedHost||urlHost[1].toLowerCase()!==approvedHost.toLowerCase()||!c.model||!c.label||!c.key||!/^\S+@\S+\.\S+$/.test(c.mailbox||'')||!/^\S+@\S+\.\S+$/.test(c.sender||'')||!c.approvedScriptId||typeof ScriptApp==='undefined'||ScriptApp.getScriptId()!==c.approvedScriptId)throw new Error('email configuration incomplete or unapproved identity/endpoint');
+    validateTarget(c);
+    if(!c.instance||!c.model||!c.label||!c.key||!/^\S+@\S+\.\S+$/.test(c.mailbox||'')||!/^\S+@\S+\.\S+$/.test(c.sender||''))throw new Error('email configuration incomplete or unapproved identity/endpoint');
     c.url=c.url.replace(/\/$/,'');return c;
   }
   function jsonFetch(url,options) {
@@ -43,9 +43,16 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   var SQL_STATES=['42501','28000','28P01','22023','22P02','23505','40001','40P01','57014','53300','53400'];
   function transportFailure(classification,status,reason,sql){var e=new Error('email transport unavailable');e.emailFailure={classification:classification,httpStatus:status||null,providerReason:reason||null,sqlState:sql||null};return e;}
   function rpc(c,operation,input) {
+    validateTarget(c); // Every caller, including read-only owner diagnostics, binds before minting credentials.
     var token=ScriptApp.getIdentityToken();if(!token)throw new Error('email identity unavailable');
     return jsonFetch(c.url+'/rpc/gas_email_rpc',{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+token},
       payload:JSON.stringify({p_instance:c.instance,p_operation:operation,p_input:input||{}}),muteHttpExceptions:true});
+  }
+  function validateTarget(c) {
+    var p=props(),approvedScript=p.getProperty(CONFIG[7]),approvedHost=p.getProperty(CONFIG[6]);
+    var match=c&&typeof c.url==='string'&&c.url.match(/^https:\/\/([A-Za-z0-9.-]+(?::[0-9]+)?)(\/[^\s\\?#]*)?$/);
+    if(!approvedScript||typeof ScriptApp==='undefined'||ScriptApp.getScriptId()!==approvedScript||!approvedHost||!match||match[1].toLowerCase()!==approvedHost.toLowerCase())throw new Error('email target not approved');
+    return true;
   }
   function api(path,body) {
     var options={method:body===undefined?'get':'post',headers:{Authorization:'Bearer '+ScriptApp.getOAuthToken()},muteHttpExceptions:true};
@@ -63,7 +70,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function subject(m) {
     var value=header(m,'Subject')||'(no subject)';
     value=value.replace(/(\?=)\s+(=\?)/g,'$1$2').replace(/=\?(UTF-8|US-ASCII)\?([BQ])\?([^?]*)\?=/gi,function(_,charset,encoding,data){
-      if(encoding.toUpperCase()==='B')return Utilities.newBlob(Utilities.base64DecodeWebSafe(data.replace(/\+/g,'-').replace(/\//g,'_'))).getDataAsString('UTF-8');
+      if(encoding.toUpperCase()==='B')return decodeUtf8(data.replace(/\+/g,'-').replace(/\//g,'_'));
       return decodeURIComponent(data.replace(/%/g,'%25').replace(/_/g,' ').replace(/=([0-9a-f]{2})/gi,'%$1'));
     });
     if(/=\?[^?]+\?[BQ]\?/i.test(value))throw new Error('unsupported subject encoding');
@@ -72,7 +79,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function text(part,depth) {
     if((depth||0)>10)throw new Error('email nesting exceeds bound');
     if(part.filename)return '';
-    if(part.mimeType==='text/plain'&&part.body&&part.body.data)return Utilities.newBlob(Utilities.base64DecodeWebSafe(part.body.data)).getDataAsString('UTF-8');
+    if(part.mimeType==='text/plain'&&part.body&&part.body.data)return decodeUtf8(part.body.data);
     var parts=part.parts||[];for(var n=0;n<parts.length;n++){var value=text(parts[n],(depth||0)+1);if(value)return value;}return '';
   }
   function incoming(m) {
@@ -93,7 +100,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
         try{m=api('messages/'+encodeURIComponent(id)+'?format=full');}
         catch(fetchError){if(fetchError.emailOversized)rejected=true;else throw fetchError;}
         if(!rejected){
-          try{envelope=incoming(m);if(envelope.subject.indexOf(c.key)>=0||envelope.reference.indexOf(c.key)>=0)rejected=true;}
+          try{envelope=incoming(m);if(envelope.subject.indexOf(c.key)>=0||envelope.reference.indexOf(c.key)>=0)rejected=true;envelope.body=envelope.body.split(c.key).join('[REDACTED]');validateIntakeEnvelope(envelope);}
           catch(validationError){rejected=true;}
         }
         if(rejected){
@@ -102,7 +109,6 @@ var CT_GAS_VNEXT_EMAIL = (function () {
           api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});
           continue;
         }
-        envelope.body=envelope.body.split(c.key).join('[REDACTED]');
         var result=rpc(c,'ingest',envelope);
         if(result.status!=='inserted'&&result.status!=='duplicate')throw new Error('email ingest not acknowledged');
         api('messages/'+encodeURIComponent(id)+'/modify',{removeLabelIds:[label.id]});
@@ -155,6 +161,21 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     return canonical;
   }
   function utf8Bytes(s){return encodeURIComponent(s).replace(/%[0-9A-F]{2}|[^%]/g,'x').length;}
+  function decodeUtf8(data) {
+    // Apps Script's blob decoder replaces malformed UTF-8. Reject rather than
+    // silently changing human input before its durable receipt is recorded.
+    var bytes=Utilities.base64DecodeWebSafe(data),encoded='';
+    for(var n=0;n<bytes.length;n++)encoded+='%'+('0'+((bytes[n]+256)%256).toString(16)).slice(-2);
+    return decodeURIComponent(encoded);
+  }
+  function validateIntakeEnvelope(envelope) {
+    // Validate the raw strings too: JSON.stringify can hide lone UTF-16 surrogates.
+    var keys=Object.keys(envelope);
+    keys.forEach(function(k){if(typeof envelope[k]!=='string'||envelope[k].indexOf('\u0000')>=0)throw new Error('unsupported email');utf8Bytes(envelope[k]);});
+    // PostgreSQL jsonb::text inserts one space after each colon and comma in
+    // this fixed, flat string-valued object. Include those bytes in its 60000 cap.
+    if(envelope.body.length>16000||utf8Bytes(JSON.stringify(envelope))+keys.length*2-1>60000)throw new Error('unsupported email');
+  }
   function mime(e) {
     if(typeof e.subject!=='string'||!e.subject||e.subject.length>500||/[\x00-\x1f\x7f]/.test(e.subject)||!/^<[^<>\s]{1,250}>$/.test(e.reference)||/[^\x21-\x7e]/.test(e.reference)||!/^<gas-turn-[a-z0-9-]+@ct-runtime\.invalid>$/.test(e.messageId)||typeof e.body!=='string'||!e.body||e.body.length>8100)throw new Error('invalid reply envelope');
     var chunks=[],chunk='';
@@ -266,6 +287,6 @@ var CT_GAS_VNEXT_EMAIL = (function () {
     if(trace.intakeFailure)out.intakeFailure=trace.intakeFailure;
     console.log(JSON.stringify(out));return out;
   }
-  return {tick:tick,capsule:CAPSULE,owner:{props:props,config:config,rpc:rpc,api:api,address:address,safeFailure:safeFailure,configKeys:CONFIG,mailbox:mailbox,sender:sender,header:header,subject:subject,text:text,mime:mime,utf8Bytes:utf8Bytes}};
+  return {tick:tick,capsule:CAPSULE,owner:{props:props,config:config,validateTarget:validateTarget,rpc:rpc,api:api,address:address,safeFailure:safeFailure,configKeys:CONFIG,mailbox:mailbox,sender:sender,header:header,subject:subject,text:text,mime:mime,utf8Bytes:utf8Bytes}};
 }());
 function vnextEmailTick(){return CT_GAS_VNEXT_EMAIL.tick();}
