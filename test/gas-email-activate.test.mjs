@@ -16,7 +16,7 @@ function fixture(){
     SpreadsheetApp:new Proxy({},{get:forbidden}),GmailApp:new Proxy({},{get:forbidden}),
     UrlFetchApp:{fetch(url,opts){calls.push(url);let data;
       if(url.endsWith('/profile'))data={emailAddress:mailbox};
-      else if(url.endsWith('/labels'))data={labels:labels?[{name:'Celestan'}]:[]};
+      else if(url.endsWith('/labels'))data={labels:(Array.isArray(labels)?labels:labels?['Celestan']:[]).map(name=>({name}))};
       else if(url.endsWith('/rpc/gas_email_rpc')){assert.equal(JSON.parse(opts.payload).p_operation,'health');data={instance:'gas-vnext-email',project:'celestan-email',mailbox:'midnight.project.mp@gmail.com',allowed_sender:'midnightprojectantigravity@gmail.com',grant_ref:'user-authorized:pr69:gas-text-only:v1',blocked,uncertain:0};}
       else forbidden();return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(data)};
     }}});
@@ -38,6 +38,16 @@ test('all readiness failures precede any mutation including missing label and un
   for(const change of [f=>f.labels(false),f=>f.mailbox('other@example.com'),f=>f.script('wrong'),f=>f.handlers(['gasSafetyWake','unknownWake']),f=>f.handlers(['vnextEmailTick','vnextEmailTick']),f=>f.handlers(['gasSafetyWake','gasSafetyWake']),f=>f.block(),f=>{f.values.CT_VNEXT_EMAIL_INSTANCE='other';}]){
     const f=fixture();change(f);assert.equal(f.run().status,'blocked');assert.equal(f.effects.length,0);assert.equal(f.values.CT_VNEXT_EMAIL_ENABLED,'false');
   }
+});
+test('activation requires the configured queue, not a hardcoded Celestan label, before mutations',()=>{
+  for(const name of ['CustomQueue','private-test-secret-label']){
+    const missing=fixture();missing.values.CT_VNEXT_EMAIL_LABEL=name;
+    const r=missing.run();assert.equal(r.status,'blocked');assert.equal(r.reason,'activation-configured-label-missing');
+    assert.equal(r.mutationAttempted,false);assert.equal(missing.effects.length,0);assert.deepEqual(missing.handlersNow(),['gasSafetyWake']);
+    assert.doesNotMatch(JSON.stringify(missing.logs),/CustomQueue|private-test-secret-label/);
+  }
+  const present=fixture();present.values.CT_VNEXT_EMAIL_LABEL='CustomQueue';present.labels(['CustomQueue']);
+  assert.equal(present.run().status,'active');assert.deepEqual(present.handlersNow(),['vnextEmailTick']);
 });
 test('ambiguous create reconciles one visible trigger or disables without retry; failed retirement preserves marker',()=>{
   const recovered=fixture();recovered.createMode('after');assert.equal(recovered.run().status,'active');assert.equal(recovered.effects.filter(x=>x[0]==='create-trigger').length,1);
