@@ -29,4 +29,12 @@ test('authoritative GAS bundle contains only the canonical arm implementation', 
   const bundle = JSON.parse(await readFile('/tmp/ct-runtime-arm-test-bundle.json', 'utf8'));
   assert.ok(bundle.files.some((file) => file.name === 'gas_deploy'));
   assert.ok(!bundle.files.some((file) => file.name === 'gas_vnext_arm'));
+  // Qualify the built owner artifact, not just the source manifest: label removal
+  // and replies require gmail.modify alongside both email implementation modules.
+  for (const name of ['gas_vnext_email', 'gas_vnext_email_owner']) {
+    assert.ok(bundle.files.some(file => file.name === name && file.type === 'SERVER_JS'));
+  }
+  const manifest = JSON.parse(bundle.files.find(file => file.name === 'appsscript' && file.type === 'JSON').source);
+  assert.deepEqual(manifest.oauthScopes.filter(scope => /gmail|mail\.google\.com/.test(scope)),
+    ['https://www.googleapis.com/auth/gmail.modify']);
 });

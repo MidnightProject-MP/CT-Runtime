@@ -1,4 +1,8 @@
-/* Owner-only controls. Resolve runtime dependencies only when invoked, never at GAS cold load. */
+/* Owner-only controls. Resolve runtime dependencies only when invoked, never at GAS cold load.
+ * The complete owner artifact declares gmail.modify for queue processing and replies.
+ * Declaring the scope does not grant owner consent, deploy, enable polling, or install triggers;
+ * those remain separately authorized operations, never bundle-build/cold-load effects.
+ */
 var CT_GAS_VNEXT_EMAIL_OWNER = (function () {
   function deps(){if(typeof CT_GAS_VNEXT_EMAIL==='undefined'||!CT_GAS_VNEXT_EMAIL.owner)throw new Error('email runtime module unavailable');return CT_GAS_VNEXT_EMAIL.owner;}
   var CONFIG=['CT_VNEXT_EMAIL_ENABLED','CT_VNEXT_EMAIL_INSTANCE','CT_VNEXT_EMAIL_DATA_API_URL','CT_VNEXT_EMAIL_MODEL','CT_VNEXT_EMAIL_LABEL','OPENROUTER_API_KEY','CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST','CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID','CT_VNEXT_EMAIL_APPROVED_MAILBOX','CT_VNEXT_EMAIL_APPROVED_SENDER'];
