@@ -5,11 +5,13 @@ This is the authoritative operating contract for CT-Runtime's GAS deployment cap
 ## Normal path
 
 ```text
-merge GAS-affecting PR
+review aggregate commit and protect release tag
         ↓
-automatic GitHub Action
+manually dispatch gas-self-deploy.yml at the exact release tag
         ↓
 read current LIVE predecessor
+        ↓
+independent environment review of exact commit, desired hash and predecessor
         ↓
 HMAC self-deploy exactly once
         ↓
@@ -26,7 +28,7 @@ bounded readback reconciliation
 HEAD == LIVE == desiredBundleHash
 ```
 
-A GAS-affecting merge to `main` is the normal trigger. Production deployment is serialized by the `gas-production-deploy` concurrency group with cancellation disabled.
+A merge to `main` does not deploy. Only the manually dispatched, hash-pinned `gas-self-deploy.yml` release workflow is supported, subject to the reviewed release gate below. Independent environment approval is a prerequisite, not assumed by this document. Production deployment is serialized by the `gas-production-deploy` concurrency group with cancellation disabled.
 
 ## Identity and invariants
 
@@ -43,7 +45,7 @@ A GAS-affecting merge to `main` is the normal trigger. Production deployment is 
 ## Boundaries
 
 - The deployment capability is infrastructure. CT-Runtime may invoke it as a reliable GAS deployment capability, but its HMAC protocol, GAS-native hashes, Apps Script versions, ContentService behavior, and reconciliation mechanics are not part of the vNext kernel's conceptual model.
-- `clasp` is **bootstrap / break-glass only**. It is not part of normal production deployment.
+- Legacy clasp push/deploy workflows are retired and fail closed. No supported operator path performs a local `clasp push`, including bootstrap or break-glass recovery.
 - The Apps Script Execution API and `clasp run` are **not part of this architecture**.
 - Do not add deployment workflow concepts such as GAS versions, deployment pointers, or HMAC request state to the Runtime outer-loop model merely to support this capability.
 
@@ -53,11 +55,11 @@ Use break-glass handling only when the normal capability cannot safely establish
 
 | Situation | Action |
 | --- | --- |
-| Normal GAS-affecting merge | Let the automatic self-deploy run. No manual intervention. |
+| Normal GAS-affecting merge | No deployment occurs. Review the aggregate artifact and use the manual, exact-tag/hash release gate. |
 | Post-mutation timeout, HTML/redirect anomaly, or otherwise uncertain response | **Read back only**. Do not repeat the mutation automatically. |
 | `HEAD == desired`, `LIVE == predecessor` after an interrupted request | Resume/reconcile the existing request through the deployment capability; do not rewrite HEAD unnecessarily. |
 | `HEAD != LIVE` and `HEAD != desired` | Stop. Investigate the live/HEAD state before any further mutation. |
-| HMAC self-deploy capability itself is broken | Use `clasp` only as a deliberate bootstrap/break-glass recovery path, then restore the normal path. |
+| HMAC self-deploy capability itself is broken | Stop release writes and investigate. Repair requires separate review; do not bypass the release gate with retired workflows or local clasp writes. |
 | Version capacity is near the Apps Script limit | Perform planned version maintenance before production deployment becomes blocked. |
 
 Break-glass work must preserve the same final invariant: `HEAD == LIVE == desired`.

@@ -8,6 +8,17 @@ import { upgradeDelivery } from './upgrade-gas-email-delivery.mjs';
 export const RETRY=Object.freeze({instance:'gas-vnext-email',project:'celestan-email',execution:'gas-turn-963627a2-09f8-48b6-8c29-1ad46f8005cc',work:'gas-email-aeddebba6b1523e1ba05a2ffb9d10fa7',message:'1a1308e396490afd',input:'2',fence:'2',oldExecution:'gas-turn-479896e4-aea4-4e10-9d01-bb90ff715326',oldReply:'1a12116729e4a391'});
 const retryId='owner-model-retry:'+RETRY.execution+':2';
 const validDeploymentAttestation=v=>typeof v==='string'&&v.length<=500&&/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[0-9]+(?:\/attempts\/[0-9]+)?$/.test(v);
+const requireArtifactBinding=()=>{
+  // A URL is only a locator, not evidence that the reviewed bundle was deployed.
+  // Until the owner supplies a separately verified artifact/deployment binding,
+  // keep historical mutation paths fail-closed.
+  const commit=process.env.CT_EMAIL_ATTESTED_COMMIT_SHA||'';
+  const bundle=process.env.CT_EMAIL_ATTESTED_BUNDLE_SHA256||'';
+  const deployment=process.env.CT_EMAIL_ATTESTED_DEPLOYMENT_ID||'';
+  const version=process.env.CT_EMAIL_ATTESTED_DEPLOYMENT_VERSION||'';
+  if(!/^[a-f0-9]{40}$/.test(commit)||!/^[a-f0-9]{64}$/.test(bundle)||!/^[-A-Za-z0-9_]{10,200}$/.test(deployment)||!/^[1-9][0-9]*$/.test(version))
+    throw new Error('independent exact-artifact deployment binding required; mutation disabled');
+};
 export async function retryModel(pool,{apply=false,expectedSnapshot,deploymentAttestation=null}={}){
  if((await upgradeDelivery(pool)).status!=='already-applied')throw new Error('diagnostics extension required');
  const c=await pool.connect();try{
@@ -34,6 +45,7 @@ export async function retryModel(pool,{apply=false,expectedSnapshot,deploymentAt
   const snapshot=createHash('sha256').update(JSON.stringify({e,w,p,inputs,receipts,outbox})).digest('hex');
   if(!apply){await c.query('ROLLBACK');return {status:'retry-ready',retryId,snapshot,requiresModelDiagnosticsDeployed:true,effect:false};}
   if(!validDeploymentAttestation(deploymentAttestation)||expectedSnapshot!==snapshot)throw new Error('deployment attestation reference and exact snapshot required');
+  requireArtifactBinding();
   await c.query("INSERT INTO vnext_events(event_type,payload) VALUES('gas-email-owner-model-retry',$1::jsonb)",[JSON.stringify({retryId,failedExecution:RETRY.execution,inputSeq:2,workUnitId:RETRY.work,snapshot,modelDiagnosticsDeploymentAttestation:deploymentAttestation,authorization:'user-authorized:pr69:one-text-only-retry'})]);
   await c.query('UPDATE vnext_pilot_progress SET failed_through_seq=consumed_input_seq,next_wake_at=clock_timestamp(),updated_at=clock_timestamp() WHERE work_unit_id=$1',[RETRY.work]);
   await c.query("UPDATE vnext_work_units SET state='actionable',updated_at=clock_timestamp() WHERE work_unit_id=$1",[RETRY.work]);

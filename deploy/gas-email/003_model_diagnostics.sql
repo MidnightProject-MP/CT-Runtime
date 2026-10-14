@@ -20,6 +20,7 @@ BEGIN
     WHEN k IN ('contentChars','contractBytes') THEN jsonb_typeof(v)='number' AND v::text ~ '^[0-9]{1,7}$' AND (v::text)::numeric<=1000000
     WHEN k='providerReason' THEN v='null'::jsonb OR v#>>'{}' IN ('serviceDisabled','accessNotConfigured','insufficientPermissions','invalidCredentials','rateLimitExceeded','userRateLimitExceeded','SERVICE_DISABLED','ACCESS_TOKEN_SCOPE_INSUFFICIENT','CREDENTIALS_MISSING','ACCESS_TOKEN_EXPIRED','SERVICE_USAGE_DENIED')
     WHEN k='sqlState' THEN v='null'::jsonb OR v#>>'{}' IN ('42501','28000','28P01','22023','22P02','23505','40001','40P01','57014','53300','53400')
+    WHEN k='projectNumber' THEN v='"788761466843"'::jsonb
     ELSE false END) THEN RAISE EXCEPTION 'invalid diagnostics'; END IF;
   END LOOP;
  END IF;

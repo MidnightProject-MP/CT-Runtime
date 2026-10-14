@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { targetFromEnv,validateTarget,loadManifest,bootstrap,readback } from './bootstrap-gas-email.mjs';
+// Historical identity values are a review fixture only; production entry points never default to them.
 export const INSTANCE={instance:'gas-vnext-email',project:'celestan-email',sub:'101290949094805660136',aud:'788761466843-bqaho4ssrgp2ahif41uacv3o832o7hoo.apps.googleusercontent.com',mailbox:'midnight.project.mp@gmail.com',sender:'midnightprojectantigravity@gmail.com',grant:'user-authorized:pr69:gas-text-only:v1'};
 export const DATA_API_URL=process.env.CT_EMAIL_DATA_API_URL||null;
 export function instanceFromEnv(env=process.env){
@@ -12,7 +13,8 @@ export function instanceFromEnv(env=process.env){
   return Object.freeze(value);
 }
 
-export async function probe(fetchImpl=fetch,kidOverride,baseUrl=DATA_API_URL,instance=INSTANCE){
+export async function probe(fetchImpl=fetch,kidOverride,baseUrl=DATA_API_URL,instance){
+  if(!instance||typeof instance!=='object')throw new Error('explicit approved registration identity required; no repository defaults are permitted');
   if(typeof baseUrl!=='string'||!/^https:\/\/[^\s/@?#]+(?:\/[^\s?#]*)?$/.test(baseUrl))throw new Error('explicit HTTPS data API URL required');
   let kid=kidOverride;
   if(!kid){const keys=await fetchImpl('https://www.googleapis.com/oauth2/v3/certs',{method:'GET',redirect:'error',signal:AbortSignal.timeout(30000)});if(!keys.ok)throw new Error('public Google keys unavailable');kid=(await keys.json()).keys?.[0]?.kid;}
@@ -36,7 +38,8 @@ export async function roleState(client){
     (SELECT coalesce(json_agg(parent.rolname),'[]'::json) FROM pg_auth_members m JOIN pg_roles parent ON parent.oid=m.roleid WHERE m.member=r.oid) AS inherits
     FROM pg_roles r WHERE r.rolname IN ('authenticated','anonymous','ct_gas_bootstrap_authenticated','ct_gas_bootstrap_anonymous') ORDER BY r.rolname`)).rows;
 }
-export async function configure(pool,mode,instance=INSTANCE){
+export async function configure(pool,mode,instance){
+  if(!instance||typeof instance!=='object')throw new Error('explicit approved registration identity required; no repository defaults are permitted');
   if(!['inspect','prepare-roles','restrict-register','activate-for-qualification'].includes(mode))throw new Error('invalid mode');
   if(mode==='prepare-roles')await bootstrap(pool); // Exact ledger and current ACL proof before handoff.
   const c=await pool.connect();try{

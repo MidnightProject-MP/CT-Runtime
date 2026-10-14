@@ -169,6 +169,44 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
       assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_receipts')[0].n),1);
     });
+    await t.test('serialized controls and invalid UTF-8 quarantine durably so the fourth valid message progresses',()=>{
+      reset();const calls=[];
+      const f=gasEmailFixture((op,data)=>{calls.push({op,data});if(op==='quarantine')assert.ok(f.messages.get(data.id).labelIds.includes('queue'),'label remains until durable quarantine');return rawRpc(op,data);});
+      f.add('controls','thread1','\u0001'.repeat(16000));
+      f.add('invalidutf8');f.messages.get('invalidutf8').payload.body.data=Buffer.from([0xc0,0xaf]).toString('base64url');
+      f.add('escaped','thread1','\u0002'.repeat(11000));f.add('fourth','validThread');f.paginateIntakeOnce();
+      f.tick();assert.equal(f.sends,0);assert.equal(rpc('health').quarantined,3);
+      assert.deepEqual(calls.filter(x=>x.op==='quarantine').map(x=>x.data),[{id:'controls'},{id:'invalidutf8'},{id:'escaped'}]);
+      assert.equal(calls.filter(x=>x.op==='ingest').length,0);
+      assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);
+    });
+    await t.test('final redacted envelope respects actual PostgreSQL JSONB byte boundary and UTF-8',()=>{
+      for(const excess of [0,1]){
+        reset();const f=fixture(),id='boundary';
+        const e={...input(id,'thread1',''),subject:'A useful task'};
+        const overhead=sql('SELECT octet_length($1::jsonb::text)::int AS n',[JSON.stringify(e)])[0].n;
+        const budget=60000-overhead+excess;
+        const body='\u0001'.repeat(Math.floor(budget/6))+'x'.repeat(budget%6);
+        e.body=body;
+        assert.equal(sql('SELECT octet_length($1::jsonb::text)::int AS n',[JSON.stringify(e)])[0].n,60000+excess);
+        if(excess)assert.throws(()=>rawRpc('ingest',e),/invalid email request/);
+        f.add(id,'thread1',body);f.tick();
+        assert.equal(rpc('health').quarantined,excess);
+        assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_receipts')[0].n),1-excess);
+      }
+      reset();const f=fixture();f.add('utf8','thread1','界'.repeat(16000));f.tick();
+      assert.equal(rpc('health').quarantined,0);assert.equal(sql('SELECT envelope->>\'body\' AS body FROM gas_email_receipts')[0].body,'界'.repeat(16000));
+      reset();const g=fixture();g.values.OPENROUTER_API_KEY='q';g.add('redaction','thread1','q'.repeat(2000));g.tick();
+      assert.equal(rpc('health').quarantined,1);assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_receipts')[0].n),0);
+    });
+    await t.test('failed quarantine retains label and prevents a new send until durable acknowledgement',()=>{
+      reset();let fail=true;
+      const f=gasEmailFixture((op,data)=>{if(op==='quarantine'&&fail)throw new Error('temporary database outage');return rawRpc(op,data);});
+      f.add('original');f.loseNextCheckpoint();assert.equal(f.tick().status,'blocked');
+      f.add('poison','thread1','\u0001'.repeat(16000));assert.equal(f.tick().status,'intake-unavailable');assert.equal(f.sends,0);
+      assert.ok(f.messages.get('poison').labelIds.includes('queue'));assert.equal(rpc('health').quarantined,0);
+      fail=false;f.tick();assert.ok(!f.messages.get('poison').labelIds.includes('queue'));assert.equal(rpc('health').quarantined,1);
+    });
     await t.test('transient fetch and before-commit ingest failures retry next tick without relabeling',()=>{
       for(const mode of ['fetch','ingest']){
         reset();let fail=true;const f=gasEmailFixture((op,data)=>{if(mode==='ingest'&&op==='ingest'&&fail)throw new Error('before-commit outage');return rawRpc(op,data);});
