@@ -12,7 +12,7 @@ import { runPilotOnce } from '../lib/vnext/pilot.mjs';
 const authority = {
   authorizeExecution: async ({execution}) => ({ref:`test:${execution.execution_id}`}),
   verifyExecution: async (d,{execution}) => d.ref === `test:${execution.execution_id}`,
-  authorizeTerminal: async () => true,
+  authorizeTerminal: async () => ({ ref: "acceptance:pilot-test-accepter" }),
 };
 const next = objective_id => ({objective_id,disposition:'continue',summary:'Verified one useful change.',learned:'Keep the useful observation.',continuation:{mode:'immediate',next_action:'Check next consequence.'}});
 
@@ -22,7 +22,7 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
   await writeFile(path.join(dir,'identity.md'),'Celestan: reconstruct, do, check, persist.');
   await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
   await migrateVNext({pool,directory:path.join(import.meta.dirname,'../vnext-migrations')});
-  const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,intervalMs:1000});
+  const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,acceptanceVerifier:async (decision,context)=>((await authority.authorizeTerminal(context))?.ref===decision.ref),intervalMs:1000});
   const projectId = `pilot-test-${randomUUID()}`;
   let n=0;
   const input = (s,thread,message='Improve one concrete thing.') => s.submit({projectId,threadId:thread,receiptId:`receipt-${++n}`,message});

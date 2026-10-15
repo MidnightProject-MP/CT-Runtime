@@ -23,7 +23,19 @@ try {
     console.log(JSON.stringify(await migrateVNext({ pool, directory: path.join(import.meta.dirname,'../vnext-migrations') })));
   } else {
     const authority = action === 'tick' ? await import(pathToFileURL(await realpath(config.authorityModule)).href) : {};
-    const store = createPilotStore({ pool, authorizationVerifier: authority.verifyExecution, intervalMs: config.intervalMs ?? 60000 });
+    const store = createPilotStore({
+      pool,
+      authorizationVerifier: authority.verifyExecution,
+      // The store independently re-evaluates the acceptance decision for this
+      // exact work, execution and turn, and requires the same decision identity
+      // the outer loop was granted. A reference the authority will not confirm
+      // here cannot settle work as terminal.
+      acceptanceVerifier: async (decision, context) => (
+        typeof authority.authorizeTerminal === 'function'
+        && (await authority.authorizeTerminal(context))?.ref === decision.ref
+      ),
+      intervalMs: config.intervalMs ?? 60000
+    });
     if (action === 'submit') {
       const file = option('--message-file');
       if (!file) throw new Error('--message-file is required');

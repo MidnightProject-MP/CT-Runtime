@@ -28,5 +28,8 @@ export async function authorizeTerminal(context) {
   if (context.execution.authorization_decision_ref!==reference(g,context.execution)) return false;
   const policy=await import(pathToFileURL(g.value.acceptanceModule).href);
   // Project-owned evaluation of the actual finish condition, not Runtime semantics.
-  return await policy.accept({...context,grant:g.value}) === true;
+  if (await policy.accept({...context,grant:g.value})!==true) return false;
+  // Acceptance is a decision with its own identity, distinct from the grant that
+  // authorized execution. Bind it to the reviewed acceptance evidence.
+  return { ref:`acceptance:${g.digest}:${context.execution.execution_id}` };
 }

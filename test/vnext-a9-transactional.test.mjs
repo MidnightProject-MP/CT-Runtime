@@ -102,7 +102,10 @@ test('memory acquisition serializes overlapping transitions and admits only one 
   await new Promise((resolve) => setImmediate(resolve));
   releaseVerifier();
   await first;
-  await assert.rejects(second, /E_PROJECT_AUTH_HELD|Work Unit changed before execution could be claimed/);
+  // Exactly one authority survives. Any of the fencing rejections is correct:
+  // which one surfaces depends on whether the two claim timestamps land in the
+  // same millisecond, so the test asserts the boundary, not a specific message.
+  await assert.rejects(second, /E_PROJECT_AUTH_HELD|Work Unit changed before execution could be claimed|claim expiration does not match Work Unit claim/);
   const snapshot = store.snapshot();
   assert.equal(snapshot.authorities.length, 1);
   assert.equal(snapshot.authorities[0].execution_id, 'exec-concurrent-a');

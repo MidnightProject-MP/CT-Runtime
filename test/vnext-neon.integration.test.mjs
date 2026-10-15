@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
 
-const createNeonStore = (options = {}) => createNeonStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
+const createNeonStore = (options = {}) => createNeonStoreCore({ authorizationVerifier: testAuthorizationVerifier, acceptanceVerifier: async () => true, ...options });
 const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
@@ -77,7 +77,7 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
           outcome_evidence: [{ kind: 'manifest', execution_id: executions[0] }],
         };
       },
-      authorizeTerminal: () => true,
+      authorizeTerminal: () => ({ ref: "acceptance:neon-test-accepter" }),
     });
 
     assert.equal(second.disposition, 'terminal');
