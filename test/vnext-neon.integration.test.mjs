@@ -1,7 +1,8 @@
 import test from 'node:test';
 import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+import { testAcceptanceAuthority } from './vnext-test-acceptance.mjs';
 
-const createNeonStore = (options = {}) => createNeonStoreCore({ authorizationVerifier: testAuthorizationVerifier, acceptanceVerifier: async () => true, ...options });
+const createNeonStore = (options = {}) => createNeonStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
 const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
@@ -32,7 +33,8 @@ async function cleanup(pool, workUnitId) {
 
 test('vNext survives disposable executions through durable Neon state', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 5 });
-  const store = createNeonStore({ pool });
+  const acceptance = testAcceptanceAuthority(c => c.turn.summary === 'The persisted objective has reached its terminal outcome.' && c.evidence.length === 1);
+  const store = createNeonStore({ pool, acceptanceVerifier: acceptance.verifyAcceptance });
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const workUnitId = `wu-neon-${suffix}`;
   const objectiveRef = `objective-neon-${suffix}`;
@@ -77,7 +79,7 @@ test('vNext survives disposable executions through durable Neon state', { skip: 
           outcome_evidence: [{ kind: 'manifest', execution_id: executions[0] }],
         };
       },
-      authorizeTerminal: () => ({ ref: "acceptance:neon-test-accepter" }),
+      authorizeTerminal: acceptance.authorizeTerminal,
     });
 
     assert.equal(second.disposition, 'terminal');
@@ -184,12 +186,20 @@ test('Neon settlement rolls back all mutations when Work Unit transition fails',
     const claimed = claimWorkUnit(original, { executionId: `exec-rollback-${suffix}`, owner: 'owner-a' });
     const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
     const begun = await store.beginExecution(claimed, execution);
-    const invalid = {
-      workUnit: { ...begun.workUnit, state: 'not-a-work-state' },
+    const valid = {
+      workUnit: begun.workUnit,
       execution: { ...begun.execution, state: 'succeeded', finished_at: new Date().toISOString() },
-      turn: { disposition: 'continue', continuation: { mode: 'immediate' } },
+      turn: { objective_id: begun.workUnit.objective_ref, summary: 'Valid turn before injected failure.', disposition: 'continue', continuation: { mode: 'immediate', next_action: 'Check again.' } },
     };
-    await assert.rejects(() => store.persistTurn(invalid));
+    const broken = createNeonStore({ pool: { query: (...args) => pool.query(...args), async connect() {
+      const client = await pool.connect();
+      return { release: () => client.release(), async query(sql, args) {
+        const answer = await client.query(sql, args);
+        if (sql.startsWith('UPDATE vnext_work_units SET state=$2')) throw new Error('injected transition failure');
+        return answer;
+      } };
+    } } });
+    await assert.rejects(() => broken.persistTurn(valid), /injected transition failure/);
     const state = await pool.query(`SELECT w.state,w.claim_execution_id,e.state AS execution_state FROM vnext_work_units w JOIN vnext_executions e ON e.execution_id=$2 WHERE w.work_unit_id=$1`, [workUnitId, execution.execution_id]);
     assert.deepEqual(state.rows[0], { state: 'actionable', claim_execution_id: execution.execution_id, execution_state: 'running' });
     assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId])).rows[0].count, 0);

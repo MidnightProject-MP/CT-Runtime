@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { testAcceptanceAuthority } from './vnext-test-acceptance.mjs';
 import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
 
 const createMemoryStore = (options = {}) => createMemoryStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
@@ -34,9 +35,10 @@ test('Feedback wake reconstructs one Work Unit and runs a disposable execution',
 });
 
 test('a later justified wake produces a new disposable execution rather than a handoff', async () => {
+  const acceptance = testAcceptanceAuthority(c => c.turn.outcome_evidence?.[0]?.execution_id === executionIds[0]);
   const store = createMemoryStore({
     workUnits: [createWorkUnit({ workUnitId: 'wu-repeat-1', objectiveRef: 'objective-2', projectId: 'project-repeat-1' })],
-    acceptanceVerifier: async () => true
+    acceptanceVerifier: acceptance.verifyAcceptance
   });
   const executionIds = [];
   const executor = async ({ execution }) => {
@@ -63,7 +65,7 @@ test('a later justified wake produces a new disposable execution rather than a h
     store,
     executor,
     isJustified: async ({ workUnit }) => workUnit.state === 'waiting',
-    authorizeTerminal: () => ({ ref: "acceptance:test-accepter" }),
+    authorizeTerminal: acceptance.authorizeTerminal,
   });
   assert.equal(second.disposition, 'terminal');
   assert.equal(executionIds.length, 2);
@@ -115,21 +117,22 @@ test('terminal acceptance is awaited and only a verified distinct decision settl
     wake: { type: 'feedback.received', event_id: 'feedback-auth-2', work_unit_id: 'wu-auth-2' },
     store: unverifiedStore,
     executor: async () => ({ objective_id: 'objective-auth', disposition: 'done', summary: 'claims done', outcome_evidence: [{ kind: 'manifest', execution_id: 'seed-auth-2' }] }),
-    authorizeTerminal: async () => ({ ref: 'acceptance:unconfirmed' }),
+    authorizeTerminal: async ({ snapshotDigest }) => ({ ref: 'acceptance:unconfirmed', snapshotDigest }),
   }), /acceptance verifier/);
 
   // A decision the verifier independently confirms settles terminal.
+  const acceptance = testAcceptanceAuthority(c => c.turn.outcome_evidence?.[0]?.execution_id === 'seed-auth-true');
   const terminalStore = createMemoryStore({
     workUnits: [createWorkUnit({ workUnitId: 'wu-auth-true', objectiveRef: 'objective-auth-true', projectId: 'project-auth-true' })],
     executions: [{ execution_id: 'seed-auth-true', state: 'succeeded', work_unit_id: 'wu-auth-true' }],
-    acceptanceVerifier: async () => true,
+    acceptanceVerifier: acceptance.verifyAcceptance,
   });
   let authorizationInput;
   const terminal = await runOuterLoop({
     wake: { type: 'feedback.received', event_id: 'feedback-auth-true', work_unit_id: 'wu-auth-true' },
     store: terminalStore,
     executor: async () => ({ objective_id: 'objective-auth-true', disposition: 'done', summary: 'independently authorized', outcome_evidence: [{ kind: 'manifest', execution_id: 'seed-auth-true' }] }),
-    authorizeTerminal: async (input) => { authorizationInput = input; return { ref: 'acceptance:test-accepter' }; },
+    authorizeTerminal: async (input) => { authorizationInput = input; return acceptance.authorizeTerminal(input); },
   });
   assert.equal(terminal.disposition, 'terminal');
   assert.equal(authorizationInput.turn.disposition, 'done');
@@ -144,7 +147,7 @@ test('terminal acceptance is awaited and only a verified distinct decision settl
     executor: async () => ({ objective_id: 'objective-auth-reject', disposition: 'done', summary: 'authorization fails', outcome_evidence: [{ kind: 'manifest', execution_id: 'seed-auth-reject' }] }),
     authorizeTerminal: async () => { throw new Error('authorization unavailable'); },
   }), /authorization unavailable/);
-  assert.equal(rejectedStore.snapshot().work[0].state, 'waiting');
+  assert.equal(rejectedStore.snapshot().work[0].state, 'review');
 });
 
 test('objective identity mismatch is rejected before evidence verification or settlement', async () => {

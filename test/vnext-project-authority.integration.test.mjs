@@ -65,7 +65,7 @@ test('Neon grants one mutation authority across different Work Units in one proj
     const secondExecution = startExecution(createExecution(secondClaim, { executionId: secondClaim.claim.execution_id, owner: 'owner-b' }));
     await assert.rejects(() => store.beginExecution(secondClaim, secondExecution), /project mutation authority is already held/);
 
-    const settled = applyTurn(firstClaim, firstExecution, { disposition: 'waiting', continuation: { mode: 'condition', condition: { kind: 'external', condition: 'next input' } } });
+    const settled = applyTurn(firstClaim, firstExecution, { objective_id: firstWork.objective_ref, summary: 'Waiting for next input.', disposition: 'waiting', continuation: { mode: 'condition', condition: { kind: 'external', condition: 'next input' } } });
     await store.persistTurn(settled);
 
     await store.beginExecution(secondClaim, secondExecution);

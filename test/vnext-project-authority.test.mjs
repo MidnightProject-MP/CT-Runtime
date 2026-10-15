@@ -38,6 +38,7 @@ test('memory store grants at most one current mutation authority per project and
   await assert.rejects(() => store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref }), /E_PROJECT_AUTH_HELD|project mutation authority is already held/);
 
   const settled = applyTurn(first.claimed, first.execution, {
+    objective_id: firstWork.objective_ref, summary: 'Waiting for the next input.',
     disposition: 'waiting',
     continuation: { mode: 'condition', condition: { kind: 'external', condition: 'next input' } },
   });

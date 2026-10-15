@@ -30,10 +30,7 @@ try {
       // exact work, execution and turn, and requires the same decision identity
       // the outer loop was granted. A reference the authority will not confirm
       // here cannot settle work as terminal.
-      acceptanceVerifier: async (decision, context) => (
-        typeof authority.authorizeTerminal === 'function'
-        && (await authority.authorizeTerminal(context))?.ref === decision.ref
-      ),
+      acceptanceVerifier: authority.verifyAcceptance,
       intervalMs: config.intervalMs ?? 60000
     });
     if (action === 'submit') {

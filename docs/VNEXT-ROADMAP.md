@@ -4,8 +4,71 @@ Governing dependency map. Derived from the approved design baseline, the Phase 0
 transition-authority/lineage map, and the review of #76 / the local Phase 1
 follow-on. This document defines *what must be true*, not what is done.
 
-**Current phase: Change 1 and Change 2 below. Do not start Change 3+ work ahead
-of them.**
+**Current phase: Node operating boundary for Changes 1 and 2 (#76).** Then a
+separate F1 GAS watermark correction; recoverable dispatch (Milestone 1C) remains
+gated. GAS canonical-settlement parity is a separate forward step, not delivered
+or operationally qualified by the Node PR. No live migration or cutover is implied.
+
+## Proof status — Node boundary, not full Phase 1
+
+| Boundary | Code | Integration proof | Operational proof |
+| --- | --- | --- | --- |
+| Strict faithful dialect translation | `d197876`; existing validators reused | `test/handoff-contract.test.mjs` | No new live adapter rollout |
+| Bound canonical settlement, atomic evidence/proposals/progress, content-addressed replay | Node memory/PostgreSQL store changes in #76 | `test/phase1-operating-boundary.test.mjs`, plus A9 rollback suites; local disposable PGlite | None; no live DB apply |
+| Separate snapshot-bound acceptance | `getAcceptanceContext` / `acceptWork`; independently issued opaque decisions | Same real pilot suite: fresh-store acceptance, concurrent exact replay, stale input/revision/evidence/result, revoked verifier, project authority, changed artifact, lost COMMIT | None; project-owned acceptance authority still must be operationally qualified |
+| Timestamp-free continuation | Durable pending proposal; consume precisely selected proposal only in authorized admission; fixed coordinator cooldown | Actual submit → runPilotOnce → closed pool/dataDir → new store → second admission; waiting quiet and late input; native suite and two-process Linux proof are CI gates | None; no scheduler enabled |
+| Active GAS canonical settlement | Future forward step | Not established by Node tests | Not claimed |
+| F1 watermark / Milestone 1C dispatch | F1 next in a separate PR; 1C not started here | Separate gates required | Not claimed |
+
+The PR's exact-head CI checks are the native evidence record; local PGlite is not
+native PostgreSQL and local Windows runs do not prove Linux process groups.
+CI explicitly runs `scripts/run-postgres-suite.mjs test/phase1-operating-boundary.test.mjs`
+in an isolated database and `scripts/prove-vnext-pilot.mjs` twice in separate Linux
+processes against the same disposable data directory. Green CI does not imply
+independent review, acceptance of this PR, or production qualification.
+
+### Node representation and compatibility
+
+Forward migration **012_operating_boundary.sql** adds a material `work_revision`
+and bounded `requirements` JSON to Work Units, and a trusted admission snapshot
+to executions. `objective_ref` is only identity and the existing claim `fence`
+increments for every attempt; neither represents changed finish conditions.
+Existing rows get an explicit legacy-objective-reference baseline, not an
+acceptance grant. Historical executions with no admission snapshot cannot support
+new acceptance. Trusted `reviseWorkRequirements` advances the material revision;
+ordinary human input instead changes the input watermark and invalidates old
+acceptance without relabeling requirements or suppressing late input.
+
+Migration 011 and all historical migrations remain unchanged. Receipt storage
+reuses `vnext_events` and its event-id uniqueness from **002_survivability**, not
+a fabricated dependency introduced in 004. Exact request replay returns its
+durable receipt; divergent content with the same identity fails closed.
+
+Worker settlement derives state from the validated claim and current durable
+authority: `done` settles into review. Caller terminal flags, including the pure
+kernel's compatibility boolean, cannot accept work. A trusted outer-loop callback
+may request acceptance only **after** settlement using the durable snapshot. It
+must return an opaque decision reference plus `snapshotDigest`; bare booleans or
+execution-derived labels do not confer authority. The verifier runs under project
+serialization against locked durable rows and rechecks project-owned acceptance
+policy and external artifact integrity. Runtime does not invent semantic approval.
+
+Pending conditions and timestamps remain discoverable through reconstruction;
+`nextEligible` selects runnable opportunities, not every pending decision.
+Worker timestamps do not set `next_wake_at`. Fresh input or an explicitly
+coordinator-approved due condition can reopen waiting work. Immediate proposals
+are subject to coordinator `intervalMs` and fresh execution authorization.
+
+The internal namespace is `ct-runtime:vnext`; Federation, legacy Runtime and
+GAS-local identities are not aliases. No cross-namespace operating adapter is
+enabled by matching identifier strings. Such an adapter requires an explicit
+trusted mapping before binding a handoff.
+
+Rollback: stop admission first and preserve outstanding claims, receipts and
+reconciliation access. Do not downgrade to an older writer while these records
+are active. 012 is additive; retaining its columns is the safe code-rollback
+posture. Dropping revision/admission data would destroy acceptance provenance
+and is not a supported automatic rollback. This PR performs no live apply.
 
 ## Ownership boundary
 

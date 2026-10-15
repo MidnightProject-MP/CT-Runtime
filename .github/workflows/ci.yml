@@ -83,9 +83,18 @@ jobs:
           node scripts/run-postgres-suite.mjs test/vnext-neon.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-a9-postgres.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-pilot.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/phase1-operating-boundary.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-feedback-evaluation.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-project-authority-owner.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-project-authority.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-project-authority-upgrade.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-postgres-isolation.integration.test.mjs
+      - name: Prove timestamp-free continuation across Linux worker and coordinator processes
+        run: |
+          proof_dir=$(mktemp -d)
+          node scripts/prove-vnext-pilot.mjs "$proof_dir"
+          sleep 2
+          node scripts/prove-vnext-pilot.mjs "$proof_dir"
+          test "$(cat "$proof_dir/outcome.txt")" = 2
+          rm -rf "$proof_dir"
       - run: npm audit --audit-level=high

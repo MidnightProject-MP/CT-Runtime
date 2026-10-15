@@ -8,6 +8,8 @@ import { testPool } from './pilot-test-pool.mjs';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
 import { runPilotOnce } from '../lib/vnext/pilot.mjs';
+import { testAcceptanceAuthority } from './vnext-test-acceptance.mjs';
+import { verifyTurnEvidenceIntegrity } from '../lib/objective-turn.mjs';
 
 const authority = {
   authorizeExecution: async ({execution}) => ({ref:`test:${execution.execution_id}`}),
@@ -22,11 +24,13 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
   await writeFile(path.join(dir,'identity.md'),'Celestan: reconstruct, do, check, persist.');
   await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
   await migrateVNext({pool,directory:path.join(import.meta.dirname,'../vnext-migrations')});
-  const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,acceptanceVerifier:async (decision,context)=>((await authority.authorizeTerminal(context))?.ref===decision.ref),intervalMs:1000});
+   const acceptance = testAcceptanceAuthority(async c => { await verifyTurnEvidenceIntegrity(c.turn, { workspaceRoot: dir }); return c.turn.summary === 'Outcome checked.'; });
+   const operatingAuthority = { ...authority, ...acceptance };
+   const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,acceptanceVerifier:acceptance.verifyAcceptance,intervalMs:1000});
   const projectId = `pilot-test-${randomUUID()}`;
   let n=0;
   const input = (s,thread,message='Improve one concrete thing.') => s.submit({projectId,threadId:thread,receiptId:`receipt-${++n}`,message});
-  const run = (s,executor) => runPilotOnce({store:s,projectId,workspaceRoot:dir,identityFiles:[path.join(dir,'identity.md')],authority,executor});
+   const run = (s,executor) => runPilotOnce({store:s,projectId,workspaceRoot:dir,identityFiles:[path.join(dir,'identity.md')],authority:operatingAuthority,executor});
   try {
     await t.test('idempotent receipt and conflicting content', async () => {
       const s=store();const args={projectId,threadId:'first',receiptId:'fixed-'+projectId,message:'Improve it.'};
@@ -63,7 +67,7 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
     });
     await t.test('failed result settlement rolls back result and eligibility together, no retry of uncertain effects',async()=>{
       const s=store();const a=await input(s,'rollback');
-      const broken={...s,persistTurn:async result=>{result.workUnit.pilot.input_seq=-1;return s.persistTurn(result);}};
+      const broken={...s,persistTurn:async result=>{result.handoff.runtime.input_seq=-1;return s.persistTurn(result);}};
       await assert.rejects(run(broken,async ({workUnit})=>next(workUnit.objective_ref)));
       const row=await s.reconstruct({work_unit_id:a.work_unit_id});assert.ok(row.claim);
       assert.equal((await pool.query('SELECT * FROM vnext_pilot_results WHERE work_unit_id=$1',[a.work_unit_id])).rowCount,0);
