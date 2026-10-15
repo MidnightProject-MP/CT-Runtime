@@ -68,7 +68,8 @@ test('no current dialect output is rejected for exceeding the canonical bound', 
   // The canonical bound is the union of current dialect bounds, so a legacy
   // 2000-character summary remains valid.
   assert.equal(N({ status: 'complete', summary: 'x'.repeat(2000), requested_next_wake: null }, 'runtime-legacy').summary.length, 2000);
-  assert.throws(() => N({ status: 'complete', summary: 'x'.repeat(4001), requested_next_wake: null }, 'runtime-legacy'), /exceeds bound/);
+  assert.throws(() => N({ status: 'complete', summary: 'x'.repeat(2001), requested_next_wake: null }, 'runtime-legacy'), /bounded/);
+  assert.throws(() => N({ ...OBJECTIVE_TURN.continue, summary: 'x'.repeat(2001) }, 'objective-turn'), /exceeds bound/);
 });
 
 test('evidence capability, supplied references, verification, and acceptance are separate', () => {
@@ -85,10 +86,7 @@ test('evidence capability, supplied references, verification, and acceptance are
   // A dialect that CAN express evidence but supplies none is not evidence-complete.
   // (objective-turn's validator requires evidence for `done`, so this is asserted
   // at the contract level rather than constructed from a live dialect output.)
-  const capableButEmpty = N({ ...OBJECTIVE_TURN.done, outcome_evidence: [] }, 'objective-turn');
-  assert.equal(capableButEmpty.evidence_capable, true);
-  assert.equal(capableButEmpty.evidence_supplied, false);
-  assert.equal(capableButEmpty.evidence_complete, false);
+  assert.throws(() => N({ ...OBJECTIVE_TURN.done, outcome_evidence: [] }, 'objective-turn'), /non-empty outcome_evidence/);
 
   // Dialects that cannot express evidence never become evidence-complete.
   for (const [result, source] of [[RUNTIME_LEGACY.complete, 'runtime-legacy'], [GAS_EMAIL.done, 'gas-email']]) {
@@ -119,7 +117,8 @@ test('a GAS wait carries its question as the reason', () => {
   assert.equal(wait.question, 'Compact or roomy layout?');
   // And neither a reason nor a question fails closed.
   assert.throws(() => N({ disposition: 'waiting', summary: 'x' }, 'gas-email'), /name its reason or carry a question/);
-  assert.throws(() => N({ disposition: 'waiting', summary: 'x', continuation: { mode: 'condition', condition: { kind: 'human_answer' } } }, 'objective-turn'), /name its reason or carry a question/);
+  assert.throws(() => N({ ...OBJECTIVE_TURN.waiting, continuation: { mode: 'condition', condition: { kind: 'human_answer' } } }, 'objective-turn'), /condition.*non-empty/);
+  assert.throws(() => N({ ...GAS_EMAIL.waiting, question: '' }, 'gas-email'), /name its reason or carry a question/);
 });
 
 test('GAS continuation is recorded as not expressed rather than invented', () => {
@@ -136,8 +135,8 @@ test('technical failure is never represented as a semantic wait', () => {
   assert.equal(failed.outcome, 'failure');
   assert.equal(failed.failure_reason, 'execution failure');
   assert.equal(failed.evidence_complete, undefined);
-  assert.throws(() => N({ disposition: 'failed', summary: 'x' }, 'objective-turn'), /invalid/);
-  assert.throws(() => N({ status: 'failed', summary: 'x' }, 'gas-email'), /invalid/);
+  assert.throws(() => N({ disposition: 'failed', summary: 'x' }, 'objective-turn'), /disposition/);
+  assert.throws(() => N({ status: 'failed', summary: 'x' }, 'gas-email'), /unknown key status/);
 });
 
 test('runtime identity is bound from context and never asserted by a worker', () => {
@@ -181,29 +180,43 @@ test('malformed and unbounded handoffs fail closed', () => {
     [{ disposition: 'done', summary: 'x', outcome_evidence: [{ kind: 'file', path: 'x'.repeat(257), sha256: 'a'.repeat(64) }] }, 'objective-turn']
   ];
   for (const [result, source] of bad) {
-    assert.throws(() => N(result, source), /handoff|objective_id|summary|bound|wake|failure_reason|Disposition|kind|evidence/, JSON.stringify(result));
+    assert.throws(() => N(result, source), /handoff|objective_id|summary|bound|wake|failure_reason|disposition|kind|evidence/, JSON.stringify(result));
   }
 });
 
-test('normalization preserves references but defers integrity verification', () => {
-  // A path-shaped reference is preserved for the verifier, which is the step
-  // that resolves it against a workspace and would reject an escape.
-  const claim = N({
+test('normalization rejects malformed references before integrity verification', () => {
+  assert.throws(() => N({
     objective_id: 'objective-alpha', disposition: 'done', summary: 'x',
     outcome_evidence: [{ kind: 'file', path: '../escape', sha256: 'a'.repeat(64) }]
-  }, 'objective-turn');
-  assert.equal(claim.evidence_capable, true);
-  assert.equal(claim.evidence_refs.length, 1);
-  assert.equal(claim.evidence_refs[0].path, '../escape');
-  assert.equal(claim.evidence_refs[0].sha256, 'a'.repeat(64));
-  // Normalization explicitly did not verify it.
-  assert.equal(claim.evidence_verified, false);
-  // A reference with a malformed hash is preserved as null rather than dropped.
-  const badHash = N({
+  }, 'objective-turn'), /workspace-relative/);
+  assert.throws(() => N({
     objective_id: 'objective-alpha', disposition: 'done', summary: 'x',
     outcome_evidence: [{ kind: 'file', path: 'p', sha256: 'not-a-hash' }]
-  }, 'objective-turn');
-  assert.equal(badHash.evidence_refs[0].sha256, null);
+  }, 'objective-turn'), /64 hex/);
+});
+
+test('validated payload preserves nonterminal evidence, turn identity, and legacy wake metadata', () => {
+  for (const base of [OBJECTIVE_TURN.continue, OBJECTIVE_TURN.waiting]) {
+    const result = { ...base, turn_id: 'turn-1', learned: 'Keep this lesson', outcome_evidence: OBJECTIVE_TURN.done.outcome_evidence };
+    const handoff = N(result, 'objective-turn');
+    assert.deepEqual(handoff.validated_result, result);
+    assert.deepEqual(handoff.evidence_refs, result.outcome_evidence);
+    assert.equal(handoff.turn_id, 'turn-1');
+    assert.equal(handoff.evidence_verified, false);
+  }
+  const wake = N(RUNTIME_LEGACY.continued, 'runtime-legacy').requested_next_wake;
+  assert.equal(wake.reason, 'retry');
+  assert.equal(wake.priority, 'low');
+  assert.equal(wake.project, 'demo');
+  for (const [result, source, extra] of [
+    [OBJECTIVE_TURN.continue, 'objective-turn', { status: 'continue' }],
+    [RUNTIME_LEGACY.complete, 'runtime-legacy', { disposition: 'done' }],
+    [GAS_EMAIL.done, 'gas-email', { status: 'complete' }]
+  ]) assert.throws(() => N({ ...result, ...extra }, source), /unknown key/);
+  const waiting = N({ ...GAS_EMAIL.waiting, artifact: 'partial' }, 'gas-email');
+  assert.equal(waiting.artifact, 'partial');
+  assert.equal(waiting.wait_condition_kind, 'human_answer');
+  assert.equal(N({ ...GAS_EMAIL.done, question: '', artifact: '' }, 'gas-email').artifact, '');
 });
 
 test('the projection is bounded and preserves evidence semantics', () => {
