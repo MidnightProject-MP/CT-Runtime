@@ -10,7 +10,7 @@ import { migrateVNext } from '../lib/vnext/migration.mjs';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
 import { runPilotOnce } from '../lib/vnext/pilot.mjs';
 import { verifyTurnEvidenceIntegrity } from '../lib/objective-turn.mjs';
-import { claimWorkUnit, createExecution, startExecution, applyTurn, createWorkUnit } from '../lib/vnext/kernel.mjs';
+import { claimWorkUnit, createExecution, startExecution, applyTurn, createWorkUnit, failExecution } from '../lib/vnext/kernel.mjs';
 import { canonicalHandoff } from '../lib/vnext/operating-boundary.mjs';
 import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
 
@@ -105,7 +105,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal((await pool.query('SELECT * FROM vnext_events WHERE event_id=$1', [`acceptance:${decision.ref}`])).rowCount, 1);
     });
     await t.test('new input, material revision, revoked authority and evidence mutation cannot accept', async () => {
-      for (const change of ['input', 'revision', 'evidence', 'revoked', 'result', 'project-authority']) {
+      for (const change of ['input', 'revision', 'evidence', 'revoked', 'result', 'project-authority', 'reconciliation', 'truthy-verifier']) {
         const project = `stale-${randomUUID()}`;
         const { work_unit_id: id } = await submit(store(), project);
         await run(store(), project, async ({ workUnit }) => done(workUnit.objective_ref));
@@ -115,12 +115,14 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
         if (change === 'revision') await s.reviseWorkRequirements(id, { expectedRevision: snapshot.work_revision, requirements: { finish: 'A materially different deliverable' } });
         if (change === 'evidence') await pool.query("UPDATE vnext_evidence_refs SET evidence='[]'::jsonb WHERE work_unit_id=$1", [id]);
         if (change === 'result') await pool.query("UPDATE vnext_work_units SET last_turn=jsonb_set(last_turn,'{summary}','\"changed\"') WHERE work_unit_id=$1", [id]);
-        if (change === 'project-authority') {
+        if (change === 'project-authority' || change === 'reconciliation') {
           const other = await submit(s, project, 'other');
-          await admit(s, other.work_unit_id);
+          const active = await admit(s, other.work_unit_id);
+          if (change === 'reconciliation') await s.persistFailure(failExecution(active.workUnit, active.execution, { maxAttempts: 1, reconciliationRequired: true }));
         }
         const before = await pool.query('SELECT state,work_revision,last_turn FROM vnext_work_units WHERE work_unit_id=$1', [id]);
-        await assert.rejects((change === 'revoked' ? store({ acceptanceVerifier: async () => false }) : s).acceptWork(id, decision));
+        const checking = change === 'revoked' ? store({ acceptanceVerifier: async () => false }) : change === 'truthy-verifier' ? store({ acceptanceVerifier: async () => ({ granted: true }) }) : s;
+        await assert.rejects(checking.acceptWork(id, decision));
         assert.deepEqual((await pool.query('SELECT state,work_revision,last_turn FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows, before.rows);
         assert.equal((await pool.query('SELECT 1 FROM vnext_events WHERE event_id=$1', [`acceptance:${decision.ref}`])).rowCount, 0);
       }
@@ -225,4 +227,32 @@ test('memory acceptance collision after asynchronous verification leaves work un
   release();
   await assert.rejects(accepting, /content conflict/);
   assert.equal((await s.reconstruct({ work_unit_id: 'collision' })).state, 'review');
+});
+
+test('memory continuation cursor survives full snapshot reconstruction and is consumed only by the winning admission', async () => {
+  const work = { ...createWorkUnit({ workUnitId: 'memory-pilot', objectiveRef: 'objective', projectId: 'project' }), pilot: { input_seq: 1, consumed_input_seq: 0, considered_proposal_id: 0, next_wake_at: null } };
+  const options = { authorizationVerifier: authorization.verifyExecution, pilotIntervalMs: 1000 };
+  const s = createMemoryStore({ ...options, workUnits: [work], continuations: [{ id: 900, work_unit_id: 'other-work', execution_id: 'other-exec', continuation: { mode: 'immediate', next_action: 'unrelated' } }] });
+  const first = await admit(s, work.work_unit_id);
+  await s.persistTurn(applyTurn(first.workUnit, first.execution, next('objective')));
+  const saved = s.snapshot();
+  assert.equal(saved.work[0].pilot.considered_proposal_id, 0, 'settlement must not consume any proposal, including another Work Unit');
+  const cold = createMemoryStore({ ...options, ...saved, workUnits: saved.work });
+  const pending = (await cold.reconstruct({ work_unit_id: work.work_unit_id })).pilot.pending_proposal;
+  assert.equal(pending.work_unit_id, work.work_unit_id);
+  await assert.rejects(admit(cold, work.work_unit_id), /not justified/);
+  await pause();
+  const current = await cold.reconstruct({ work_unit_id: work.work_unit_id });
+  const denied = createMemoryStore({ ...options, ...saved, workUnits: saved.work, authorizationVerifier: async () => false });
+  await assert.rejects(admit(denied, work.work_unit_id), /not valid/);
+  assert.deepEqual(denied.snapshot(), saved);
+  const competitors = await Promise.allSettled([admit(cold, work.work_unit_id, current), admit(cold, work.work_unit_id, current)]);
+  assert.equal(competitors.filter(c => c.status === 'fulfilled').length, 1);
+  const second = competitors.find(c => c.status === 'fulfilled').value;
+  assert.equal(cold.snapshot().work[0].pilot.considered_proposal_id, pending.id);
+  await cold.persistTurn(applyTurn(second.workUnit, second.execution, wait('objective')));
+  const waiting = await cold.reconstruct({ work_unit_id: work.work_unit_id });
+  assert.ok(waiting.pilot.pending_proposal.id > pending.id);
+  assert.equal(waiting.pilot.considered_proposal_id, pending.id);
+  await assert.rejects(admit(cold, work.work_unit_id), /not justified/);
 });
