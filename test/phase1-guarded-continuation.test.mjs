@@ -167,6 +167,38 @@ test('idempotent acceptance: a duplicate decision cannot be recorded twice', asy
   assert.deepEqual(replay, { disposition: 'quiesced', reason: 'work-terminal', work_unit_id: 'wu-idem' });
 });
 
+test('a requirements revision during execution supersedes the stale attempt and releases the new revision', async () => {
+  const store = storeWith('wu-supersede');
+  let old;
+  await assert.rejects(runOuterLoop({
+    wake: wake('wu-supersede'), store,
+    executor: async ({ workUnit, execution }) => {
+      old = { workUnit: structuredClone(workUnit), execution: structuredClone(execution) };
+      await store.reviseWorkRequirements('wu-supersede', { expectedRevision: workUnit.work_revision, requirements: { finish: 'revised mid-flight' } });
+      return continueTurn;
+    },
+    authorizeExecution: async () => ({ ref: 'grant:abc' }), authorizeTerminal: accepter
+  }), /stale work revision or admission binding/);
+  const after = await store.reconstruct({ work_unit_id: 'wu-supersede' });
+  assert.equal(after.state, 'actionable');
+  assert.equal(after.claim, null);
+  assert.equal(after.work_revision, 2);
+  assert.equal(after.attempt, 1);
+  const snapshot = store.snapshot();
+  const superseded = snapshot.events.filter(e => e.type === 'execution.superseded');
+  assert.equal(superseded.length, 1);
+  assert.equal(snapshot.events.filter(e => e.type === 'execution.settled').length, 0, 'the stale result is rejected, not settled');
+  const execution = snapshot.executions.find(e => e.execution_id === superseded[0].payload.result.execution_id);
+  assert.equal(execution.state, 'failed');
+  assert.equal(execution.failure.reason, 'requirements-revision');
+  assert.equal(execution.attempt, 1);
+  assert.equal(snapshot.authorities.filter(a => a.project_id === 'project-alpha').length, 0);
+  assert.equal(snapshot.continuations.length, 0, 'the superseded attempt records no continuation');
+  await assert.rejects(store.persistTurn({ workUnit: structuredClone(old.workUnit), execution: { ...old.execution, state: 'running' }, turn: continueTurn }), /fencing conflict/);
+  await assert.rejects(store.persistFailure({ workUnit: structuredClone(old.workUnit), execution: old.execution }), /fencing conflict/);
+  assert.equal(store.snapshot().authorities.filter(a => a.project_id === 'project-alpha').length, 0, 'a late old result cannot release successor authority');
+});
+
 test('stale authority: a stale execution cannot build a settlement against a newer claim', async () => {
   const store = storeWith('wu-stale');
   const claimed = claimWorkUnit(createWorkUnit({ workUnitId: 'wu-stale', objectiveRef: 'objective-alpha', projectId: 'project-alpha' }), { executionId: 'exec-stale', owner: 'pilot-owner' });

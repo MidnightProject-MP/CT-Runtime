@@ -238,6 +238,13 @@ test('memory uncertain failure blocks another Work Unit until exact reconciliati
   const reconciled = await store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'no_effect' });
   assert.equal(reconciled.state, 'actionable');
   assert.deepEqual(store.snapshot().reconciliationBlocks, []);
+  const recorded = store.snapshot().events.filter(e => e.event_id === `reconciliation:${first.execution.execution_id}`);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].payload.result.state, 'actionable');
+  const replay = await store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  assert.deepEqual(replay, reconciled);
+  assert.equal(store.snapshot().events.filter(e => e.event_id === `reconciliation:${first.execution.execution_id}`).length, 1);
+  await assert.rejects(() => store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'effect_applied' }), /content conflict/);
   await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
 });
 

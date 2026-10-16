@@ -179,6 +179,126 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal((await store({ pool: loseCommit() }).acceptWork(id, decision)).state, 'terminal');
       assert.equal((await pool.query('SELECT 1 FROM vnext_executions WHERE work_unit_id=$1', [id])).rowCount, 1);
     });
+    await t.test('reconciliation records one durable outcome and exactly one recovery opportunity', async () => {
+      const project = `recover-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(store(), project);
+      assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
+      await pause();
+      await assert.rejects(
+        run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
+        /outcome uncertain/,
+      );
+      const failed = await store().reconstruct({ work_unit_id: id });
+      assert.equal(failed.state, 'review');
+      assert.equal(failed.claim, null);
+      assert.equal((await progress(id)).next_wake_at, null, 'a settled continuation leaves no coordinator due time');
+      assert.equal(await store().nextEligible(project), null);
+      const failedExecution = (await pool.query("SELECT execution_id,fence,failure FROM vnext_executions WHERE work_unit_id=$1 AND state='failed'", [id])).rows[0];
+      assert.equal(failedExecution.failure.reconciliation_required, true);
+      const untouched = await progress(id);
+      await assert.rejects(store().reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence) + 1, resolution: 'no_effect' }), /does not match durable project block/);
+      assert.deepEqual(await progress(id), untouched, 'a mismatched reconciliation changes nothing');
+      await pool.end();
+      pool = await testPool({ dataDir: path.join(dir, 'db') });
+      const cold = store();
+      assert.equal(await cold.nextEligible(project), null, 'unresolved uncertainty never spins the executor');
+      const reconciled = await cold.reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
+      assert.equal(reconciled.state, 'actionable');
+      const recorded = (await pool.query('SELECT event_type,payload FROM vnext_events WHERE event_id=$1', [`reconciliation:${failedExecution.execution_id}`])).rows[0];
+      assert.equal(recorded.event_type, 'reconciliation.recorded');
+      assert.equal(recorded.payload.result.state, 'actionable');
+      const due = await progress(id);
+      assert.ok(due.next_wake_at && due.next_wake_at.getTime() <= Date.now(), 'reconciliation creates a coordinator-owned due time');
+      assert.equal(await store().nextEligible(project), id);
+      const w = await cold.reconstruct({ work_unit_id: id });
+      const racers = await Promise.allSettled([admit(cold, id, w), admit(store(), id, w)]);
+      assert.equal(racers.filter(r => r.status === 'fulfilled').length, 1, 'overlapping wakes admit exactly one recovery attempt');
+      const recovery = racers.find(r => r.status === 'fulfilled').value;
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE work_unit_id=$1', [id])).rows[0].count, 3);
+      const replay = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
+      assert.deepEqual(replay, reconciled, 'replaying reconciliation returns the recorded outcome');
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_events WHERE event_id=$1', [`reconciliation:${failedExecution.execution_id}`])).rows[0].count, 1);
+      await assert.rejects(store().reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'effect_applied' }), /content conflict/);
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE work_unit_id=$1', [id])).rows[0].count, 3, 'replays create no second opportunity');
+      await store().persistFailure(failExecution(recovery.workUnit, recovery.execution, { maxAttempts: 1, failure: { message: 'recovery attempt failed outright' } }));
+      const settled = await store().reconstruct({ work_unit_id: id });
+      assert.equal(settled.state, 'review');
+      assert.equal(settled.attempt, 3, 'attempt history is preserved, not reset by reconciliation');
+      assert.equal(await store().nextEligible(project), null);
+      assert.equal(await store().nextEligible(project), null, 'no automatic retry loop after a further failure');
+      await assert.rejects(store().reconcileFailure({ projectId: project, workUnitId: id, executionId: recovery.execution.execution_id, fence: 3, resolution: 'no_effect' }), /does not match durable project block/);
+    });
+    await t.test('a requirements revision during execution supersedes the stale attempt and frees the new revision', async () => {
+      const project = `supersede-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(store(), project);
+      await assert.rejects(
+        run(store(), project, async ({ workUnit }) => {
+          await store().reviseWorkRequirements(id, { expectedRevision: workUnit.work_revision, requirements: { finish: 'changed while executing' } });
+          return wait(workUnit.objective_ref);
+        }),
+        /stale work revision/,
+      );
+      const after = await store().reconstruct({ work_unit_id: id });
+      assert.equal(after.state, 'actionable');
+      assert.equal(after.claim, null);
+      assert.equal(after.work_revision, 2);
+      assert.equal(after.attempt, 1, 'supersede preserves the attempt count');
+      assert.equal(after.last_turn, null, 'the rejected completion is not installed as history');
+      const superseded = (await pool.query("SELECT * FROM vnext_executions WHERE work_unit_id=$1 AND state='failed'", [id])).rows[0];
+      assert.equal(superseded.failure.reason, 'requirements-revision');
+      assert.equal(Number(superseded.attempt), 1);
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_events WHERE event_id=$1', [`superseded:${superseded.execution_id}`])).rows[0].count, 1);
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_events WHERE event_id=$1', [`handoff:${superseded.execution_id}`])).rows[0].count, 0, 'the stale result is rejected, not settled');
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0].count, 0);
+      assert.equal(await store().nextEligible(project), id, 'the revised work is discoverable after restart');
+      const second = await run(store(), project, async ({ workUnit, execution }) => {
+        assert.equal(workUnit.work_revision, 2);
+        const before = (await pool.query('SELECT state,claim_execution_id,last_turn,attempt FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0];
+        const held = (await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0];
+        assert.equal(held.execution_id, execution.execution_id);
+        const stale = { execution_id: superseded.execution_id, work_unit_id: id, project_id: project, owner: superseded.owner, fence: Number(superseded.fence), state: 'running', claim_expires_at: superseded.claim_expires_at.toISOString(), authorization_decision_ref: superseded.authorization_decision_ref };
+        await assert.rejects(store().persistTurn({ workUnit: structuredClone(workUnit), execution: stale, turn: wait(workUnit.objective_ref) }), /fencing conflict/);
+        await assert.rejects(store().persistFailure({ workUnit: structuredClone(workUnit), execution: stale }), /fencing conflict/);
+        const still = (await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0];
+        assert.equal(still.execution_id, execution.execution_id, 'a late old result cannot release the successor authority');
+        const unchanged = (await pool.query('SELECT state,claim_execution_id,last_turn,attempt FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0];
+        assert.deepEqual(unchanged, before, 'a late old result cannot overwrite state');
+        return wait(workUnit.objective_ref);
+      });
+      assert.equal(second.disposition, 'waiting');
+      const successor = (await pool.query("SELECT admission FROM vnext_executions WHERE work_unit_id=$1 AND state='succeeded'", [id])).rows[0];
+      assert.equal(Number(successor.admission.work_revision), 2);
+      const final = await store().reconstruct({ work_unit_id: id });
+      assert.equal(final.attempt, 2);
+      assert.equal(final.last_turn.disposition, 'waiting');
+      assert.equal((await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [superseded.execution_id])).rows[0].state, 'failed', 'the superseded attempt remains as history');
+    });
+    await t.test('uncertainty during a requirements revision preserves exclusion until reconciliation frees the new revision', async () => {
+      const project = `revise-uncertain-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(store(), project);
+      await assert.rejects(
+        run(store(), project, async ({ workUnit }) => {
+          await store().reviseWorkRequirements(id, { expectedRevision: workUnit.work_revision, requirements: { finish: 'moved during an uncertain attempt' } });
+          throw new Error('effects uncertain during revision');
+        }),
+        /effects uncertain during revision/,
+      );
+      const blocked = await store().reconstruct({ work_unit_id: id });
+      assert.equal(blocked.state, 'review');
+      assert.equal(blocked.work_revision, 2);
+      assert.equal(blocked.claim, null);
+      assert.equal(await store().nextEligible(project), null, 'unresolved uncertainty never spins the executor');
+      const failedExecution = (await pool.query('SELECT execution_id,fence FROM vnext_executions WHERE work_unit_id=$1', [id])).rows[0];
+      const reconciled = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
+      assert.equal(reconciled.state, 'actionable');
+      assert.equal(await store().nextEligible(project), id, 'resolving uncertainty makes the revised work discoverable');
+      const progressed = await run(store(), project, async ({ workUnit }) => {
+        assert.equal(workUnit.work_revision, 2);
+        return wait(workUnit.objective_ref);
+      });
+      assert.equal(progressed.disposition, 'waiting');
+      assert.equal(Number((await pool.query("SELECT admission FROM vnext_executions WHERE work_unit_id=$1 AND state='succeeded'", [id])).rows[0].admission.work_revision), 2);
+    });
   } finally { await pool.end(); await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -257,4 +377,19 @@ test('memory continuation cursor survives full snapshot reconstruction and is co
   assert.ok(waiting.pilot.pending_proposal.id > pending.id);
   assert.equal(waiting.pilot.considered_proposal_id, pending.id);
   await assert.rejects(admit(cold, work.work_unit_id), /not justified/);
+});
+
+test('memory reconciliation records its outcome and grants one coordinator-owned recovery opportunity', async () => {
+  const work = { ...createWorkUnit({ workUnitId: 'memory-recover', objectiveRef: 'objective', projectId: 'memory-recover-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date().toISOString() } };
+  const store = createMemoryStore({ workUnits: [work], authorizationVerifier: authorization.verifyExecution });
+  const active = await admit(store, 'memory-recover');
+  await store.persistFailure(failExecution(active.workUnit, active.execution, { maxAttempts: 1, reconciliationRequired: true }));
+  assert.equal((await store.reconstruct({ work_unit_id: 'memory-recover' })).state, 'review');
+  const reconciled = await store.reconcileFailure({ projectId: 'memory-recover-project', workUnitId: 'memory-recover', executionId: active.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  assert.equal(reconciled.state, 'actionable');
+  assert.ok(store.snapshot().work[0].pilot.next_wake_at, 'recovery is durably discoverable');
+  assert.equal(store.snapshot().events.filter(e => e.event_id === `reconciliation:${active.execution.execution_id}`).length, 1);
+  const replay = await store.reconcileFailure({ projectId: 'memory-recover-project', workUnitId: 'memory-recover', executionId: active.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  assert.deepEqual(replay, reconciled);
+  assert.equal(store.snapshot().events.filter(e => e.event_id === `reconciliation:${active.execution.execution_id}`).length, 1);
 });
