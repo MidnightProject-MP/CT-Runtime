@@ -4,10 +4,12 @@ Governing dependency map. Derived from the approved design baseline, the Phase 0
 transition-authority/lineage map, and the review of #76 / the local Phase 1
 follow-on. This document defines *what must be true*, not what is done.
 
-**Current phase: Node operating boundary for Changes 1 and 2 (#76).** Then a
-separate F1 GAS watermark correction; recoverable dispatch (Milestone 1C) remains
-gated. GAS canonical-settlement parity is a separate forward step, not delivered
-or operationally qualified by the Node PR. No live migration or cutover is implied.
+**Current phase: Node operating boundary for Changes 1 and 2 (#76).** The separate
+F1 GAS watermark correction is merged forward (004 snapshot binding plus 005
+batch-boundary recovery commissioning) and integration-tested, not applied live;
+recoverable dispatch (Milestone 1C) remains gated. GAS canonical-settlement parity
+is a separate forward step, not delivered or operationally qualified by the Node
+PR. No live migration or cutover is implied.
 
 ## Proof status — Node boundary, not full Phase 1
 
@@ -19,7 +21,7 @@ or operationally qualified by the Node PR. No live migration or cutover is impli
 | Separate snapshot-bound acceptance | `getAcceptanceContext` / `acceptWork`; independently issued opaque decisions | Same real pilot suite: fresh-store acceptance, concurrent exact replay, stale input/revision/evidence/result, revoked verifier, project authority, changed artifact, lost COMMIT | None |
 | Timestamp-free continuation | Durable pending proposal; consume precisely the selected proposal only in authorized admission; fixed coordinator cooldown | Actual submit → `runPilotOnce` → closed pool/dataDir → new store → second admission; waiting quiet and late input; native suite and two-process Linux proof are CI gates | None; no scheduler enabled |
 | Active GAS canonical settlement | Future forward step | Not established by Node tests | Not claimed |
-| F1 watermark / Milestone 1C dispatch | F1 next in a separate PR; 1C not started here | Separate gates required | Not claimed |
+| F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C not started here | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
 
 The PR's exact-head CI checks are the native evidence record; local PGlite is not
 native PostgreSQL and local Windows runs do not prove Linux process groups.
@@ -209,7 +211,7 @@ Close #68/#69 after preserving unique required content.
 
 | # | Finding | Status |
 | --- | --- | --- |
-| F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives. | Open — targeted correction on the GAS path. |
+| F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. |
 | F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — repository configuration. |
 
 ## Management rules
