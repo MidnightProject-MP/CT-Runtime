@@ -10,12 +10,14 @@ batch-boundary recovery commissioning) and integration-tested, not applied live;
 recoverable dispatch (Milestone 1C) remains gated. The review findings on the
 Node recovery boundary are closed on the branch (`f522740`, with review
 corrections on the same branch): reconciliation of uncertain effects records its
-outcome and grants a durable coordinator-owned recovery opportunity; input
-arriving during unresolved uncertainty preserves the reconciliation disposition
-and is seen by the recovery attempt; a requirements revision during execution
-settles the stale attempt as superseded; and supersession receipts replay
-idempotently, with divergent content failing before any state change in both
-adapters. GAS canonical-settlement parity is a separate forward step, not
+outcome and grants a durable coordinator-owned recovery opportunity; input and
+requirements updates during unresolved uncertainty preserve the reconciliation
+disposition, and reconciliation resolves from the authoritative block and
+failed-attempt binding; a requirements revision during execution settles the
+stale attempt as superseded; supersession receipts replay idempotently, with
+divergent content failing before any state change in both adapters, and a
+committed supersession's identity survives later revisions. GAS
+canonical-settlement parity is a separate forward step, not
 delivered or operationally qualified by the Node PR; its correction-scoped
 definition and remaining-obligation mapping are recorded under Change 2. No live
 migration or cutover is implied.
@@ -29,7 +31,7 @@ migration or cutover is implied.
 | Acceptance bound to the durable settlement receipt | `8d6929d`; snapshot reads the settlement event and pilot result row | Real pilot suite asserts the receipt/result digests match the completion claim; tampered result or pilot-result rejects | None; project-owned acceptance authority still must be operationally qualified |
 | Separate snapshot-bound acceptance | `getAcceptanceContext` / `acceptWork`; independently issued opaque decisions | Same real pilot suite: fresh-store acceptance, concurrent exact replay, stale input/revision/evidence/result, revoked verifier, project authority, changed artifact, lost COMMIT | None |
 | Timestamp-free continuation | Durable pending proposal; consume precisely the selected proposal only in authorized admission; fixed coordinator cooldown | Actual submit → `runPilotOnce` → closed pool/dataDir → new store → second admission; waiting quiet and late input; native suite and two-process Linux proof are CI gates | None; no scheduler enabled |
-| Recovery after reconciliation and revision change | `f522740` + review corrections; `reconcileFailure` records its outcome and grants a coordinator due time; input arrival preserves a pending reconciliation disposition; outer loop settles a revision-invalidated attempt via `persistSuperseded` | Real pilot suite: cold-restart discovery, input-during-uncertainty recovery seeing the new input, exactly one recovery admission under overlapping wakes, idempotent and divergent receipts failing closed before mutation in both adapters, bounded further failure, late-result fencing | None; no live DB apply |
+| Recovery after reconciliation and revision change | `f522740` + review corrections; `reconcileFailure` records its outcome, grants a coordinator due time, and resolves from the authoritative block and failed-attempt binding; input and requirements updates preserve a pending reconciliation disposition; outer loop settles a revision-invalidated attempt via `persistSuperseded` | Real pilot suite: cold-restart discovery, input- or revision-during-uncertainty recovery seeing the new input and binding the new revision, exactly one recovery admission under overlapping wakes, idempotent and divergent receipts failing closed before mutation in both adapters (identity stable across later revisions), bounded further failure, late-result fencing | None; no live DB apply |
 | Active GAS canonical settlement | Future forward step | Not established by Node tests | Not claimed |
 | F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C not started here | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
 
@@ -153,10 +155,12 @@ identity only; absence from a search does not establish absence of the effect.
 Rewritten Message-IDs, provider receipts, execution markers and incomplete
 searches all coexist with a successful send, and a lost send response can
 accompany a delivered message. A resolution may permit another send only after
-establishing (a) the previous sender cannot still perform the action — expired
-claim, no live mutation authority, no renewable fence — and (b) authoritative
-evidence supports no_effect rather than merely "not found". Otherwise the state
-must remain uncertain.
+establishing (a) the previous sender cannot still perform the action — confirmed
+sender termination, effective capability revocation, or an execution-boundary
+guarantee that prevents further sends; database conditions such as an expired
+claim, absent authority or an unrenewable fence do not by themselves stop an
+already-running sender — and (b) authoritative evidence supports no_effect
+rather than merely "not found". Otherwise the state must remain uncertain.
 
 **Remaining Change 2 obligations in GAS (existing / missing).**
 - *Canonical handoff semantics:* existing — trusted-context binding (RPC
