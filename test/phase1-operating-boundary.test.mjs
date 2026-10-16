@@ -257,6 +257,33 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(recovery.disposition, 'waiting');
       assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE work_unit_id=$1', [id])).rows[0].count, 3);
     });
+    await t.test('a requirements revision during unresolved uncertainty preserves reconciliation and recovers against the new revision', async () => {
+      const project = `recover-revise-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(store(), project);
+      assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
+      await pause();
+      await assert.rejects(
+        run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
+        /outcome uncertain/,
+      );
+      const failedExecution = (await pool.query("SELECT execution_id,fence FROM vnext_executions WHERE work_unit_id=$1 AND state='failed'", [id])).rows[0];
+      await store().reviseWorkRequirements(id, { expectedRevision: 1, requirements: { finish: 'revised while unresolved uncertainty blocks the project' } });
+      const revised = await store().reconstruct({ work_unit_id: id });
+      assert.equal(revised.state, 'review', 'a requirements revision preserves the reconciliation disposition');
+      assert.equal(revised.work_revision, 2);
+      await pool.end();
+      pool = await testPool({ dataDir: path.join(dir, 'db') });
+      const cold = store();
+      assert.equal(await cold.nextEligible(project), null, 'uncertainty still excludes the project after restart');
+      const reconciled = await cold.reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
+      assert.equal(reconciled.state, 'actionable');
+      assert.equal(await cold.nextEligible(project), id);
+      const w = await cold.reconstruct({ work_unit_id: id });
+      const racers = await Promise.allSettled([admit(cold, id, w), admit(store(), id, w)]);
+      assert.equal(racers.filter(r => r.status === 'fulfilled').length, 1, 'exactly one authorized recovery admission');
+      const recovery = racers.find(r => r.status === 'fulfilled').value;
+      assert.equal(Number(recovery.execution.admission.work_revision), 2, 'the recovery admission binds the new revision');
+    });
     await t.test('a requirements revision during execution supersedes the stale attempt and frees the new revision', async () => {
       const project = `supersede-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
@@ -310,6 +337,17 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       await assert.rejects(store().persistSuperseded({ workUnit: { work_unit_id: id, project_id: project }, execution: { ...staleArgs, fence: Number(staleArgs.fence) + 1 } }), /supersession content conflict/);
       assert.deepEqual((await pool.query('SELECT state,claim_execution_id,last_execution_id,attempt FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0], unchanged, 'divergent supersession content changes nothing');
       assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_events WHERE event_id=$1', [`superseded:${superseded.execution_id}`])).rows[0].count, 1);
+      await store().reviseWorkRequirements(id, { expectedRevision: 2, requirements: { finish: 'revised after the supersession was committed' } });
+      const afterRevision = (await pool.query('SELECT state,claim_execution_id,last_execution_id,attempt,work_revision FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0];
+      assert.equal(Number(afterRevision.work_revision), 3);
+      const replayedLater = await store().persistSuperseded({ workUnit: { work_unit_id: id, project_id: project }, execution: staleArgs });
+      assert.deepEqual(replayedLater, recorded.result, 'a later revision does not retroactively change the committed supersession identity');
+      assert.deepEqual((await pool.query('SELECT state,claim_execution_id,last_execution_id,attempt,work_revision FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0], afterRevision, 'replay after a later revision changes nothing');
+      const successorAdmission = await admit(store(), id);
+      const replayedHeld = await store().persistSuperseded({ workUnit: { work_unit_id: id, project_id: project }, execution: staleArgs });
+      assert.deepEqual(replayedHeld, recorded.result);
+      const held = (await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0];
+      assert.equal(held.execution_id, successorAdmission.execution.execution_id, 'replay while successor authority is held does not alter that authority');
     });
     await t.test('uncertainty during a requirements revision preserves exclusion until reconciliation frees the new revision', async () => {
       const project = `revise-uncertain-${randomUUID()}`;
@@ -415,6 +453,25 @@ test('memory continuation cursor survives full snapshot reconstruction and is co
   assert.ok(waiting.pilot.pending_proposal.id > pending.id);
   assert.equal(waiting.pilot.considered_proposal_id, pending.id);
   await assert.rejects(admit(cold, work.work_unit_id), /not justified/);
+});
+
+test('memory revision during unresolved uncertainty preserves reconciliation and recovers against the new revision', async () => {
+  const work = { ...createWorkUnit({ workUnitId: 'memory-revise', objectiveRef: 'objective', projectId: 'memory-revise-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date().toISOString() } };
+  const store = createMemoryStore({ workUnits: [work], authorizationVerifier: authorization.verifyExecution });
+  const active = await admit(store, 'memory-revise');
+  await store.persistFailure(failExecution(active.workUnit, active.execution, { maxAttempts: 1, reconciliationRequired: true }));
+  await store.reviseWorkRequirements('memory-revise', { expectedRevision: 1, requirements: { finish: 'revised while uncertain' } });
+  const revised = await store.reconstruct({ work_unit_id: 'memory-revise' });
+  assert.equal(revised.state, 'review', 'a requirements revision preserves the reconciliation disposition');
+  assert.equal(revised.work_revision, 2);
+  const reconciled = await store.reconcileFailure({ projectId: 'memory-revise-project', workUnitId: 'memory-revise', executionId: active.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  assert.equal(reconciled.state, 'actionable');
+  assert.ok(store.snapshot().work[0].pilot.next_wake_at, 'recovery is durably discoverable');
+  const current = await store.reconstruct({ work_unit_id: 'memory-revise' });
+  const racers = await Promise.allSettled([admit(store, 'memory-revise', current), admit(store, 'memory-revise', current)]);
+  assert.equal(racers.filter(r => r.status === 'fulfilled').length, 1, 'exactly one authorized recovery admission');
+  const recovery = racers.find(r => r.status === 'fulfilled').value;
+  assert.equal(recovery.execution.admission.work_revision, 2, 'the recovery admission binds the new revision');
 });
 
 test('memory reconciliation records its outcome and grants one coordinator-owned recovery opportunity', async () => {

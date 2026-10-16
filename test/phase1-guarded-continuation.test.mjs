@@ -200,6 +200,18 @@ test('a requirements revision during execution supersedes the stale attempt and 
   const replay = await store.persistSuperseded({ workUnit: structuredClone(old.workUnit), execution: { ...old.execution, state: 'running' } });
   assert.deepEqual(replay, superseded[0].payload.result, 'an exact supersession replay returns the recorded outcome');
   assert.deepEqual(store.snapshot(), snapshot, 'an exact replay changes nothing');
+  await store.reviseWorkRequirements('wu-supersede', { expectedRevision: 2, requirements: { finish: 'revised after the supersession was committed' } });
+  const afterRevision = store.snapshot();
+  const replayedLater = await store.persistSuperseded({ workUnit: structuredClone(old.workUnit), execution: { ...old.execution, state: 'running' } });
+  assert.deepEqual(replayedLater, superseded[0].payload.result, 'a later revision does not retroactively change the committed supersession identity');
+  assert.deepEqual(store.snapshot(), afterRevision, 'replay after a later revision changes nothing');
+  await assert.rejects(store.persistSuperseded({ workUnit: structuredClone(old.workUnit), execution: { ...old.execution, fence: old.execution.fence + 1, state: 'running' } }), /supersession content conflict/, 'a changed attempt binding still fails closed');
+  const successorClaimed = claimWorkUnit(await store.reconstruct({ work_unit_id: 'wu-supersede' }), { executionId: 'exec-successor', owner: 'pilot-owner' });
+  const successorExecution = startExecution(createExecution(successorClaimed, { executionId: 'exec-successor', owner: 'pilot-owner', authorizationDecisionRef: 'grant:abc' }));
+  const successor = await store.beginExecution(successorClaimed, successorExecution, { ref: 'grant:abc' });
+  const replayedHeld = await store.persistSuperseded({ workUnit: structuredClone(old.workUnit), execution: { ...old.execution, state: 'running' } });
+  assert.deepEqual(replayedHeld, superseded[0].payload.result);
+  assert.equal(store.snapshot().authorities.find(a => a.project_id === 'project-alpha')?.execution_id, successor.execution.execution_id, 'replay while successor authority is held does not alter that authority');
 });
 
 test('a conflicting supersession receipt fails before any state change', async () => {
