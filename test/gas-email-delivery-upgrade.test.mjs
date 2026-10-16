@@ -15,7 +15,7 @@ test('known 002 prefix upgrades without relabeling its checksum; unknown prefix 
   await pool.query('CREATE TABLE gas_email_upgrade_ledger(upgrade_id text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp()); REVOKE ALL ON gas_email_upgrade_ledger FROM PUBLIC,authenticated,anonymous');
   await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('002_delivery_provider_receipts',$1)",[hash]);
   const original=(await pool.query('SELECT * FROM gas_email_upgrade_ledger')).rows[0];
-  assert.deepEqual((await upgradeDelivery(pool)).pending,['003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary']);
+  assert.deepEqual((await upgradeDelivery(pool)).pending,['003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts']);
   assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
   assert.deepEqual((await pool.query("SELECT * FROM gas_email_upgrade_ledger WHERE upgrade_id='002_delivery_provider_receipts'")).rows[0],original);
   await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('004_unknown','unknown')");await assert.rejects(upgradeDelivery(pool),/ledger mismatch/);
@@ -45,11 +45,11 @@ test('an exact 002-004 prefix applies only the next migration and preserves hist
   }
   const original=(await pool.query('SELECT * FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows;
   const inspect=await upgradeDelivery(pool);
-  assert.equal(inspect.status,'upgrade-ready');assert.deepEqual(inspect.pending,['005_failure_recovery_boundary']);
+  assert.equal(inspect.status,'upgrade-ready');assert.deepEqual(inspect.pending,['005_failure_recovery_boundary','006_settlement_receipts']);
   assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
   const after=(await pool.query('SELECT * FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows;
   assert.deepEqual(after.slice(0,3),original);
-  assert.equal(after.length,4);assert.equal(after[3].upgrade_id,'005_failure_recovery_boundary');
+  assert.equal(after.length,5);assert.equal(after[4].upgrade_id,'006_settlement_receipts');
   assert.equal((await upgradeDelivery(pool)).status,'already-applied');
  }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
 });
