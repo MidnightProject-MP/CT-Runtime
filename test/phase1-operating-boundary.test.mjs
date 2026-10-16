@@ -105,7 +105,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal((await pool.query('SELECT * FROM vnext_events WHERE event_id=$1', [`acceptance:${decision.ref}`])).rowCount, 1);
     });
     await t.test('new input, material revision, revoked authority and evidence mutation cannot accept', async () => {
-      for (const change of ['input', 'revision', 'evidence', 'revoked', 'result', 'project-authority', 'reconciliation', 'truthy-verifier']) {
+      for (const change of ['input', 'revision', 'evidence', 'revoked', 'result', 'pilot-result', 'project-authority', 'reconciliation', 'truthy-verifier']) {
         const project = `stale-${randomUUID()}`;
         const { work_unit_id: id } = await submit(store(), project);
         await run(store(), project, async ({ workUnit }) => done(workUnit.objective_ref));
@@ -115,6 +115,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
         if (change === 'revision') await s.reviseWorkRequirements(id, { expectedRevision: snapshot.work_revision, requirements: { finish: 'A materially different deliverable' } });
         if (change === 'evidence') await pool.query("UPDATE vnext_evidence_refs SET evidence='[]'::jsonb WHERE work_unit_id=$1", [id]);
         if (change === 'result') await pool.query("UPDATE vnext_work_units SET last_turn=jsonb_set(last_turn,'{summary}','\"changed\"') WHERE work_unit_id=$1", [id]);
+        if (change === 'pilot-result') await pool.query("UPDATE vnext_pilot_results SET turn=jsonb_set(turn,'{summary}','\"changed\"') WHERE work_unit_id=$1", [id]);
         if (change === 'project-authority' || change === 'reconciliation') {
           const other = await submit(s, project, 'other');
           const active = await admit(s, other.work_unit_id);
@@ -125,6 +126,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
         await assert.rejects(checking.acceptWork(id, decision));
         assert.deepEqual((await pool.query('SELECT state,work_revision,last_turn FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows, before.rows);
         assert.equal((await pool.query('SELECT 1 FROM vnext_events WHERE event_id=$1', [`acceptance:${decision.ref}`])).rowCount, 0);
+        if (change === 'revision') assert.equal(await store().nextEligible(project), id, 'trusted material revision is a fresh coordinator opportunity');
       }
     });
     await t.test('competing admissions consume one proposal; canonical settlement replay and divergent rejection', async () => {
