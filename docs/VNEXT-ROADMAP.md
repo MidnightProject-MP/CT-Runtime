@@ -7,9 +7,13 @@ follow-on. This document defines *what must be true*, not what is done.
 **Current phase: Node operating boundary for Changes 1 and 2 (#76).** The separate
 F1 GAS watermark correction is merged forward (004 snapshot binding plus 005
 batch-boundary recovery commissioning) and integration-tested, not applied live;
-recoverable dispatch (Milestone 1C) remains gated. GAS canonical-settlement parity
-is a separate forward step, not delivered or operationally qualified by the Node
-PR. No live migration or cutover is implied.
+recoverable dispatch (Milestone 1C) remains gated. The two review findings on the
+Node recovery boundary are closed on the branch (`f522740`): reconciliation of
+uncertain effects now records its outcome and grants a durable coordinator-owned
+recovery opportunity, and a requirements revision during execution settles the
+stale attempt as superseded, releasing exclusion for the current revision. GAS
+canonical-settlement parity is a separate forward step, not delivered or
+operationally qualified by the Node PR. No live migration or cutover is implied.
 
 ## Proof status — Node boundary, not full Phase 1
 
@@ -20,6 +24,7 @@ PR. No live migration or cutover is implied.
 | Acceptance bound to the durable settlement receipt | `8d6929d`; snapshot reads the settlement event and pilot result row | Real pilot suite asserts the receipt/result digests match the completion claim; tampered result or pilot-result rejects | None; project-owned acceptance authority still must be operationally qualified |
 | Separate snapshot-bound acceptance | `getAcceptanceContext` / `acceptWork`; independently issued opaque decisions | Same real pilot suite: fresh-store acceptance, concurrent exact replay, stale input/revision/evidence/result, revoked verifier, project authority, changed artifact, lost COMMIT | None |
 | Timestamp-free continuation | Durable pending proposal; consume precisely the selected proposal only in authorized admission; fixed coordinator cooldown | Actual submit → `runPilotOnce` → closed pool/dataDir → new store → second admission; waiting quiet and late input; native suite and two-process Linux proof are CI gates | None; no scheduler enabled |
+| Recovery after reconciliation and revision change | `f522740`; `reconcileFailure` records its outcome and grants a coordinator due time; outer loop settles a revision-invalidated attempt via `persistSuperseded` | Real pilot suite: cold-restart discovery, exactly one recovery admission under overlapping wakes, idempotent and divergent replay, bounded further failure, late-result fencing; memory store parity | None; no live DB apply |
 | Active GAS canonical settlement | Future forward step | Not established by Node tests | Not claimed |
 | F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C not started here | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
 
@@ -211,7 +216,7 @@ Close #68/#69 after preserving unique required content.
 
 | # | Finding | Status |
 | --- | --- | --- |
-| F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. |
+| F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. The suites pin the separate eligibility guarantee too: after a permitted recovery succeeds on the older three-input batch, the fourth input must become eligible **without another human message** — preventing repeated commissioning and eventually processing preserved input are distinct guarantees. |
 | F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — repository configuration. |
 
 ## Management rules
