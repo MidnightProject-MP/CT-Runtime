@@ -228,6 +228,35 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(await store().nextEligible(project), null, 'no automatic retry loop after a further failure');
       await assert.rejects(store().reconcileFailure({ projectId: project, workUnitId: id, executionId: recovery.execution.execution_id, fence: 3, resolution: 'no_effect' }), /does not match durable project block/);
     });
+    await t.test('input arriving during unresolved uncertainty preserves reconciliation and is seen by the recovery attempt', async () => {
+      const project = `recover-input-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(store(), project);
+      assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
+      await pause();
+      await assert.rejects(
+        run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
+        /outcome uncertain/,
+      );
+      const failedExecution = (await pool.query("SELECT execution_id,fence FROM vnext_executions WHERE work_unit_id=$1 AND state='failed'", [id])).rows[0];
+      const consumedBefore = (await progress(id)).consumed_input_seq;
+      const fresh = await store().submit({ projectId: project, threadId: 'thread', receiptId: `receipt-${randomUUID()}`, message: 'Recovery input' });
+      assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'review', 'input arrival preserves the reconciliation disposition');
+      assert.equal((await progress(id)).consumed_input_seq, consumedBefore, 'input arrival does not consume the new input');
+      await pool.end();
+      pool = await testPool({ dataDir: path.join(dir, 'db') });
+      const cold = store();
+      assert.equal(await cold.nextEligible(project), null, 'uncertainty still excludes the project after restart');
+      const reconciled = await cold.reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
+      assert.equal(reconciled.state, 'actionable');
+      assert.equal(await cold.nextEligible(project), id);
+      const recovery = await run(cold, project, async ({ workUnit }) => {
+        assert.equal(workUnit.pilot.input_seq, fresh.input_seq, 'the recovery attempt sees the new input');
+        assert.ok(workUnit.pilot.inputs.some(i => i.message === 'Recovery input'));
+        return wait(workUnit.objective_ref);
+      });
+      assert.equal(recovery.disposition, 'waiting');
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE work_unit_id=$1', [id])).rows[0].count, 3);
+    });
     await t.test('a requirements revision during execution supersedes the stale attempt and frees the new revision', async () => {
       const project = `supersede-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
@@ -272,6 +301,15 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(final.attempt, 2);
       assert.equal(final.last_turn.disposition, 'waiting');
       assert.equal((await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [superseded.execution_id])).rows[0].state, 'failed', 'the superseded attempt remains as history');
+      const recorded = (await pool.query('SELECT payload FROM vnext_events WHERE event_id=$1', [`superseded:${superseded.execution_id}`])).rows[0].payload;
+      const staleArgs = { execution_id: superseded.execution_id, work_unit_id: id, project_id: project, owner: superseded.owner, fence: Number(superseded.fence), state: 'running', claim_expires_at: superseded.claim_expires_at.toISOString(), authorization_decision_ref: superseded.authorization_decision_ref };
+      const replayed = await store().persistSuperseded({ workUnit: { work_unit_id: id, project_id: project }, execution: staleArgs });
+      assert.deepEqual(replayed, recorded.result, 'an exact supersession replay returns the recorded outcome');
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_events WHERE event_id=$1', [`superseded:${superseded.execution_id}`])).rows[0].count, 1);
+      const unchanged = (await pool.query('SELECT state,claim_execution_id,last_execution_id,attempt FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0];
+      await assert.rejects(store().persistSuperseded({ workUnit: { work_unit_id: id, project_id: project }, execution: { ...staleArgs, fence: Number(staleArgs.fence) + 1 } }), /supersession content conflict/);
+      assert.deepEqual((await pool.query('SELECT state,claim_execution_id,last_execution_id,attempt FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0], unchanged, 'divergent supersession content changes nothing');
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_events WHERE event_id=$1', [`superseded:${superseded.execution_id}`])).rows[0].count, 1);
     });
     await t.test('uncertainty during a requirements revision preserves exclusion until reconciliation frees the new revision', async () => {
       const project = `revise-uncertain-${randomUUID()}`;

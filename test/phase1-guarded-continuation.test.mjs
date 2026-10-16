@@ -197,6 +197,21 @@ test('a requirements revision during execution supersedes the stale attempt and 
   await assert.rejects(store.persistTurn({ workUnit: structuredClone(old.workUnit), execution: { ...old.execution, state: 'running' }, turn: continueTurn }), /fencing conflict/);
   await assert.rejects(store.persistFailure({ workUnit: structuredClone(old.workUnit), execution: old.execution }), /fencing conflict/);
   assert.equal(store.snapshot().authorities.filter(a => a.project_id === 'project-alpha').length, 0, 'a late old result cannot release successor authority');
+  const replay = await store.persistSuperseded({ workUnit: structuredClone(old.workUnit), execution: { ...old.execution, state: 'running' } });
+  assert.deepEqual(replay, superseded[0].payload.result, 'an exact supersession replay returns the recorded outcome');
+  assert.deepEqual(store.snapshot(), snapshot, 'an exact replay changes nothing');
+});
+
+test('a conflicting supersession receipt fails before any state change', async () => {
+  const store = storeWith('wu-supersede-conflict');
+  const claimed = claimWorkUnit(createWorkUnit({ workUnitId: 'wu-supersede-conflict', objectiveRef: 'objective-alpha', projectId: 'project-alpha' }), { executionId: 'exec-conflict', owner: 'pilot-owner' });
+  const execution = startExecution(createExecution(claimed, { executionId: 'exec-conflict', owner: 'pilot-owner', authorizationDecisionRef: 'grant:abc' }));
+  const begun = await store.beginExecution(claimed, execution, { ref: 'grant:abc' });
+  await store.reviseWorkRequirements('wu-supersede-conflict', { expectedRevision: begun.workUnit.work_revision, requirements: { finish: 'revised mid-flight' } });
+  await store.appendEvent({ event_id: `superseded:${execution.execution_id}`, type: 'execution.superseded', payload: { divergent: true } });
+  const before = store.snapshot();
+  await assert.rejects(store.persistSuperseded({ workUnit: structuredClone(begun.workUnit), execution: { ...begun.execution, state: 'running' } }), /supersession content conflict/);
+  assert.deepEqual(store.snapshot(), before, 'work, execution, authority and events remain unchanged');
 });
 
 test('stale authority: a stale execution cannot build a settlement against a newer claim', async () => {
