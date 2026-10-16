@@ -22,11 +22,14 @@ test('GAS failure and expiry watermarks bind to the attempt snapshot', {timeout:
   const fail=claim=>rpc('failure',{execution_id:claim.execution_id,fence:claim.fence});
   const expire=()=>sql("BEGIN; UPDATE vnext_executions SET claim_expires_at=clock_timestamp()-interval '1 second' WHERE state='running'; UPDATE vnext_work_units SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); UPDATE vnext_project_mutation_authority SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); COMMIT");
   try{
-    await t.test('settlement watermarks bind to the attempt row with no latest-input fallback',()=>{
+    await t.test('settlement watermarks bind to the attempt snapshot with a bounded recovery frontier',()=>{
       const src=sql("SELECT prosrc FROM pg_proc WHERE proname='gas_email_rpc_bootstrap'")[0].prosrc;
       assert.ok(src.includes("failed_through_seq=CASE WHEN p_operation='failure' THEN t.input_seq ELSE 0 END"),'failure binds to the validated attempt');
       assert.ok(src.includes('failed_through_seq=(SELECT t2.input_seq FROM public.gas_email_turns t2 WHERE t2.execution_id=a.execution_id AND t2.instance_id=i.instance_id)'),'expiry resolves the expired authority execution');
-      assert.ok(!src.includes('SELECT max(input_seq) FROM public.vnext_pilot_inputs'),'no latest-input fallback remains');
+      assert.ok(!src.includes('failed_through_seq=(SELECT max(input_seq)'),'no latest-input fallback remains');
+      assert.ok(src.includes('x.input_seq>greatest(p.consumed_input_seq,p.failed_through_seq,p.recovery_commissioned_seq)'),'eligibility follows the commissioned recovery frontier');
+      assert.ok(src.includes('recovery_commissioned_seq=(SELECT max(input_seq) FROM public.vnext_pilot_inputs WHERE work_unit_id=w.work_unit_id) WHERE work_unit_id=w.work_unit_id AND failed_through_seq>0'),'recovery claims record the observed input frontier');
+      assert.ok(src.includes("recovery_commissioned_seq=CASE WHEN p_operation='failure' THEN recovery_commissioned_seq ELSE 0 END"),'successful checkpoints clear the commissioned frontier');
     });
     await t.test('input received after a failed attempt snapshot stays eligible and durable',()=>{
       reset();
@@ -53,6 +56,36 @@ test('GAS failure and expiry watermarks bind to the attempt snapshot', {timeout:
       assert.deepEqual(progress(),{consumed:0,failed:seq('Original request.'),next_wake_at:null});
       assert.deepEqual(c2.inputs.map(x=>x.input_seq),[1,2]);
       assert.deepEqual(messages(c2),['Original request.','Post-snapshot request.']);
+    });
+    await t.test('a newer input commissions the identical snapshot at most once without a retry loop',()=>{
+      for(const mode of ['failure','expiry']){
+        reset();
+        for(const [n,body] of [['n1','Boundary one.'],['n2','Boundary two.'],['n3','Boundary three.']])rpc('ingest',input(n,body));
+        const c1=rpc('claim');assert.equal(c1.status,'claimed');assert.deepEqual(messages(c1),['Boundary one.','Boundary two.','Boundary three.']);
+        rpc('ingest',input('n4','Boundary four.'));
+        if(mode==='failure')fail(c1);else expire();
+        const r1=rpc('claim');assert.equal(r1.status,'claimed');
+        assert.deepEqual(messages(r1),['Boundary one.','Boundary two.','Boundary three.']);
+        assert.deepEqual(progress(),{consumed:0,failed:3,next_wake_at:null});
+        assert.equal(Number(sql('SELECT recovery_commissioned_seq::int AS n FROM vnext_pilot_progress')[0].n),4,'the observed input frontier is commissioned');
+        if(mode==='failure')fail(r1);else expire();
+        assert.equal(rpc('claim').status,'idle');assert.equal(rpc('claim').status,'idle');
+        assert.equal(Number(sql('SELECT count(*)::int AS n FROM vnext_pilot_inputs')[0].n),4);
+        assert.equal(Number(sql('SELECT count(*)::int AS n FROM vnext_executions')[0].n),2);
+      }
+    });
+    await t.test('a newer input reaches processing after a successful boundary recovery',()=>{
+      reset();
+      for(const [n,body] of [['s1','Stage one.'],['s2','Stage two.'],['s3','Stage three.']])rpc('ingest',input(n,body));
+      const c1=rpc('claim');assert.equal(c1.status,'claimed');fail(c1);
+      rpc('ingest',input('s4','Fourth input.'));
+      const r1=rpc('claim');assert.equal(r1.status,'claimed');
+      assert.deepEqual(messages(r1),['Stage one.','Stage two.','Stage three.']);
+      rpc('checkpoint',{execution_id:r1.execution_id,fence:r1.fence,turn:{disposition:'done',summary:'Recovered the batch.'}});
+      assert.deepEqual(progress(),{consumed:3,failed:0,next_wake_at:null});
+      assert.equal(rpc('delivery',{execution_id:r1.execution_id}).status,'superseded');
+      const c2=rpc('claim');assert.equal(c2.status,'claimed');
+      assert.deepEqual(c2.inputs.map(x=>x.input_seq),[4]);assert.deepEqual(messages(c2),['Fourth input.']);
     });
     await t.test('repeated recovery advances the watermark one snapshot at a time and never suppresses newer input',()=>{
       reset();
