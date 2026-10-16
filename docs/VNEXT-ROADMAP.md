@@ -7,14 +7,18 @@ follow-on. This document defines *what must be true*, not what is done.
 **Current phase: Node operating boundary for Changes 1 and 2 (#76).** The separate
 F1 GAS watermark correction is merged forward (004 snapshot binding plus 005
 batch-boundary recovery commissioning) and integration-tested, not applied live;
-recoverable dispatch (Milestone 1C) remains gated. The two review findings on the
-Node recovery boundary are closed on the branch (`f522740`): reconciliation of
-uncertain effects now records its outcome and grants a durable coordinator-owned
-recovery opportunity, and a requirements revision during execution settles the
-stale attempt as superseded, releasing exclusion for the current revision. GAS
-canonical-settlement parity is a separate forward step, not delivered or
-operationally qualified by the Node PR; its smallest correction-scoped
-definition is recorded under Change 2. No live migration or cutover is implied.
+recoverable dispatch (Milestone 1C) remains gated. The review findings on the
+Node recovery boundary are closed on the branch (`f522740`, with review
+corrections on the same branch): reconciliation of uncertain effects records its
+outcome and grants a durable coordinator-owned recovery opportunity; input
+arriving during unresolved uncertainty preserves the reconciliation disposition
+and is seen by the recovery attempt; a requirements revision during execution
+settles the stale attempt as superseded; and supersession receipts replay
+idempotently, with divergent content failing before any state change in both
+adapters. GAS canonical-settlement parity is a separate forward step, not
+delivered or operationally qualified by the Node PR; its correction-scoped
+definition and remaining-obligation mapping are recorded under Change 2. No live
+migration or cutover is implied.
 
 ## Proof status — Node boundary, not full Phase 1
 
@@ -25,7 +29,7 @@ definition is recorded under Change 2. No live migration or cutover is implied.
 | Acceptance bound to the durable settlement receipt | `8d6929d`; snapshot reads the settlement event and pilot result row | Real pilot suite asserts the receipt/result digests match the completion claim; tampered result or pilot-result rejects | None; project-owned acceptance authority still must be operationally qualified |
 | Separate snapshot-bound acceptance | `getAcceptanceContext` / `acceptWork`; independently issued opaque decisions | Same real pilot suite: fresh-store acceptance, concurrent exact replay, stale input/revision/evidence/result, revoked verifier, project authority, changed artifact, lost COMMIT | None |
 | Timestamp-free continuation | Durable pending proposal; consume precisely the selected proposal only in authorized admission; fixed coordinator cooldown | Actual submit → `runPilotOnce` → closed pool/dataDir → new store → second admission; waiting quiet and late input; native suite and two-process Linux proof are CI gates | None; no scheduler enabled |
-| Recovery after reconciliation and revision change | `f522740`; `reconcileFailure` records its outcome and grants a coordinator due time; outer loop settles a revision-invalidated attempt via `persistSuperseded` | Real pilot suite: cold-restart discovery, exactly one recovery admission under overlapping wakes, idempotent and divergent replay, bounded further failure, late-result fencing; memory store parity | None; no live DB apply |
+| Recovery after reconciliation and revision change | `f522740` + review corrections; `reconcileFailure` records its outcome and grants a coordinator due time; input arrival preserves a pending reconciliation disposition; outer loop settles a revision-invalidated attempt via `persistSuperseded` | Real pilot suite: cold-restart discovery, input-during-uncertainty recovery seeing the new input, exactly one recovery admission under overlapping wakes, idempotent and divergent receipts failing closed before mutation in both adapters, bounded further failure, late-result fencing | None; no live DB apply |
 | Active GAS canonical settlement | Future forward step | Not established by Node tests | Not claimed |
 | F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C not started here | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
 
@@ -124,32 +128,56 @@ Invariants:
 - Apply equivalent behavior to the active GAS path through a **forward**
   migration; never rewrite historical migrations.
 
-### Smallest GAS parity change against the corrected boundary (definition only — not started)
+### GAS parity against the corrected boundary (definition only — not started)
 
-The two recovery corrections imply exactly one missing GAS mechanism; they add
-nothing else. **Uncertain external effect:** GAS already inserts a durable
-reconciliation block before an admitted send and clears it only with delivery
-evidence (`record`). The missing branch is *resolved-no-effect*: today a block
-whose send never happened can only be cleared by producing a `gmail_id`, so a
-genuinely unsent message blocks the project indefinitely. The smallest parity
-change is one guarded resolution operation (a closed addition to `gas_email_rpc`
-or an extension of `record`) that verifies project block, execution/fence,
-instance and outbox state; records the resolution durably and immutably (exact
-replay returns the prior receipt; divergent content with the same identity fails
-closed); marks the outbox entry resolved without fabricating delivery evidence
-(closed state; exact name fixed with the forward migration); clears the block;
-and grants one coordinator-owned recovery opportunity without new input while
-preserving attempt history and the existing bounded-retry limit. The envelope's
-embedded `messageId` (`<execution_id>@ct-runtime.invalid>`) already makes the
-no-effect inspection deterministic, and the resolution records that inspection's
-evidence reference. **In-flight requirements revision:** GAS email has no trusted
-material-revision path, and its equivalent — human input arriving during
-execution — is already handled (pending delivery superseded; settled work
-returns to actionable when newer input exists), so no change is implied there.
-The existing 005 batch-boundary recovery commissioning already matches the
-coordinator-owned-opportunity semantics for model failures. This definition does
-not authorize implementation, live apply, or qualification; recoverable dispatch
-(1C) stays gated.
+The recovery corrections imply one missing GAS recovery mechanism, and the
+remaining Change 2 obligations still need an explicit mapping. Nothing here is
+implemented, applied live, or qualified; recoverable dispatch (1C) stays gated.
+
+**Uncertain external effect (delivery recovery, not full parity).** GAS already
+inserts a durable reconciliation block before an admitted send and clears it
+only with delivery evidence (`record`). The missing branch is *resolved-no-effect*:
+a block whose send never happened can only be cleared by producing a `gmail_id`,
+so a genuinely unsent message blocks the project indefinitely. The smallest
+parity change is one guarded resolution operation (a closed addition to
+`gas_email_rpc` or an extension of `record`) that verifies project block,
+execution/fence, instance and outbox state; records the resolution durably and
+immutably (exact replay returns the prior receipt; divergent content with the
+same identity fails closed); marks the outbox entry resolved without fabricating
+delivery evidence (closed state; exact name fixed with the forward migration);
+clears the block; and grants one coordinator-owned recovery opportunity without
+new input while preserving attempt history and the existing bounded-retry limit.
+
+**No-effect evidence contract.** The envelope's embedded `messageId` is a lookup
+identity only; absence from a search does not establish absence of the effect.
+Rewritten Message-IDs, provider receipts, execution markers and incomplete
+searches all coexist with a successful send, and a lost send response can
+accompany a delivered message. A resolution may permit another send only after
+establishing (a) the previous sender cannot still perform the action — expired
+claim, no live mutation authority, no renewable fence — and (b) authoritative
+evidence supports no_effect rather than merely "not found". Otherwise the state
+must remain uncertain.
+
+**Remaining Change 2 obligations in GAS (existing / missing).**
+- *Canonical handoff semantics:* existing — trusted-context binding (RPC
+  principal, execution/fence, bounded turn validation). Missing — handoff
+  normalization and the evidence-capability / references / integrity /
+  acceptance separation; GAS emits one native dialect.
+- *Bound settlement:* existing — `checkpoint` atomically settles turn, outbox,
+  progress, work/execution state and authority release under one fence.
+  Missing — durable settlement receipts with replay/conflict semantics,
+  continuation proposals, and acceptance binding.
+- *Acceptance separation:* missing — `done` lands work in `review`; no
+  acceptance operation, decision identity, or revision/evidence binding exists.
+- *Continuation admission:* missing — no proposal records or consideration
+  cursor; input/wake eligibility is not a substitute.
+
+**In-flight requirements revision:** GAS email has no trusted material-revision
+path, and its equivalent — human input arriving during execution — is already
+handled (pending delivery superseded; settled work returns to actionable when
+newer input exists), so no change is implied there. The existing 005
+batch-boundary recovery commissioning already matches the
+coordinator-owned-opportunity semantics for model failures.
 
 ## Milestone 1 — one reliable coordination core
 
