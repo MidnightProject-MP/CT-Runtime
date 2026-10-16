@@ -87,7 +87,7 @@ test('A9 PostgreSQL settlement rollback preserves running state and writes no co
     const claimed = claimWorkUnit(original, { executionId: `exec-settle-${suffix}`, owner: 'owner-a' });
     const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: claimed.claim.owner, authorizationDecisionRef: `test-auth:${claimed.claim.execution_id}` }));
     const begun = await store.beginExecution(claimed, execution, authorize(execution));
-    const result = applyTurn(begun.workUnit, begun.execution, { disposition: 'continue', summary: 'settlement', continuation: { mode: 'immediate', next_action: 'again' }, outcome_evidence: [{ kind: 'test' }] });
+    const result = applyTurn(begun.workUnit, begun.execution, { objective_id: begun.workUnit.objective_ref, disposition: 'continue', summary: 'settlement', continuation: { mode: 'immediate', next_action: 'again' }, outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: 'a'.repeat(64) }] });
     await assert.rejects(() => withInjectedFailure(pool, sql => sql.startsWith('INSERT INTO vnext_continuations'), wrappedPool =>
       createNeonStore({ pool: wrappedPool, authorizationVerifier: verifier }).persistTurn(result)
     ), /A9 injected transaction failure/);

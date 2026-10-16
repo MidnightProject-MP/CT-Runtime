@@ -1,7 +1,9 @@
-// Copy outside the checkout and connect to the project's existing authority.
+// Copy outside the checkout, point the evidence-validator import at the installed
+// runtime module, and connect to the project's existing authority.
 // This concrete grant adapter does NOT grant permissions by being installed.
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { verifyTurnEvidenceIntegrity } from '../lib/objective-turn.mjs';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 async function grant() {
@@ -22,11 +24,33 @@ export async function authorizeExecution({workUnit,execution}) {
 export async function verifyExecution(decision,context) {
   return (await authorizeExecution(context)).ref === decision.ref && context.execution.authorization_decision_ref === decision.ref;
 }
-export async function authorizeTerminal(context) {
+const decisions = new Map();
+async function acceptanceAllowed(context) {
   const g=await grant();
   if (context.workUnit.project_id!==g.value.projectId || !g.value.acceptanceModule || !path.isAbsolute(g.value.acceptanceModule)) return false;
   if (context.execution.authorization_decision_ref!==reference(g,context.execution)) return false;
   const policy=await import(pathToFileURL(g.value.acceptanceModule).href);
+  // This sample supports file evidence in the explicitly granted workspace.
+  // Manifest evidence needs a project-owned resolver, not JSON pretending to be
+  // a callable store. Absent that resolver it correctly fails closed.
+  const evidence = await verifyTurnEvidenceIntegrity(context.turn, { workspaceRoot: g.value.workspaceRoot });
   // Project-owned evaluation of the actual finish condition, not Runtime semantics.
-  return await policy.accept({...context,grant:g.value}) === true;
+  if (await policy.accept({...context,evidence,grant:g.value})!==true) return false;
+  // Acceptance is a decision with its own identity, distinct from the grant that
+  // authorized execution. Bind it to the reviewed acceptance evidence.
+  return g.digest;
 }
+export async function authorizeTerminal(context) {
+  const grantDigest = await acceptanceAllowed(context);
+  if (!grantDigest || !context.snapshotDigest) return false;
+  const decision = { ref: `acceptance:${randomUUID()}`, snapshotDigest: context.snapshotDigest };
+  decisions.set(decision.ref, { ...decision, grantDigest });
+  return decision;
+}
+export async function verifyAcceptance(decision, context) {
+  const issued = decisions.get(decision.ref);
+  return Boolean(issued && issued.snapshotDigest === decision.snapshotDigest && issued.snapshotDigest === context.snapshotDigest
+    && issued.grantDigest === await acceptanceAllowed(context));
+}
+// This sample's opaque decisions live only in this authority process. A durable
+// independent authority may implement its own decision registry for later use.
