@@ -13,7 +13,8 @@ uncertain effects now records its outcome and grants a durable coordinator-owned
 recovery opportunity, and a requirements revision during execution settles the
 stale attempt as superseded, releasing exclusion for the current revision. GAS
 canonical-settlement parity is a separate forward step, not delivered or
-operationally qualified by the Node PR. No live migration or cutover is implied.
+operationally qualified by the Node PR; its smallest correction-scoped
+definition is recorded under Change 2. No live migration or cutover is implied.
 
 ## Proof status — Node boundary, not full Phase 1
 
@@ -122,6 +123,33 @@ Invariants:
 - Preserve execution authority, fencing, and reconciliation protections.
 - Apply equivalent behavior to the active GAS path through a **forward**
   migration; never rewrite historical migrations.
+
+### Smallest GAS parity change against the corrected boundary (definition only — not started)
+
+The two recovery corrections imply exactly one missing GAS mechanism; they add
+nothing else. **Uncertain external effect:** GAS already inserts a durable
+reconciliation block before an admitted send and clears it only with delivery
+evidence (`record`). The missing branch is *resolved-no-effect*: today a block
+whose send never happened can only be cleared by producing a `gmail_id`, so a
+genuinely unsent message blocks the project indefinitely. The smallest parity
+change is one guarded resolution operation (a closed addition to `gas_email_rpc`
+or an extension of `record`) that verifies project block, execution/fence,
+instance and outbox state; records the resolution durably and immutably (exact
+replay returns the prior receipt; divergent content with the same identity fails
+closed); marks the outbox entry resolved without fabricating delivery evidence
+(closed state; exact name fixed with the forward migration); clears the block;
+and grants one coordinator-owned recovery opportunity without new input while
+preserving attempt history and the existing bounded-retry limit. The envelope's
+embedded `messageId` (`<execution_id>@ct-runtime.invalid>`) already makes the
+no-effect inspection deterministic, and the resolution records that inspection's
+evidence reference. **In-flight requirements revision:** GAS email has no trusted
+material-revision path, and its equivalent — human input arriving during
+execution — is already handled (pending delivery superseded; settled work
+returns to actionable when newer input exists), so no change is implied there.
+The existing 005 batch-boundary recovery commissioning already matches the
+coordinator-owned-opportunity semantics for model failures. This definition does
+not authorize implementation, live apply, or qualification; recoverable dispatch
+(1C) stays gated.
 
 ## Milestone 1 — one reliable coordination core
 
