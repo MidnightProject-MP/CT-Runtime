@@ -266,6 +266,24 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
         checkpoint(retry);assert.equal(rpc('delivery').status,'superseded');assert.equal(rpc('claim').inputs[0].message,'retry');
       }
     });
+    await t.test('input arriving after a failed or expired snapshot triggers exactly one recovery attempt',()=>{
+      for(const expire of [false,true]){
+        reset();rpc('ingest',input('snapshot','sqlthread','Original requirement'));
+        const c=rpc('claim');assert.equal(c.inputs.length,1);
+        const snapshotSeq=Number(sql('SELECT input_seq AS n FROM vnext_pilot_inputs')[0].n);
+        rpc('ingest',input('post','sqlthread','Arrived after the snapshot'));
+        if(expire){
+          sql("BEGIN; UPDATE vnext_executions SET claim_expires_at=clock_timestamp()-interval '1 second' WHERE state='running'; UPDATE vnext_work_units SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); UPDATE vnext_project_mutation_authority SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); COMMIT");
+        }else rpc('failure',{execution_id:c.execution_id,fence:c.fence});
+        const recovery=rpc('claim');assert.equal(recovery.status,'claimed');
+        assert.equal(Number(sql('SELECT failed_through_seq AS n FROM vnext_pilot_progress')[0].n),snapshotSeq);
+        assert.deepEqual(recovery.inputs.map(x=>x.message),['Original requirement','Arrived after the snapshot']);
+        checkpoint(recovery);
+        const settled=rpc('delivery');assert.equal(settled.status,'send');
+        rpc('record',{execution_id:settled.execution_id,gmail_id:'postSent',messageId:settled.envelope.messageId,threadId:settled.envelope.threadId});
+        assert.equal(rpc('claim').status,'idle');
+      }
+    });
     await t.test('canonical multilingual and JSON escaping byte budgets agree before checkpoint, failures preserve input',()=>{
       const turns=[
         {disposition:'done',summary:'界'.repeat(3000),artifact:'界'.repeat(2000)},

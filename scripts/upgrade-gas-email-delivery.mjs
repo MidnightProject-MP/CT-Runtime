@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { targetFromEnv,validateTarget,loadManifest,readback } from './bootstrap-gas-email.mjs';
 export const UPGRADE='002_delivery_provider_receipts';
-export const UPGRADES=[UPGRADE,'003_model_diagnostics'];
+export const UPGRADES=[UPGRADE,'003_model_diagnostics','004_failure_watermark_snapshot'];
 export async function upgradeDelivery(pool,{apply=false}={}){
  const files=await Promise.all(UPGRADES.map(async id=>{const sql=(await readFile(new URL('../deploy/gas-email/'+id+'.sql',import.meta.url),'utf8')).replace(/\r\n/g,'\n');return {id,sql,checksum:createHash('sha256').update(sql).digest('hex')};}));
  const manifest=await loadManifest(),c=await pool.connect();

@@ -15,10 +15,22 @@ test('known 002 prefix upgrades without relabeling its checksum; unknown prefix 
   await pool.query('CREATE TABLE gas_email_upgrade_ledger(upgrade_id text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp()); REVOKE ALL ON gas_email_upgrade_ledger FROM PUBLIC,authenticated,anonymous');
   await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('002_delivery_provider_receipts',$1)",[hash]);
   const original=(await pool.query('SELECT * FROM gas_email_upgrade_ledger')).rows[0];
-  assert.deepEqual((await upgradeDelivery(pool)).pending,['003_model_diagnostics']);
+  assert.deepEqual((await upgradeDelivery(pool)).pending,['003_model_diagnostics','004_failure_watermark_snapshot']);
   assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
   assert.deepEqual((await pool.query("SELECT * FROM gas_email_upgrade_ledger WHERE upgrade_id='002_delivery_provider_receipts'")).rows[0],original);
   await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('004_unknown','unknown')");await assert.rejects(upgradeDelivery(pool),/ledger mismatch/);
+  await pool.query("DELETE FROM gas_email_upgrade_ledger WHERE upgrade_id='004_unknown'");
+  await pool.query("INSERT INTO gas_email_instances VALUES('f1-test','f1-owner','f1-client','f1-project','midnight.project.mp@gmail.com','midnightprojectantigravity@gmail.com',true,'reviewed:text-only:v1')");
+  const claims={sub:'f1-owner',aud:'f1-client',iss:'https://accounts.google.com',exp:4102444800};
+  const rpc=async(operation,input={})=>{const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify(claims)]);await c.query('SET LOCAL ROLE authenticated');const r=(await c.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS result',['f1-test',operation,JSON.stringify(input)])).rows[0].result;await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
+  const message=id=>({id,threadId:'f1thread',from:'midnightprojectantigravity@gmail.com',to:'midnight.project.mp@gmail.com',reference:`<${id}@example.com>`,subject:'Task',body:'Requirement '+id});
+  assert.equal((await rpc('ingest',message('a'))).status,'inserted');
+  const captured=await rpc('claim');assert.equal(captured.status,'claimed');
+  assert.equal((await rpc('ingest',message('b'))).status,'inserted');
+  assert.equal((await rpc('failure',{execution_id:captured.execution_id,fence:captured.fence})).status,'settled');
+  assert.equal((await pool.query('SELECT failed_through_seq::int AS n FROM vnext_pilot_progress')).rows[0].n,1);
+  const recovery=await rpc('claim');assert.equal(recovery.status,'claimed');
+  assert.deepEqual(recovery.inputs.map(x=>x.message),['Requirement a','Requirement b']);
  }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
 });
 
