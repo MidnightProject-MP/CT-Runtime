@@ -9,6 +9,7 @@ try {
   for(const file of bootstrap.files) await pool.query(await readFile(new URL('../'+file,import.meta.url),'utf8'));
   await pool.query(await readFile(new URL('../deploy/gas-email/002_delivery_provider_receipts.sql',import.meta.url),'utf8'));
   await pool.query(await readFile(new URL('../deploy/gas-email/003_model_diagnostics.sql',import.meta.url),'utf8'));
+  await pool.query(await readFile(new URL('../deploy/gas-email/004_failure_watermark_snapshot.sql',import.meta.url),'utf8'));
   await pool.query("INSERT INTO gas_email_instances VALUES ('gas-test','gas-owner','gas-client','email-project','midnight.project.mp@gmail.com','midnightprojectantigravity@gmail.com',true,'reviewed:text-only:v1')");
   parentPort.postMessage({ready:true});
 } catch(e){parentPort.postMessage({error:e.message});}
