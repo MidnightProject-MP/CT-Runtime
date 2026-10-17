@@ -127,11 +127,11 @@ test('a 002-007 database accepts pre-existing settled review work only through t
   await assert.rejects(rpc('accept',{decision_ref:'reviewed:text-only:v1',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest,authority:'reviewed:text-only:v1'}),/acceptance authority required/);
   await assert.rejects(rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest}),/acceptance authority required/);
   assert.equal((await pool.query("SELECT state FROM vnext_work_units WHERE work_unit_id='accepted-work'")).rows[0].state,'review');
-  await pool.query("INSERT INTO gas_email_acceptance_authorities VALUES('gas-vnext-email','reviewed:owner-acceptance:v1')");
+  await pool.query("INSERT INTO gas_email_acceptance_authorities VALUES('gas-vnext-email','reviewed:owner-acceptance:v1','owner-acceptance:v1')");
   const accepted=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest,authority:'reviewed:owner-acceptance:v1'});
   assert.equal(accepted.status,'accepted');assert.equal(accepted.replay,false);
   assert.equal((await pool.query("SELECT state FROM vnext_work_units WHERE work_unit_id='accepted-work'")).rows[0].state,'terminal');
-  assert.equal((await pool.query('SELECT authority_ref FROM gas_email_acceptances')).rows[0].authority_ref,'reviewed:owner-acceptance:v1');
+  assert.equal((await pool.query('SELECT authority_id FROM gas_email_acceptances')).rows[0].authority_id,'owner-acceptance:v1');
   const replay=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest,authority:'reviewed:owner-acceptance:v1'});
   assert.equal(replay.status,'accepted');assert.equal(replay.replay,true);assert.equal(replay.accepted_at,accepted.accepted_at);
   assert.deepEqual((await pool.query('SELECT upgrade_id FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows.map(row=>row.upgrade_id),['002_delivery_provider_receipts','003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals','008_acceptance_decisions']);

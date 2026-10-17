@@ -21,7 +21,15 @@
 --
 -- Acceptance is authorized by a separately provisioned acceptance authority
 -- registered per instance (owner-managed, never exposed through any RPC and
--- never derived from the execution grant). A caller that can execute text
+-- never derived from the execution grant). The registered authority_ref is a
+-- bearer credential: provision it as an unpredictable, securely generated
+-- value, keep it separate from ordinary runtime/model context, and handle it
+-- as a credential. Each registration also carries a non-secret authority_id,
+-- which is what acceptance history records for routine audit attribution.
+-- The authority row is read FOR SHARE inside the accepting transaction, so
+-- owner-managed rotation or revocation serializes with acceptance: acceptance
+-- commits before revocation, or revocation wins and the acceptance rejects.
+-- A caller that can execute text
 -- turns cannot mint acceptance merely by presenting review context and an
 -- arbitrary reference. New acceptance is refused while the project has an
 -- unresolved reconciliation block or an active mutation authority, and the
@@ -36,20 +44,24 @@ CREATE TABLE public.gas_email_acceptances (
  fence bigint NOT NULL,
  input_seq bigint NOT NULL REFERENCES public.vnext_pilot_inputs,
  snapshot_digest text NOT NULL CHECK(snapshot_digest ~ '^[0-9a-f]{64}$'),
- authority_ref text NOT NULL,
+ authority_id text NOT NULL,
  accepted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(instance_id,decision_ref)
 );
 REVOKE ALL ON public.gas_email_acceptances FROM PUBLIC,authenticated,anonymous;
 
--- Separate capability for terminal acceptance. Possession of the registered
--- reference (never returned by any operation) authorizes acceptance for this
--- instance and project only. An instance with no row here cannot accept work
+-- Separate capability for terminal acceptance. authority_ref is the bearer
+-- credential: possession authorizes acceptance for this instance and project
+-- only, it is never returned by any operation, and it must be provisioned as
+-- an unpredictable, securely generated value independent of runtime/model
+-- context. authority_id is a non-secret identifier recorded in acceptance
+-- history. An instance with no row here cannot accept work
 -- at all: the text-execution grant is never automatically extended into
 -- terminal-acceptance authority. Provision deliberately, owner-side.
 CREATE TABLE public.gas_email_acceptance_authorities (
  instance_id text PRIMARY KEY REFERENCES public.gas_email_instances,
  authority_ref text NOT NULL CHECK(length(authority_ref) BETWEEN 1 AND 200),
+ authority_id text NOT NULL CHECK(length(authority_id) BETWEEN 1 AND 200),
  provisioned_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 REVOKE ALL ON public.gas_email_acceptance_authorities FROM PUBLIC,authenticated,anonymous;
@@ -71,7 +83,7 @@ DECLARE
  o public.gas_email_outbox; r public.gas_email_receipts; t public.gas_email_turns; s public.gas_email_settlements;
  acc public.gas_email_acceptances;
  seq bigint; consumed bigint; id text; wid text; envelope jsonb; turn jsonb;
- response text; disposition text; work_state text; digest text; authority text;
+ response text; disposition text; work_state text; digest text; authority text; authority_id text;
 BEGIN
  i := public.gas_email_principal(p_instance);
  IF jsonb_typeof(p_input) IS DISTINCT FROM 'object' OR octet_length(p_input::text)>60000 THEN
@@ -276,8 +288,11 @@ BEGIN
       OR coalesce(p_input->>'work_unit_id','')='' OR coalesce(p_input->>'execution_id','')='' THEN RAISE EXCEPTION 'invalid acceptance decision'; END IF;
     -- Terminal acceptance requires the separately provisioned acceptance
     -- authority for this instance. The execution grant (and any reference
-    -- obtainable from review context) is not acceptance authority.
-    SELECT aa.authority_ref INTO authority FROM public.gas_email_acceptance_authorities aa WHERE aa.instance_id=i.instance_id;
+    -- obtainable from review context) is not acceptance authority. The
+    -- authority row is locked through this transaction so owner-managed
+    -- rotation or revocation cannot interleave: either this acceptance
+    -- commits first, or the rotated/revoked value is what we verify against.
+    SELECT aa.authority_ref,aa.authority_id INTO authority,authority_id FROM public.gas_email_acceptance_authorities aa WHERE aa.instance_id=i.instance_id FOR SHARE;
     IF authority IS NULL OR p_input->>'authority' IS DISTINCT FROM authority THEN RAISE EXCEPTION 'acceptance authority required'; END IF;
     SELECT * INTO acc FROM public.gas_email_acceptances WHERE instance_id=i.instance_id AND decision_ref=p_input->>'decision_ref';
     IF FOUND THEN
@@ -304,8 +319,8 @@ BEGIN
     THEN RAISE EXCEPTION 'stale acceptance decision'; END IF;
     digest:=public.gas_email_acceptance_digest(i.instance_id,s.execution_id,s.fence,s.input_seq,s.turn);
     IF p_input->>'snapshot_digest' IS DISTINCT FROM digest THEN RAISE EXCEPTION 'acceptance snapshot mismatch'; END IF;
-    INSERT INTO public.gas_email_acceptances(instance_id,decision_ref,project_id,work_unit_id,execution_id,fence,input_seq,snapshot_digest,authority_ref)
-      VALUES(i.instance_id,p_input->>'decision_ref',i.project_id,w.work_unit_id,s.execution_id,s.fence,s.input_seq,digest,authority) RETURNING * INTO acc;
+    INSERT INTO public.gas_email_acceptances(instance_id,decision_ref,project_id,work_unit_id,execution_id,fence,input_seq,snapshot_digest,authority_id)
+      VALUES(i.instance_id,p_input->>'decision_ref',i.project_id,w.work_unit_id,s.execution_id,s.fence,s.input_seq,digest,authority_id) RETURNING * INTO acc;
     UPDATE public.vnext_work_units SET state='terminal',updated_at=clock_timestamp() WHERE work_unit_id=w.work_unit_id;
     RETURN jsonb_build_object('status','accepted','replay',false,'decision_ref',acc.decision_ref,'work_unit_id',acc.work_unit_id,
       'execution_id',acc.execution_id,'fence',acc.fence,'input_seq',acc.input_seq,'snapshot_digest',acc.snapshot_digest,'accepted_at',acc.accepted_at);
