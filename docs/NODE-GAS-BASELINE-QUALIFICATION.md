@@ -121,3 +121,8 @@ failure path are preserved.
   on it.
 - This aggregate grants no new permission: no deployment, no live-environment change, and no merge
   of the open stack.
+- Postscript: item 2 of *Remaining gates* (Node recoverable dispatch) is implemented and merged on
+  main (#88 at `9e8413a`), native CI green including the real-PostgreSQL and Linux process-group
+  crash-recovery subtests. The classification above remains as of `ec4bc40`; one deliberate
+  refinement is recorded in the implementation — a recorded identity that is provably gone but left
+  no result settles as exited-without-result into reconciliation, not retry.
