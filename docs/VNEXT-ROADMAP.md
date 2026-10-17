@@ -17,15 +17,17 @@ failed-attempt binding; a requirements revision during execution settles the
 stale attempt as superseded; supersession receipts replay idempotently, with
 divergent content failing before any state change in both adapters, and a
 committed supersession's identity survives later revisions. GAS
-canonical-settlement parity is a separate forward step; its first increment —
-durable settlement receipts with exact-replay and conflict semantics — is
-implemented and integration-proven only inside the email stack (#79 at
-`9894d0d`, merged to `work/vnext-email-owner-activation-c3` at `47c8efc`), not
-on main and not operationally qualified. Its correction-scoped definition,
-increment status, and remaining-obligation mapping are recorded under Change 2.
-No live migration or cutover is implied.
+canonical-settlement parity is a separate forward step; its first two
+increments — durable settlement receipts with exact-replay and conflict
+semantics (#79 at `9894d0d`, merged to `work/vnext-email-owner-activation-c3`
+at `47c8efc`) and durable continuation proposals with coordinator-only
+consideration (#81 at `8f838c4`, merged at `95e2bd1`) — are implemented and
+integration-proven only inside the email stack, not on main and not
+operationally qualified. Their definitions, increment status, and
+remaining-obligation mapping are recorded under Change 2. No live migration or
+cutover is implied.
 
-## Proof status — Node boundary and the first GAS increment, not full Phase 1
+## Proof status — Node boundary and the first GAS increments, not full Phase 1
 
 | Boundary | Code | Integration proof | Operational proof |
 | --- | --- | --- | --- |
@@ -35,7 +37,8 @@ No live migration or cutover is implied.
 | Separate snapshot-bound acceptance | `getAcceptanceContext` / `acceptWork`; independently issued opaque decisions | Same real pilot suite: fresh-store acceptance, concurrent exact replay, stale input/revision/evidence/result, revoked verifier, project authority, changed artifact, lost COMMIT | None |
 | Timestamp-free continuation | Durable pending proposal; consume precisely the selected proposal only in authorized admission; fixed coordinator cooldown | Actual submit → `runPilotOnce` → closed pool/dataDir → new store → second admission; waiting quiet and late input; native suite and two-process Linux proof are CI gates | None; no scheduler enabled |
 | Recovery after reconciliation and revision change | `f522740` + review corrections; `reconcileFailure` records its outcome, grants a coordinator due time, and resolves from the authoritative block and failed-attempt binding; input and requirements updates preserve a pending reconciliation disposition; outer loop settles a revision-invalidated attempt via `persistSuperseded` | Real pilot suite: cold-restart discovery, input- or revision-during-uncertainty recovery seeing the new input and binding the new revision, exactly one recovery admission under overlapping wakes, idempotent and divergent receipts failing closed before mutation in both adapters (identity stable across later revisions), bounded further failure, late-result fencing | None; no live DB apply |
-| GAS canonical settlement — durable settlement receipts | `006_settlement_receipts.sql` in #79 @ `9894d0d`; forward-only within the checksum-ledger chain 002–006; merged to the email stack base at `47c8efc` | GAS suites through the public RPC: first settlement, exact replay with the recorded snapshot, divergent-content conflict, lost COMMIT response, replay after successor admission, late-input eligibility, atomic rollback; the native CI stage executes the concurrent exact replay proof (not skipped); focused 47 pass / 2 native-only skips / 0 fail | Not claimed — not on main, not applied live; continuation proposals, acceptance binding, and no_effect recovery remain open |
+| GAS canonical settlement — durable settlement receipts | `006_settlement_receipts.sql` in #79 @ `9894d0d`; forward-only within the checksum-ledger chain 002–006; merged to the email stack base at `47c8efc` | GAS suites through the public RPC: first settlement, exact replay with the recorded snapshot, divergent-content conflict, lost COMMIT response, replay after successor admission, late-input eligibility, atomic rollback; the native CI stage executes the concurrent exact replay proof (not skipped); focused 47 pass / 2 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance binding and no_effect recovery remain open |
+| GAS canonical settlement — durable continuation proposals | `007_continuation_proposals.sql` in #81 @ `8f838c4`; forward-only within the checksum-ledger chain 002–007; merged to the email stack base at `95e2bd1` | GAS suites through the public RPC: proposal bound to the settling attempt (fence and captured input snapshot), cooldown-gated consideration, consumption exactly with authorized successor admission, exactly one successor under competing claims, waiting quiet, late-input supersession, delivery-first rejection staying pending, rollback and inert exact replay, and a 002–006→007 backfill admitting only authorized legacy continuations; the native CI stage executes the concurrent proposal admission proof (not skipped); focused 61 tests / 58 pass / 3 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance binding and no_effect recovery remain open |
 | F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C not started here | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
 
 The PR's exact-head CI checks are the native evidence record; local PGlite is not
@@ -44,8 +47,9 @@ CI explicitly runs `scripts/run-postgres-suite.mjs test/phase1-operating-boundar
 in an isolated database and `scripts/prove-vnext-pilot.mjs` twice in separate Linux
 processes against the same disposable data directory. The email stack runs its
 own CI workflow on pushes and PRs. Its native PostgreSQL stage executes the GAS
-email suites, including concurrent settlement replay. The green run at the
-stack merge commit is the GAS increment's native evidence record. Green CI does
+email suites, including concurrent settlement replay and concurrent proposal
+admission. The green runs at the stack merge commit (the branch push and the
+updated #75 PR) are the GAS increments' native evidence record. Green CI does
 not imply independent review, acceptance of this PR, or production
 qualification.
 
@@ -140,12 +144,14 @@ Invariants:
 ### GAS parity against the corrected boundary (definition and increment status)
 
 The recovery corrections imply one missing GAS recovery mechanism, and the
-remaining Change 2 obligations still need an explicit mapping. Only the first
-increment is implemented so far, and only inside the email stack: durable
+remaining Change 2 obligations still need an explicit mapping. The first two
+increments are implemented so far, and only inside the email stack: durable
 settlement receipts — `006_settlement_receipts.sql` (#79 at `9894d0d`, merged
-to `work/vnext-email-owner-activation-c3` at `47c8efc`, checks green). Nothing
-else here is implemented, applied live, or qualified; nothing is merged to main;
-recoverable dispatch (1C) stays gated.
+to `work/vnext-email-owner-activation-c3` at `47c8efc`, checks green) — and
+durable continuation proposals — `007_continuation_proposals.sql` (#81 at
+`8f838c4`, merged at `95e2bd1`, checks green, native concurrent-proposal
+admission proof executed). Nothing else here is implemented, applied live, or
+qualified; nothing is merged to main; recoverable dispatch (1C) stays gated.
 
 **Uncertain external effect (delivery recovery, not full parity).** GAS already
 inserts a durable reconciliation block before an admitted send and clears it
@@ -188,19 +194,30 @@ rather than merely "not found". Otherwise the state must remain uncertain.
   inspection without repeated model work or a second send (upgrade chain
   002–006 via the checksum ledger; `docs/VNEXT-GAS-EMAIL.md` records the
   contract; later stack updates retain `006_settlement_receipts`). Missing —
-  continuation proposals and acceptance binding.
+  acceptance binding.
 - *Acceptance separation:* missing — `done` lands work in `review`; no
   acceptance operation, decision identity, or revision/evidence binding exists.
-- *Continuation admission:* missing — no proposal records or consideration
-  cursor; input/wake eligibility is not a substitute.
+- *Continuation admission:* existing — `gas_email_continuations` records one
+  bounded proposal per settled attempt (`continue` with cooldown, `waiting`,
+  none for `done`/failure); `claim` considers pending continue proposals only
+  after cooldown, for the exact source attempt/fence/snapshot, with no newer
+  input and within the turn budget, and consumes the selected proposal
+  atomically with authorized successor admission; waiting stays quiet, late
+  input supersedes, exact replay is inert, and the 002–007 upgrade converts
+  only authorized legacy schedules (later stack updates retain
+  `007_continuation_proposals`). Input/wake eligibility is not a substitute.
 
-**Next increment (defined, not started): durable continuation proposals and
-coordinator consideration.** GAS gains proposal records and a consideration
-cursor equivalent to the Node boundary, preserving the existing turn budget,
-quiet waits, and late-input behavior. Acceptance separation remains a separately
-retained outstanding obligation (decision identity, revision/evidence binding),
-and uncertain-send no_effect recovery keeps its own evidence contract above;
-neither is advanced by the settlement-receipt increment.
+**Next increment (defined, not started): GAS acceptance separation.** A
+successful `done` remains a completion claim, not accepted work. GAS gains an
+explicit trusted acceptance transition over settled reviewable work, parallel to
+the Node boundary: an independently issued opaque decision identity binds the
+accepted objective/work revision to the exact settlement result and evidence
+snapshot; a decision against superseded input, revision, or result fails closed
+(stale rejection); exact replay returns the recorded decision while divergent
+content under the same identity fails before mutation (replayable); and the
+decision is verified at the authoritative boundary, never inferred from
+execution identity. Uncertain-send no_effect recovery keeps its own evidence
+contract above and remains a separate increment after it.
 
 **In-flight requirements revision:** GAS email has no trusted material-revision
 path, and its equivalent — human input arriving during execution — is already
