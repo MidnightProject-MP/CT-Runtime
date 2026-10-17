@@ -12,6 +12,7 @@ try {
   await pool.query(await readFile(new URL('../deploy/gas-email/004_failure_watermark_snapshot.sql',import.meta.url),'utf8'));
   await pool.query(await readFile(new URL('../deploy/gas-email/005_failure_recovery_boundary.sql',import.meta.url),'utf8'));
   await pool.query(await readFile(new URL('../deploy/gas-email/006_settlement_receipts.sql',import.meta.url),'utf8'));
+  await pool.query(await readFile(new URL('../deploy/gas-email/007_continuation_proposals.sql',import.meta.url),'utf8'));
   await pool.query("INSERT INTO gas_email_instances VALUES ('gas-test','gas-owner','gas-client','email-project','midnight.project.mp@gmail.com','midnightprojectantigravity@gmail.com',true,'reviewed:text-only:v1')");
   parentPort.postMessage({ready:true});
 } catch(e){parentPort.postMessage({error:e.message});}

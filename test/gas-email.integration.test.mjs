@@ -354,6 +354,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
         assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),0);
         assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_outbox')[0].n),0);
         assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),0);
+        assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),0);
         assert.equal(Number(sql('SELECT consumed_input_seq AS n FROM vnext_pilot_progress')[0].n),0);
         assert.equal(sql('SELECT execution_id FROM vnext_project_mutation_authority')[0].execution_id,c.execution_id);
         assert.equal(sql('SELECT state FROM vnext_executions')[0].state,'running');
@@ -364,6 +365,25 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),1);
       assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
       assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_outbox')[0].n),1);
+    });
+    await t.test('a rolled-back continuation checkpoint creates no proposal and replay stays inert',()=>{
+      reset();rpc('ingest',input('atomicContinue'));const c=rpc('claim');
+      sql("CREATE FUNCTION gas_email_test_abort() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected checkpoint failure'; END $$; CREATE TRIGGER gas_email_test_abort BEFORE UPDATE ON vnext_pilot_progress FOR EACH ROW EXECUTE FUNCTION gas_email_test_abort()");
+      try {
+        assert.throws(()=>checkpoint(c,{disposition:'continue',summary:'Refining draft.'}),/injected checkpoint failure/);
+        assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),0);
+        assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),0);
+        assert.equal(sql('SELECT next_wake_at FROM vnext_pilot_progress')[0].next_wake_at,null);
+      }finally{sql('DROP TRIGGER gas_email_test_abort ON vnext_pilot_progress; DROP FUNCTION gas_email_test_abort()');}
+      const settled=checkpoint(c,{disposition:'continue',summary:'Refining draft.'});
+      assert.equal(settled.status,'settled');assert.equal(settled.replay,false);
+      const row=sql('SELECT execution_id,fence::int AS fence,kind,state,eligible_after FROM gas_email_continuations')[0];
+      assert.equal(row.execution_id,c.execution_id);assert.equal(row.fence,c.fence);assert.equal(row.kind,'continue');assert.equal(row.state,'pending');assert.ok(row.eligible_after);
+      const stored=sql('SELECT created_at,eligible_after FROM gas_email_continuations')[0];
+      const replay=checkpoint(c,{disposition:'continue',summary:'Refining draft.'});
+      assert.equal(replay.status,'settled');assert.equal(replay.replay,true);
+      assert.deepEqual(sql('SELECT created_at,eligible_after FROM gas_email_continuations')[0],stored);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),1);
     });
     await t.test('settlement receipts replay exactly, reject divergence, and preserve the recorded snapshot',()=>{
       reset();rpc('ingest',input('settle'));const c=rpc('claim');
@@ -405,6 +425,8 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       rpc('ingest',input('second','sqlthread','Second requirement'));
       assert.equal(rpc('delivery').status,'superseded');
       const c2=rpc('claim');assert.equal(c2.status,'claimed');assert.deepEqual(c2.inputs.map(x=>x.message),['Second requirement']);
+      assert.equal(sql('SELECT state FROM gas_email_continuations')[0].state,'superseded');
+      assert.equal(sql('SELECT consumed_by FROM gas_email_continuations')[0].consumed_by,null);
       const replay=checkpoint(c1,{disposition:'continue',summary:'Refining draft.'});
       assert.equal(replay.status,'settled');assert.equal(replay.replay,true);
       assert.equal(sql('SELECT execution_id FROM vnext_project_mutation_authority')[0].execution_id,c2.execution_id);
@@ -448,6 +470,30 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
         }finally{await a.query('ROLLBACK');await b.query('ROLLBACK');a.release();b.release();}
       }finally{await pool.end();}
     });
+    await t.test('native concurrent proposal admission admits exactly one successor', {skip:!process.env.TEST_DATABASE_URL},async()=>{
+      const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
+      const auth=async client=>{await client.query('BEGIN');await client.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify({sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800})]);await client.query('SET LOCAL ROLE authenticated');};
+      try{
+        reset();rpc('ingest',input('concurrentProposal'));const c=rpc('claim');
+        checkpoint(c,{disposition:'continue',summary:'Refining draft.'});
+        const delivered=rpc('delivery');rpc('record',{execution_id:delivered.execution_id,gmail_id:'concurrentProposalSent',messageId:delivered.envelope.messageId,threadId:delivered.envelope.threadId});
+        sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");
+        const call=client=>client.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test','claim','{}']);
+        const a=await pool.connect(),b=await pool.connect();
+        try{
+          await auth(a);await auth(b);
+          const x=(await call(a)).rows[0].r;
+          let finished=false;const pending=call(b).then(r=>{finished=true;return r.rows[0].r;});
+          await new Promise(resolve=>setTimeout(resolve,100));assert.equal(finished,false,'second claim must wait on the project admission lock');
+          await a.query('COMMIT');const y=await pending;await b.query('COMMIT');
+          assert.equal(x.status,'claimed');assert.equal(y.status,'busy');
+          assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_executions')[0].n),2);
+          const rows=sql('SELECT state,consumed_by FROM gas_email_continuations');
+          assert.equal(rows.length,1);assert.equal(rows[0].state,'consumed');assert.equal(rows[0].consumed_by,x.execution_id);
+          assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
+        }finally{await a.query('ROLLBACK');await b.query('ROLLBACK');a.release();b.release();}
+      }finally{await pool.end();}
+    });
     await t.test('new human input during model supersedes stale reply and remains eligible',()=>{
       reset();const f=fixture();f.add('during');f.setModel(()=>{rpc('ingest',input('during2','thread1','A new requirement.'));return {disposition:'done',summary:'Old answer'};});
       assert.equal(f.tick().status,'superseded');assert.equal(f.sends,0);const c=rpc('claim');assert.equal(c.inputs[0].message,'A new requirement.');
@@ -457,8 +503,127 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       sql("BEGIN; UPDATE vnext_executions SET claim_expires_at=clock_timestamp()-interval '1 second'; UPDATE vnext_work_units SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions LIMIT 1); UPDATE vnext_project_mutation_authority SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions LIMIT 1); COMMIT");
       assert.equal(rpc('claim').status,'idle');assert.equal(sql('SELECT state FROM vnext_executions')[0].state,'expired');
       reset();rpc('ingest',input('finite'));
-      for(let n=0;n<3;n++){const c=rpc('claim');assert.equal(c.status,'claimed');checkpoint(c,{disposition:'continue',summary:'Refining draft.'});const d=rpc('delivery');rpc('record',{execution_id:d.execution_id,gmail_id:'sent'+n,messageId:d.envelope.messageId,threadId:d.envelope.threadId});sql("UPDATE vnext_pilot_progress SET next_wake_at=CASE WHEN next_wake_at IS NOT NULL THEN clock_timestamp()-interval '1 second' END");}
+      for(let n=0;n<3;n++){const c=rpc('claim');assert.equal(c.status,'claimed');checkpoint(c,{disposition:'continue',summary:'Refining draft.'});const d=rpc('delivery');rpc('record',{execution_id:d.execution_id,gmail_id:'sent'+n,messageId:d.envelope.messageId,threadId:d.envelope.threadId});sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");}
       assert.equal(rpc('claim').status,'idle');
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),2);
+      assert.deepEqual(sql('SELECT state FROM gas_email_continuations ORDER BY created_at').map(r=>r.state),['consumed','consumed']);
+      assert.equal(sql('SELECT next_wake_at FROM vnext_pilot_progress')[0].next_wake_at,null);
+    });
+    await t.test('immediate continuation proposals bind to the attempt and admit exactly one successor',()=>{
+      reset();rpc('ingest',input('proposal','sqlthread','Original requirement'));const c=rpc('claim');
+      const captured=Number(sql('SELECT input_seq AS n FROM vnext_pilot_inputs WHERE message=$1',['Original requirement'])[0].n);
+      const settled=checkpoint(c,{disposition:'continue',summary:'Refining draft.'});
+      assert.equal(settled.work_state,'actionable');
+      const proposal=sql('SELECT instance_id,project_id,execution_id,fence::int AS fence,input_seq::int AS input_seq,kind,state,eligible_after FROM gas_email_continuations')[0];
+      assert.equal(proposal.instance_id,'gas-test');assert.equal(proposal.project_id,'email-project');
+      assert.equal(proposal.execution_id,c.execution_id);assert.equal(proposal.fence,c.fence);
+      assert.equal(proposal.input_seq,captured);assert.equal(proposal.kind,'continue');assert.equal(proposal.state,'pending');
+      const eligible=new Date(proposal.eligible_after).getTime();
+      assert.ok(eligible>Date.now()&&eligible<=Date.now()+305000);
+      assert.equal(sql('SELECT next_wake_at FROM vnext_pilot_progress')[0].next_wake_at,null);
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'actionable');
+      const delivered=rpc('delivery');assert.equal(delivered.status,'send');
+      rpc('record',{execution_id:delivered.execution_id,gmail_id:'proposalSent',messageId:delivered.envelope.messageId,threadId:delivered.envelope.threadId});
+      const stored=sql('SELECT * FROM gas_email_continuations')[0];
+      assert.equal(rpc('claim').status,'idle');
+      assert.deepEqual(sql('SELECT * FROM gas_email_continuations')[0],stored);
+      sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");
+      const next=rpc('claim');assert.equal(next.status,'claimed');assert.notEqual(next.execution_id,c.execution_id);
+      assert.equal(next.previous.summary,'Refining draft.');
+      assert.ok(!next.inputs||next.inputs.length===0);
+      const consumed=sql('SELECT state,consumed_by,consumed_at FROM gas_email_continuations')[0];
+      assert.equal(consumed.state,'consumed');assert.equal(consumed.consumed_by,next.execution_id);assert.ok(consumed.consumed_at);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
+    });
+    await t.test('waiting proposals stay quiet while new human input admits independently',()=>{
+      reset();rpc('ingest',input('needsMore','sqlthread','Original requirement'));const c=rpc('claim');
+      const settled=checkpoint(c,{disposition:'waiting',summary:'Need input.',question:'Which draft?'});
+      assert.equal(settled.work_state,'waiting');
+      const proposal=sql('SELECT kind,state,eligible_after FROM gas_email_continuations')[0];
+      assert.equal(proposal.kind,'waiting');assert.equal(proposal.state,'pending');assert.equal(proposal.eligible_after,null);
+      const delivered=rpc('delivery');assert.equal(delivered.status,'send');
+      rpc('record',{execution_id:delivered.execution_id,gmail_id:'waitingSent',messageId:delivered.envelope.messageId,threadId:delivered.envelope.threadId});
+      assert.equal(rpc('claim').status,'idle');
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'waiting');
+      const stored=sql('SELECT * FROM gas_email_continuations')[0];
+      assert.equal(checkpoint(c,{disposition:'waiting',summary:'Need input.',question:'Which draft?'}).replay,true);
+      assert.deepEqual(sql('SELECT * FROM gas_email_continuations')[0],stored);
+      rpc('ingest',input('reply','sqlthread','Use the second draft.'));
+      const next=rpc('claim');assert.equal(next.status,'claimed');assert.deepEqual(next.inputs.map(x=>x.message),['Use the second draft.']);
+      const superseded=sql('SELECT state,consumed_by FROM gas_email_continuations ORDER BY created_at')[0];
+      assert.equal(superseded.state,'superseded');assert.equal(superseded.consumed_by,null);
+      checkpoint(next,{disposition:'continue',summary:'Refining the second draft.'});
+      const rows=sql('SELECT execution_id,state,kind,input_seq::int AS input_seq FROM gas_email_continuations ORDER BY created_at');
+      assert.equal(rows.length,2);
+      assert.equal(rows[1].execution_id,next.execution_id);assert.equal(rows[1].state,'pending');assert.equal(rows[1].kind,'continue');
+      assert.equal(rows[1].input_seq,Number(sql('SELECT input_seq AS n FROM vnext_pilot_inputs WHERE message=$1',['Use the second draft.'])[0].n));
+    });
+    await t.test('late input supersedes the pending proposal without consuming it',()=>{
+      reset();rpc('ingest',input('early','sqlthread','Original requirement'));const c=rpc('claim');
+      rpc('ingest',input('lateInput','sqlthread','Arrived during the attempt.'));
+      assert.equal(checkpoint(c,{disposition:'continue',summary:'Refining draft.'}).work_state,'actionable');
+      const proposal=sql('SELECT input_seq::int AS input_seq,state FROM gas_email_continuations')[0];
+      assert.equal(proposal.state,'pending');
+      assert.equal(proposal.input_seq,Number(sql('SELECT input_seq AS n FROM vnext_pilot_inputs WHERE message=$1',['Original requirement'])[0].n));
+      assert.equal(rpc('delivery').status,'superseded');
+      const next=rpc('claim');assert.equal(next.status,'claimed');assert.deepEqual(next.inputs.map(x=>x.message),['Arrived during the attempt.']);
+      assert.equal(sql('SELECT state FROM gas_email_continuations')[0].state,'superseded');
+      assert.equal(sql('SELECT consumed_by FROM gas_email_continuations')[0].consumed_by,null);
+    });
+    await t.test('a successor attempt records its own proposal bound to the successor execution',()=>{
+      reset();rpc('ingest',input('chain','sqlthread','Original requirement'));const c1=rpc('claim');
+      checkpoint(c1,{disposition:'continue',summary:'Refining draft.'});
+      const delivered=rpc('delivery');rpc('record',{execution_id:delivered.execution_id,gmail_id:'chainSent',messageId:delivered.envelope.messageId,threadId:delivered.envelope.threadId});
+      sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");
+      const c2=rpc('claim');assert.equal(c2.status,'claimed');assert.equal(c2.fence,c1.fence+1);
+      checkpoint(c2,{disposition:'continue',summary:'Tightening the draft.'});
+      const rows=sql('SELECT execution_id,fence::int AS fence,state,consumed_by FROM gas_email_continuations ORDER BY created_at');
+      assert.equal(rows.length,2);
+      assert.equal(rows[0].execution_id,c1.execution_id);assert.equal(rows[0].state,'consumed');assert.equal(rows[0].consumed_by,c2.execution_id);
+      assert.equal(rows[1].execution_id,c2.execution_id);assert.equal(rows[1].fence,c2.fence);assert.equal(rows[1].state,'pending');
+      assert.equal(rows[1].consumed_by,null);
+    });
+    await t.test('a delivery-first rejection leaves the proposal pending for a later admission',()=>{
+      reset();rpc('ingest',input('rejected','sqlthread','Original requirement'));const c=rpc('claim');
+      checkpoint(c,{disposition:'continue',summary:'Refining draft.'});
+      sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");
+      const stored=sql('SELECT * FROM gas_email_continuations')[0];
+      assert.equal(rpc('claim').status,'delivery-first');
+      assert.deepEqual(sql('SELECT * FROM gas_email_continuations')[0],stored);
+      const delivered=rpc('delivery');assert.equal(delivered.status,'send');
+      rpc('record',{execution_id:delivered.execution_id,gmail_id:'rejectedSent',messageId:delivered.envelope.messageId,threadId:delivered.envelope.threadId});
+      const next=rpc('claim');assert.equal(next.status,'claimed');
+      assert.equal(sql('SELECT state FROM gas_email_continuations')[0].state,'consumed');
+      assert.equal(sql('SELECT consumed_by FROM gas_email_continuations')[0].consumed_by,next.execution_id);
+    });
+    await t.test('failure and expiry never manufacture proposals',()=>{
+      reset();rpc('ingest',input('failNoProposal'));const c=rpc('claim');
+      assert.equal(rpc('failure',{execution_id:c.execution_id,fence:c.fence}).status,'settled');
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),0);
+      reset();rpc('ingest',input('expireNoProposal'));rpc('claim');
+      sql("BEGIN; UPDATE vnext_executions SET claim_expires_at=clock_timestamp()-interval '1 second' WHERE state='running'; UPDATE vnext_work_units SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); UPDATE vnext_project_mutation_authority SET claim_expires_at=(SELECT claim_expires_at FROM vnext_executions WHERE state='running'); COMMIT");
+      assert.equal(rpc('claim').status,'idle');
+      assert.equal(sql('SELECT state FROM vnext_executions')[0].state,'expired');
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),0);
+    });
+    await t.test('one cold GAS tick admits exactly one bounded successor through the durable proposal',()=>{
+      reset();let calls=0;const f=fixture();f.add('coldchain');
+      f.setModel(()=>{calls++;return calls===1?{disposition:'continue',summary:'Refining draft.'}:{disposition:'done',summary:'Final draft.'};});
+      assert.equal(f.tick().status,'sent');assert.equal(f.sends,1);assert.equal(calls,1);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_executions')[0].n),1);
+      assert.equal(sql('SELECT state FROM gas_email_continuations')[0].state,'pending');
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'actionable');
+      assert.equal(f.tick().status,'idle');assert.equal(f.sends,1);assert.equal(calls,1);
+      sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");
+      assert.equal(f.tick().status,'sent');assert.equal(f.sends,2);assert.equal(calls,2);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_executions')[0].n),2);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_turns')[0].n),2);
+      const rows=sql('SELECT state,consumed_by FROM gas_email_continuations');
+      assert.equal(rows.length,1);assert.equal(rows[0].state,'consumed');
+      assert.notEqual(rows[0].consumed_by,null);
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'review');
+      assert.equal(f.tick().status,'idle');assert.equal(f.sends,2);assert.equal(calls,2);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_executions')[0].n),2);
     });
     await t.test('native transaction races: input-first supersedes; admission-first blocks claims, preserves input', {skip:!process.env.TEST_DATABASE_URL},async()=>{
       const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
