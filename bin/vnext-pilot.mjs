@@ -42,7 +42,8 @@ try {
       if (config.enabled !== true || config.legacyExcluded !== true) throw new Error('pilot is disabled; qualify legacy exclusion before enabling');
       // This is an operator assertion, not proof of deployment/exclusion.
       const result = await runPilotOnce({ store, projectId: config.projectId, workspaceRoot: await realpath(config.workspaceRoot), identityFiles: config.identityFiles, authority,
-        timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor) });
+        timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor),
+        recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: config.executor.stateDirectory } : null });
       console.log(JSON.stringify(result));
     }
   }
