@@ -1,0 +1,134 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
+const source=['gas_vnext_email.js','gas_vnext_email_owner.js'].map(f=>readFileSync(new URL('../gas/'+f,import.meta.url),'utf8')).join('\n');
+function fixture(overrides={}){
+  const values={OPENROUTER_API_KEY:'test-secret-never-log',CT_GAS_PROOF_MODEL:'openrouter/vendor/exact-approved-model',CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',CT_VNEXT_EMAIL_DATA_API_URL:'https://isolated-test.example/data-api',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'isolated-test.example',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'isolated-test-script',CT_VNEXT_EMAIL_APPROVED_MAILBOX:'midnight.project.mp@gmail.com',CT_VNEXT_EMAIL_APPROVED_SENDER:'midnightprojectantigravity@gmail.com',CT_VNEXT_EMAIL_LABEL:'Celestan',PRIVATE_UNKNOWN_PROPERTY:'private-value',...overrides};
+  const writes=[],logs=[],calls=[],responses={};let profile='midnight.project.mp@gmail.com',rpcFail=false,project='celestan-email',labels=['Celestan'],locked=false,writeMode='normal',readFailure=false,triggerFailure=false,lockFailure=false,tokens=0,scriptId='isolated-test-script';
+  const noEffect=()=>{throw new Error('forbidden setup effect');};
+  const ctx=vm.createContext({console:{log:s=>logs.push(JSON.parse(s))},
+    LockService:{getScriptLock:()=>({waitLock(){if(lockFailure)throw new Error('private-oauth lock error');assert.equal(locked,false);locked=true;},releaseLock(){locked=false;}})},
+    PropertiesService:{getScriptProperties:()=>({getProperty:k=>values[k]??null,getProperties:()=>{if(readFailure)throw new Error('test-secret-never-log');return {...values};},setProperties(v,remove){assert.equal(locked,true);assert.equal(remove,false);writes.push({...v});if(writeMode==='before')throw new Error('test-secret-never-log');if(writeMode==='partial'){values.CT_VNEXT_EMAIL_ENABLED='false';throw new Error('private-value');}Object.assign(values,v);if(writeMode==='after')throw new Error('private-oauth');},setProperty:noEffect,deleteProperty:noEffect})},
+    ScriptApp:{getScriptId:()=> scriptId,getOAuthToken:()=> 'private-oauth',getIdentityToken:()=>{tokens++;return 'private-identity';},getProjectTriggers:()=>{if(triggerFailure)throw new Error('private-identity');return [{getHandlerFunction:()=> 'legacySafetyWake'}];},newTrigger:noEffect},
+    SpreadsheetApp:new Proxy({},{get:noEffect}),GmailApp:new Proxy({},{get:noEffect}),
+    UrlFetchApp:{fetch(url,opts){calls.push(url);let data;
+      const suffix=Object.keys(responses).find(s=>url.endsWith(s));if(suffix){const r=responses[suffix];return {getResponseCode:()=>r.status,getContentText:()=>typeof r.body==='string'?r.body:JSON.stringify(r.body)};}
+      if(url.endsWith('/profile')){assert.equal(opts.method,'get');data={emailAddress:profile};}
+      else if(url.endsWith('/labels')){assert.equal(opts.method,'get');data={labels:labels.map(name=>({name}))};}
+      else if(url.endsWith('/rpc/gas_email_rpc')){assert.equal(JSON.parse(opts.payload).p_operation,'health');if(rpcFail)throw new Error('test-secret-never-log');data={instance:'gas-vnext-email',project,mailbox:profile,allowed_sender:'midnightprojectantigravity@gmail.com',blocked:false};}
+      else throw new Error('unexpected model/inbox/send request');
+      return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(data)};
+    }}});
+  vm.runInContext(source,ctx);assert.equal(calls.length,0);assert.equal(writes.length,0);assert.equal(logs.length,0);
+  return {values,writes,logs,calls,get tokens(){return tokens;},script:v=>{scriptId=v;},labels:v=>{labels=v;},inventory:()=>ctx.inventoryVnextEmailProperties(),run:()=>ctx.prepareVnextEmailRuntime(),diagnose:()=>ctx.diagnoseVnextEmailPreparation(),http:(suffix,status,body)=>{responses[suffix]={status,body};},writeMode:v=>{writeMode=v;},readFailure:()=>{readFailure=true;},triggerFailure:()=>{triggerFailure=true;},lockFailure:()=>{lockFailure=true;},profile:v=>{profile=v;},rpcFail:()=>{rpcFail=true;},project:v=>{project=v;},missingLabel:()=>{labels=[];}};
+}
+test('no-argument preparation pins reviewed bindings, reuses exact model, logs readiness and remains disabled/idempotent',()=>{
+  const f=fixture(),r=f.run();assert.equal(r.status,'prepared');assert.equal(r.enabled,false);assert.equal(r.model,'openrouter/vendor/exact-approved-model');assert.equal(r.project,'celestan-email');assert.equal(r.labelPresent,true);assert.equal(r.triggerCount,1);
+  assert.equal(f.values.CT_VNEXT_EMAIL_ENABLED,'false');assert.equal(f.values.OPENROUTER_API_KEY,'test-secret-never-log');
+  assert.equal(Object.keys(f.writes[0]).length,5);assert.equal(f.writes[0].CT_VNEXT_EMAIL_INSTANCE,'gas-vnext-email');
+  assert.equal(r.propertyCounts.total,Object.keys(f.values).length);assert.equal(r.propertyCounts.stable,10);
+  assert.doesNotMatch(JSON.stringify(f.logs),/test-secret|private-value|PRIVATE_UNKNOWN_PROPERTY|private-oauth|private-identity/);
+  f.values.CT_GAS_PROOF_MODEL='vendor/new-proof-model';assert.equal(f.run().model,r.model,'already configured exact selection wins');assert.equal(f.writes.length,2);
+  f.values.CT_VNEXT_EMAIL_ENABLED='true';assert.throws(()=>f.run(),/binding conflict/);assert.equal(f.writes.length,2);assert.equal(f.values.CT_VNEXT_EMAIL_ENABLED,'true');
+});
+test('preparation never writes on invalid/missing model, identity, conflicting binding, project or RPC failure',()=>{
+  const absent=fixture({CT_GAS_PROOF_MODEL:null});assert.throws(()=>absent.run(),/set CT_VNEXT_EMAIL_MODEL/);assert.equal(absent.writes.length,0);
+  for(const value of ['', 'not-a-provider-model','vendor/model\n']){const f=fixture({CT_VNEXT_EMAIL_MODEL:value});assert.throws(()=>f.run(),/set CT_VNEXT_EMAIL_MODEL/);assert.equal(f.writes.length,0);}
+  const wrong=fixture();wrong.profile('other@example.com');assert.throws(()=>wrong.run(),/wrong execution mailbox/);assert.equal(wrong.writes.length,0);assert.ok(wrong.calls.every(u=>u.endsWith('/profile')||u.endsWith('/rpc/gas_email_rpc')));
+  const conflict=fixture({CT_VNEXT_EMAIL_INSTANCE:'another'});assert.throws(()=>conflict.run(),/grant not ready/);assert.equal(conflict.writes.length,0);
+  const p=fixture();p.project('');assert.throws(()=>p.run(),/project identity missing/);assert.equal(p.writes.length,0);
+  const unavailable=fixture();unavailable.rpcFail();assert.throws(()=>unavailable.run(),/outcome unavailable/);assert.equal(unavailable.writes.length,0);assert.doesNotMatch(JSON.stringify(unavailable.logs),/test-secret/);
+  const missingKey=fixture({OPENROUTER_API_KEY:null});assert.throws(()=>missingKey.run(),/existing OpenRouter secret/);assert.equal(missingKey.writes.length,0);
+  const missingLabel=fixture();missingLabel.missingLabel();assert.throws(()=>missingLabel.run());assert.equal(missingLabel.logs.at(-1).labelPresent,false);assert.equal(missingLabel.writes.length,0);
+});
+test('read-only diagnostic identifies Gmail service/consent errors without copying provider payloads',()=>{
+  for(const reason of ['accessNotConfigured','insufficientPermissions','SERVICE_DISABLED']){
+    const f=fixture();f.http('/profile',403,{error:{message:'test-secret-never-log private-oauth',errors:[{reason}],details:[{reason,metadata:{consumer:'secret-project-value'}}]}});
+    const d=f.diagnose(),failure=d.stages.find(s=>s.stage==='gmail-profile');assert.equal(d.status,'blocked');assert.equal(d.configWriteAttempted,false);assert.equal(f.writes.length,0);
+    assert.equal(failure.httpStatus,403);assert.equal(failure.providerReason,reason);assert.equal(failure.classification,'authorization-denied');
+    assert.equal(Object.hasOwn(failure,'projectNumber'),false);
+    assert.ok(d.stages.some(s=>s.stage==='data-api-health'&&s.status==='ok'));
+    assert.doesNotMatch(JSON.stringify(f.logs),/test-secret|private-oauth|secret-project-value|PRIVATE_UNKNOWN_PROPERTY/);
+  }
+});
+test('preparation skips authenticated health on unapproved script or endpoint, even without desired config',()=>{
+  for(const mode of ['script','host','both','query','auth','http','fragment','missing-host']){
+    const f=fixture({CT_GAS_PROOF_MODEL:null});
+    if(mode==='script'||mode==='both')f.script('wrong-script');
+    if(mode==='host'||mode==='both')f.values.CT_VNEXT_EMAIL_DATA_API_URL='https://wrong.example';
+    if(mode==='query')f.values.CT_VNEXT_EMAIL_DATA_API_URL+='?secret=private-value';
+    if(mode==='auth')f.values.CT_VNEXT_EMAIL_DATA_API_URL='https://user@isolated-test.example';
+    if(mode==='http')f.values.CT_VNEXT_EMAIL_DATA_API_URL='http://isolated-test.example';
+    if(mode==='fragment')f.values.CT_VNEXT_EMAIL_DATA_API_URL+='#private-value';
+    if(mode==='missing-host')delete f.values.CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST;
+    const d=f.diagnose();assert.equal(d.status,'blocked');assert.equal(d.stages.find(s=>s.stage==='data-api-health').status,'skipped',mode);
+    assert.throws(()=>f.run());assert.equal(f.writes.length,0);assert.equal(f.tokens,0);assert.ok(f.calls.every(url=>!url.includes('/rpc/')));
+    assert.doesNotMatch(JSON.stringify(f.logs),/private-value|private-identity|wrong\.example/);
+  }
+  const valid=fixture({CT_GAS_PROOF_MODEL:null,OPENROUTER_API_KEY:null});valid.http('/profile',403,{error:{errors:[{reason:'insufficientPermissions'}]}});
+  assert.equal(valid.diagnose().stages.find(s=>s.stage==='data-api-health').status,'ok');assert.equal(valid.tokens,1);assert.equal(valid.writes.length,0);
+});
+test('preparation requires the exact configured queue label before any property write',()=>{
+  for(const name of ['CustomQueue','private-test-secret-label']){
+    const missing=fixture({CT_VNEXT_EMAIL_LABEL:name}),d=missing.diagnose();
+    assert.equal(d.status,'blocked');assert.equal(d.labelPresent,false);assert.throws(()=>missing.run());assert.equal(missing.writes.length,0);
+    assert.doesNotMatch(JSON.stringify(missing.logs),/CustomQueue|private-test-secret-label/);
+  }
+  const present=fixture({CT_VNEXT_EMAIL_LABEL:'CustomQueue'});present.labels(['CustomQueue']);
+  assert.equal(present.run().status,'prepared');assert.equal(present.writes.length,1);
+});
+test('Neon HTTP/SQLSTATE, non-JSON 503 and invalid JSON success are diagnosed at their own stages',()=>{
+  for(const [suffix,status,body,stage,classification,sql] of [
+    ['/rpc/gas_email_rpc',401,{message:'secret JWT text'},'data-api-health','authentication-denied',null],
+    ['/rpc/gas_email_rpc',403,{code:'42501',message:'private-value'},'data-api-health','authorization-denied','42501'],
+    ['/labels',503,'<html>private-value</html>','gmail-labels','provider-unavailable',null],
+    ['/profile',200,'{broken private-value','gmail-profile','invalid-json',null],
+    ['/profile',403,{code:'SECRT',error:{errors:[{reason:'private-value'}],details:'private-oauth'}},'gmail-profile','authorization-denied',null]
+  ]){
+    const f=fixture();f.http(suffix,status,body);const d=f.diagnose(),e=d.stages.find(s=>s.stage===stage);
+    assert.equal(e.classification,classification);assert.equal(e.httpStatus,status);assert.equal(e.sqlState,sql);assert.equal(f.writes.length,0);
+    assert.doesNotMatch(JSON.stringify(d),/private-value|private-oauth|secret JWT|SECRT|broken/);
+    assert.throws(()=>f.run());assert.equal(f.writes.length,0);assert.equal(f.logs.at(-1).configWriteAttempted,false);
+  }
+});
+test('diagnostic confirms prior completed/partial writes without retrying configuration',()=>{
+  const fresh=fixture();const d=fresh.diagnose();assert.equal(d.status,'diagnosed');assert.equal(d.readOnly,true);assert.equal(d.preparedConfigMatch,false);assert.equal(fresh.writes.length,0);
+  assert.ok(fresh.calls.every(u=>u.endsWith('/profile')||u.endsWith('/labels')||u.endsWith('/rpc/gas_email_rpc')));
+  for(const mode of ['before','partial','after']){
+    const f=fixture();f.writeMode(mode);assert.throws(()=>f.run());const failed=f.logs.at(-1);
+    assert.equal(failed.configWriteAttempted,true);assert.equal(failed.readbackConfirmed,mode==='after');assert.equal(failed.stages.find(s=>s.stage==='property-write').status,'failed');
+    const priorWrites=f.writes.length,inspection=f.diagnose();assert.equal(f.writes.length,priorWrites);assert.equal(inspection.configWriteAttempted,false);assert.equal(inspection.preparedConfigMatch,mode==='after');
+    assert.doesNotMatch(JSON.stringify(f.logs),/private-value|private-oauth|test-secret|PRIVATE_UNKNOWN_PROPERTY/);
+  }
+});
+test('missing configuration, property-read, trigger inventory and lock errors stay safe and stage-specific',()=>{
+  for(const [set,stage] of [[f=>{f.values.CT_GAS_PROOF_MODEL=null;},'model-config'],[f=>f.readFailure(),'property-read'],[f=>f.triggerFailure(),'trigger-inventory'],[f=>f.lockFailure(),'script-lock']]){
+    const f=fixture();set(f);const d=f.diagnose();assert.equal(d.stages.find(s=>s.stage===stage).status,'failed');assert.equal(d.configWriteAttempted,false);assert.equal(f.writes.length,0);
+    assert.doesNotMatch(JSON.stringify(d),/test-secret|private-value|private-oauth|private-identity|PRIVATE_UNKNOWN_PROPERTY/);
+  }
+});
+
+test('property inventory emits a sanitized log and keeps cleanup fail-closed',()=>{
+  const f=fixture({
+    CT_VNEXT_EMAIL_ENABLED:'false',
+    CT_VNEXT_EMAIL_INSTANCE:'gas-vnext-email',
+    CT_VNEXT_EMAIL_DATA_API_URL:'https://ep-weathered-tree.example.neon.tech/neondb/rest/v1',
+    CT_VNEXT_EMAIL_MODEL:'openrouter/vendor/model:free',
+    CT_VNEXT_EMAIL_LABEL:'Celestan',
+    CT_GAS_SAFETY_TRIGGER:'present'
+  }),result=f.inventory();
+  assert.equal(f.logs.length,1);
+  assert.deepEqual(f.logs[0],JSON.parse(JSON.stringify(result)));
+  assert.equal(result.total,Object.keys(f.values).length);
+  assert.equal(result.counts.stable,10);
+  assert.equal(result.counts.legacy_runtime,0);
+  assert.equal(result.counts.unknown,3);
+  assert.ok(result.properties.some(p=>p.name==='OPENROUTER_API_KEY'&&p.classification==='stable'));
+  assert.ok(result.properties.some(p=>p.name==='CT_GAS_SAFETY_TRIGGER'&&p.classification==='unknown'));
+  assert.ok(result.properties.some(p=>p.name==='CT_GAS_PROOF_MODEL'&&p.classification==='unknown'));
+  assert.ok(result.properties.some(p=>p.name==='PRIVATE_UNKNOWN_PROPERTY'&&p.classification==='unknown'));
+  assert.equal(result.cleanup_allowlist.length,0);
+  assert.equal(result.cleanup_apply_available,false);
+  assert.doesNotMatch(JSON.stringify(f.logs),/test-secret-never-log|ep-weathered-tree|private-value/);
+});
