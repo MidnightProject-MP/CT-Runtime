@@ -65,7 +65,7 @@ registered project while this GAS-only grant is active.
 
 `gas_email_rpc` exposes only fixed ingest, ID-only quarantine, claim/reconstruct,
 checkpoint, failure, delivery preparation/admission, record/readback settlement,
-and health operations. These
+acceptance inspection/acceptance, and health operations. These
 are server-side transactions. SECURITY DEFINER functions have a fixed search
 path. Principal sub, audience, Google issuer, expiry, active instance, mailbox,
 project, and a nonempty reviewed grant reference are required. The project and
@@ -99,6 +99,35 @@ creates no proposal; review is not continuation. The 007 backfill converts only
 actionable legacy schedules into equivalent proposals and clears that legacy
 schedule, so an upgrade neither strands an already-authorized continuation nor
 manufactures new work from historical completed or waiting turns.
+A successful `done` settlement is a completion claim, not accepted work. Explicit
+trusted acceptance is a separate transition: an independently issued opaque
+decision identity binds the accepted attempt (execution, fence, captured input
+snapshot) and a canonical digest over the exact settlement receipt (the frozen
+normalized result). Acceptance is authorized by a separately provisioned
+acceptance authority registered per instance
+(`gas_email_acceptance_authorities`, owner-managed, never exposed through any
+operation); the text-execution registration never automatically gains
+terminal-acceptance authority, so a caller that can obtain review context and
+its digest still cannot mint acceptance. `authority_ref` is a bearer
+credential: provision an unpredictable, securely generated value, keep it
+separate from ordinary runtime/model context, and handle it as a credential
+(never log it; rotate on suspicion). Each registration also carries a
+non-secret `authority_id`, which is what acceptance history records for
+routine audit attribution. The authority row is locked for the accepting
+transaction, so owner-managed rotation or revocation serializes with
+acceptance: acceptance commits before revocation, or revocation wins and the
+acceptance rejects. The read-only acceptance context
+exposes exactly what the accepting transition re-derives from durable state, so
+verification never relies on caller-asserted labels or execution identity
+alone. New acceptance is refused while the project has an unresolved
+reconciliation block or an active mutation authority, and the read-only context
+reports the same exclusions. An exact replay of a
+recorded decision returns it unchanged, divergent content under the same
+identity is rejected before mutation, and a decision against superseded input,
+a newer attempt, or a different result fails closed. Acceptance moves the Work
+Unit to terminal and touches nothing else: settlement receipts, results, outbox,
+and continuation records are untouched. There is no backfill: nothing historical
+becomes accepted work.
 New input during a turn remains eligible. Input committed before reply admission
 supersedes the old pending reply. Admission committed first creates a project
 reconciliation block; newer inputs may be ingested but no new execution can start
@@ -474,7 +503,8 @@ The upgrade is backward-compatible with the deployed legacy runner. Do not edit
 an already-applied extension; use another forward migration if needed.
 Later forward migrations follow the same ledger discipline: `003_model_diagnostics`,
 `004_failure_watermark_snapshot`, `005_failure_recovery_boundary`,
-`006_settlement_receipts`, and `007_continuation_proposals` are applied by the same
+`006_settlement_receipts`, `007_continuation_proposals`, and
+`008_acceptance_decisions` are applied by the same
 inspect/apply command.
 `006_settlement_receipts` adds the durable settlement receipt and exact-replay
 semantics by replacing only the deepest RPC in the chain; it does not edit any
@@ -482,7 +512,19 @@ earlier extension or the bootstrap schema. `007_continuation_proposals` replaces
 direct `continue` scheduling with a durable bounded proposal considered and
 consumed by the LLM-free coordinator only during authorized admission; it
 backfills existing authorized schedules at the upgrade boundary and likewise
-replaces only the deepest RPC in the chain.
+replaces only the deepest RPC in the chain. `008_acceptance_decisions` adds the
+durable acceptance decision record (recording the non-secret authority
+identifier), the
+separately provisioned per-instance acceptance-authority registration, the
+canonical settlement-receipt digest, and the read-only acceptance-context plus
+accepting operations; it backfills nothing, extends no execution grant into
+acceptance authority (an instance with no authority row cannot accept), and
+likewise replaces only the deepest RPC in the chain. Provision acceptance
+deliberately, owner-side, with a securely generated bearer credential and a
+non-secret audit identifier, e.g.
+`INSERT INTO gas_email_acceptance_authorities(instance_id,authority_ref,authority_id) VALUES('INSTANCE','<unpredictable-generated-credential>','owner-acceptance:reviewed')`
+— the credential is what the acceptance caller must possess; the identifier is
+only for audit. Do not use descriptive labels as the credential.
 
 ### One historical owner-evidence repair — only after the receipt fix is deployed
 
@@ -711,17 +753,25 @@ VMs, simulated Gmail/OpenRouter, and real SQL via the existing test-pool helper.
 It covers auth, grants, idempotency/conflicts, stale fences, bounded snapshots,
 same-thread MIME replies, reconstruction, invalid/timeout models, artifacts,
 new input, finite continuations through durable proposals (binding, cooldown,
-consumption, supersession, rollback, waits staying quiet), lost
+consumption, supersession, rollback, waits staying quiet), explicit acceptance
+(binding, exact replay, divergent-content rejection, stale supersession,
+atomic rollback, terminal transition, unauthorized-issuer rejection, and
+refusal during reconciliation blocks or active mutation authority), lost
 checkpoint/admission/send responses,
 settlement replay/divergence/conflict and its recorded snapshot, late-input
 eligibility across settlement replay, replay after successor admission, poison
 intake/quarantine, failed-snapshot retries, canonical multibyte/escaping byte
 boundaries, RFC2047 folding, truncated/duplicate Sent searches, and
-no Sheets/runtime-property access. The upgrade suite exercises the 002-006 to
+no Sheets/runtime-property access. The upgrade suite exercises the 002-007 to
+008 boundary, accepting pre-existing settled review work only through the new
+decision and only after the acceptance authority is provisioned, and the
+002-006 to
 007 boundary, including backfilling only authorized legacy continuations. CI also runs it through
 `scripts/run-postgres-suite.mjs` against isolated native PostgreSQL, including
 both genuine competing-transaction admission orderings, concurrent exact
-settlement replay, and concurrent proposal admission; native races are not
+settlement replay, concurrent proposal admission, concurrent acceptance of
+one decision, and authority rotation/revocation racing acceptance in both
+orderings; native races are not
 substituted by PGlite serialization. Local non-PostgreSQL runs identify those race
 subtests as unavailable; the native CI stage is required.
 

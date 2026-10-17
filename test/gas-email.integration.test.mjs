@@ -17,6 +17,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
   const input=(id,thread='sqlthread',body='Please draft.')=>({id,threadId:thread,from:'midnightprojectantigravity@gmail.com',to:'midnight.project.mp@gmail.com',reference:`<${id}@example.com>`,subject:'Task',body});
   const checkpoint=(claim,turn={disposition:'done',summary:'Draft complete.'})=>rpc('checkpoint',{execution_id:claim.execution_id,fence:claim.fence,turn});
   const reset=()=>sql('TRUNCATE gas_email_instances, vnext_work_units CASCADE; INSERT INTO gas_email_instances VALUES (\'gas-test\',\'gas-owner\',\'gas-client\',\'email-project\',\'midnight.project.mp@gmail.com\',\'midnightprojectantigravity@gmail.com\',true,\'reviewed:text-only:v1\')');
+  const authorize=()=>{sql("INSERT INTO gas_email_acceptance_authorities VALUES ('gas-test','reviewed:owner-acceptance:v1','owner-acceptance:v1')");return 'reviewed:owner-acceptance:v1';};
   try {
     await t.test('closed diagnostics, stale fence rollback and old runtime compatibility',()=>{
       for(const legacy of [false,true]){
@@ -624,6 +625,179 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'review');
       assert.equal(f.tick().status,'idle');assert.equal(f.sends,2);assert.equal(calls,2);
       assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_executions')[0].n),2);
+    });
+    await t.test('explicit acceptance binds the settled revision, replays exactly and rejects divergent content',()=>{
+      reset();const authority=authorize();
+      rpc('ingest',input('accept','sqlthread','Deliver the report.'));const c=rpc('claim');
+      const settled=checkpoint(c);assert.equal(settled.work_state,'review');
+      const w=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+      const context=rpc('acceptance-context',{work_unit_id:w});
+      assert.equal(context.status,'review-ready');assert.equal(context.execution_id,c.execution_id);
+      assert.equal(context.fence,c.fence);assert.equal(context.input_seq,settled.input_seq);
+      const expected=sql("SELECT encode(sha256(convert_to(jsonb_build_object('instance','gas-test','execution_id',s.execution_id,'fence',s.fence,'input_seq',s.input_seq,'turn',s.turn)::text,'UTF8')),'hex') AS digest FROM gas_email_settlements s")[0].digest;
+      assert.equal(context.snapshot_digest,expected);
+      assert.throws(()=>rpc('accept',{decision_ref:'reviewed:text-only:v1',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:context.snapshot_digest,authority:'reviewed:text-only:v1'}),/acceptance authority required/);
+      assert.throws(()=>rpc('accept',{decision_ref:'arbitrary:reference',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:context.snapshot_digest}),/acceptance authority required/);
+      const decision={decision_ref:'review:thread-1',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:context.snapshot_digest,authority};
+      assert.throws(()=>rpc('accept',{...decision,decision_ref:'bad ref!'}),/invalid acceptance decision/);
+      assert.throws(()=>rpc('accept',{...decision,snapshot_digest:'0'.repeat(63)}),/invalid acceptance decision/);
+      assert.throws(()=>rpc('accept',{...decision,execution_id:'foreign-execution'}),/stale acceptance decision/);
+      assert.throws(()=>rpc('accept',{...decision,snapshot_digest:'a'.repeat(64)}),/acceptance snapshot mismatch/);
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'review');
+      assert.equal(Number(sql('SELECT count(*)::int AS n FROM gas_email_acceptances')[0].n),0);
+      const accepted=rpc('accept',decision);
+      assert.equal(accepted.status,'accepted');assert.equal(accepted.replay,false);assert.equal(accepted.decision_ref,decision.decision_ref);
+      assert.equal(accepted.execution_id,c.execution_id);assert.equal(accepted.fence,c.fence);
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'terminal');
+      const row=sql('SELECT instance_id,project_id,work_unit_id,execution_id,fence::int AS fence,input_seq::int AS input_seq,snapshot_digest,authority_id FROM gas_email_acceptances')[0];
+      assert.equal(row.instance_id,'gas-test');assert.equal(row.project_id,'email-project');
+      assert.equal(row.work_unit_id,w);assert.equal(row.execution_id,c.execution_id);assert.equal(row.fence,c.fence);
+      assert.equal(row.snapshot_digest,context.snapshot_digest);assert.equal(row.authority_id,'owner-acceptance:v1');
+      assert.equal(rpc('health').review,0);assert.equal(rpc('health').accepted,1);
+      const replay=rpc('accept',decision);
+      assert.equal(replay.status,'accepted');assert.equal(replay.replay,true);assert.equal(replay.accepted_at,accepted.accepted_at);
+      assert.equal(Number(sql('SELECT count(*)::int AS n FROM gas_email_acceptances')[0].n),1);
+      const after=rpc('acceptance-context',{work_unit_id:w});
+      assert.equal(after.status,'not-reviewable');assert.equal(after.work_state,'terminal');
+      assert.throws(()=>rpc('accept',{...decision,execution_id:'other-execution'}),/acceptance decision conflict/);
+      assert.throws(()=>rpc('accept',{...decision,decision_ref:'review:thread-2',snapshot_digest:'b'.repeat(64)}),/not settled for acceptance/);
+    });
+    await t.test('stale decisions fail closed against superseded input, newer attempts and unknown work',()=>{
+      reset();const authority=authorize();
+      rpc('ingest',input('oldAttempt','sqlthread','Original requirement'));const c1=rpc('claim');
+      const w=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+      assert.equal(rpc('acceptance-context',{work_unit_id:w}).status,'not-reviewable');
+      checkpoint(c1,{disposition:'continue',summary:'Refining draft.'});
+      const delivered=rpc('delivery');rpc('record',{execution_id:delivered.execution_id,gmail_id:'staleSent',messageId:delivered.envelope.messageId,threadId:delivered.envelope.threadId});
+      sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");
+      const c2=rpc('claim');assert.equal(c2.fence,c1.fence+1);
+      checkpoint(c2);
+      const context=rpc('acceptance-context',{work_unit_id:w});
+      assert.equal(context.status,'review-ready');assert.equal(context.execution_id,c2.execution_id);assert.equal(context.fence,c2.fence);
+      assert.throws(()=>rpc('accept',{decision_ref:'review:stale',work_unit_id:w,execution_id:c1.execution_id,fence:c1.fence,snapshot_digest:context.snapshot_digest,authority}),/stale acceptance decision/);
+      assert.throws(()=>rpc('accept',{decision_ref:'review:stale',work_unit_id:w,execution_id:c2.execution_id,fence:c1.fence,snapshot_digest:context.snapshot_digest,authority}),/stale acceptance decision/);
+      assert.throws(()=>rpc('accept',{decision_ref:'review:unknown',work_unit_id:'no-such-work',execution_id:c2.execution_id,fence:c2.fence,snapshot_digest:context.snapshot_digest,authority}),/unknown email work/);
+      const accepted=rpc('accept',{decision_ref:'review:stale',work_unit_id:w,execution_id:c2.execution_id,fence:c2.fence,snapshot_digest:context.snapshot_digest,authority});
+      assert.equal(accepted.status,'accepted');assert.equal(accepted.replay,false);
+      reset();authorize();
+      rpc('ingest',input('supersededInput','sqlthread','Original requirement'));const c3=rpc('claim');checkpoint(c3);
+      const w3=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+      const digest3=rpc('acceptance-context',{work_unit_id:w3}).snapshot_digest;
+      rpc('ingest',input('newerInput','sqlthread','Use this instead.'));
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'actionable');
+      assert.equal(rpc('acceptance-context',{work_unit_id:w3}).status,'not-reviewable');
+      assert.throws(()=>rpc('accept',{decision_ref:'review:superseded',work_unit_id:w3,execution_id:c3.execution_id,fence:c3.fence,snapshot_digest:digest3,authority}),/not settled for acceptance/);
+      sql("INSERT INTO vnext_pilot_inputs(receipt_id,work_unit_id,message) VALUES('ghost','"+w3+"','Ghost input'); UPDATE vnext_work_units SET state='review' WHERE work_unit_id='"+w3+"'");
+      assert.equal(rpc('acceptance-context',{work_unit_id:w3}).status,'not-reviewable');
+      assert.throws(()=>rpc('accept',{decision_ref:'review:superseded',work_unit_id:w3,execution_id:c3.execution_id,fence:c3.fence,snapshot_digest:digest3,authority}),/stale acceptance decision/);
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'review');
+    });
+    await t.test('a failing acceptance transition rolls back atomically',()=>{
+      reset();const authority=authorize();
+      rpc('ingest',input('atomic'));const c=rpc('claim');checkpoint(c);
+      const w=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+      const digest=rpc('acceptance-context',{work_unit_id:w}).snapshot_digest;
+      sql("CREATE FUNCTION reject_acceptance() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected acceptance failure'; END $$; CREATE TRIGGER reject_acceptance BEFORE INSERT ON gas_email_acceptances FOR EACH ROW EXECUTE FUNCTION reject_acceptance()");
+      assert.throws(()=>rpc('accept',{decision_ref:'review:atomic',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:digest,authority}),/injected acceptance failure/);
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'review');
+      assert.equal(Number(sql('SELECT count(*)::int AS n FROM gas_email_acceptances')[0].n),0);
+      sql('DROP TRIGGER reject_acceptance ON gas_email_acceptances; DROP FUNCTION reject_acceptance()');
+      assert.equal(rpc('accept',{decision_ref:'review:atomic',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:digest,authority}).status,'accepted');
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'terminal');
+    });
+    await t.test('unresolved effects and active mutation block new acceptance until resolved',()=>{
+      reset();const authority=authorize();
+      rpc('ingest',input('blockedAccept','threadBlocked','Deliver the report.'));const c=rpc('claim');checkpoint(c);
+      const w=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+      const context=rpc('acceptance-context',{work_unit_id:w});assert.equal(context.status,'review-ready');
+      rpc('ingest',input('secondThread','threadSecond','Another task.'));
+      const delivered=rpc('delivery');assert.equal(delivered.status,'send');
+      const blocked=rpc('acceptance-context',{work_unit_id:w});
+      assert.equal(blocked.status,'not-reviewable');assert.equal(blocked.reason,'project-blocked');
+      assert.throws(()=>rpc('accept',{decision_ref:'review:blocked',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:context.snapshot_digest,authority}),/acceptance blocked during reconciliation/);
+      rpc('record',{execution_id:delivered.execution_id,gmail_id:'blockedAcceptSent',messageId:delivered.envelope.messageId,threadId:delivered.envelope.threadId});
+      assert.equal(rpc('health').blocked,false);
+      assert.equal(rpc('acceptance-context',{work_unit_id:w}).status,'review-ready');
+      const c2=rpc('claim');assert.equal(c2.status,'claimed');assert.notEqual(c2.execution_id,c.execution_id);
+      const busy=rpc('acceptance-context',{work_unit_id:w});
+      assert.equal(busy.status,'not-reviewable');assert.equal(busy.reason,'project-busy');
+      assert.throws(()=>rpc('accept',{decision_ref:'review:blocked',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:context.snapshot_digest,authority}),/acceptance blocked during active execution/);
+      checkpoint(c2);
+      assert.equal(rpc('acceptance-context',{work_unit_id:w}).status,'review-ready');
+      const accepted=rpc('accept',{decision_ref:'review:blocked',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:context.snapshot_digest,authority});
+      assert.equal(accepted.status,'accepted');assert.equal(accepted.replay,false);
+      assert.equal(sql('SELECT state FROM vnext_work_units WHERE work_unit_id=$1',[w])[0].state,'terminal');
+    });
+    await t.test('native concurrent acceptance of one decision records exactly one acceptance', {skip:!process.env.TEST_DATABASE_URL},async()=>{
+      const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
+      const auth=async client=>{await client.query('BEGIN');await client.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify({sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800})]);await client.query('SET LOCAL ROLE authenticated');};
+      try{
+        reset();const authority=authorize();
+        rpc('ingest',input('concurrentAccept'));const c=rpc('claim');checkpoint(c);
+        const w=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+        const digest=rpc('acceptance-context',{work_unit_id:w}).snapshot_digest;
+        const payload={decision_ref:'review:concurrent',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:digest,authority};
+        const call=client=>client.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test','accept',JSON.stringify(payload)]);
+        const a=await pool.connect(),b=await pool.connect();
+        try{
+          await auth(a);await auth(b);
+          const x=(await call(a)).rows[0].r;
+          let finished=false;const pending=call(b).then(r=>{finished=true;return r.rows[0].r;});
+          await new Promise(resolve=>setTimeout(resolve,100));assert.equal(finished,false,'second acceptance must wait on the project admission lock');
+          await a.query('COMMIT');const y=await pending;await b.query('COMMIT');
+          assert.equal(x.status,'accepted');assert.equal(x.replay,false);
+          assert.equal(y.status,'accepted');assert.equal(y.replay,true);assert.equal(y.accepted_at,x.accepted_at);
+          assert.equal(y.decision_ref,x.decision_ref);assert.equal(y.snapshot_digest,x.snapshot_digest);
+          assert.equal(Number(sql('SELECT count(*)::int AS n FROM gas_email_acceptances')[0].n),1);
+          assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'terminal');
+        }finally{await a.query('ROLLBACK');await b.query('ROLLBACK');a.release();b.release();}
+      }finally{await pool.end();}
+    });
+    await t.test('native authority rotation and revocation serialize with acceptance in both orderings', {skip:!process.env.TEST_DATABASE_URL},async()=>{
+      const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
+      const auth=async client=>{await client.query('BEGIN');await client.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify({sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800})]);await client.query('SET LOCAL ROLE authenticated');};
+      try{
+        reset();const authority=authorize();
+        rpc('ingest',input('rotateRace'));const c=rpc('claim');checkpoint(c);
+        const w=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+        const digest=rpc('acceptance-context',{work_unit_id:w}).snapshot_digest;
+        const payload={decision_ref:'review:rotate',work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:digest,authority};
+        const a=await pool.connect(),owner=await pool.connect();
+        try{
+          await auth(a);
+          const accepted=(await a.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test','accept',JSON.stringify(payload)])).rows[0].r;
+          assert.equal(accepted.status,'accepted');assert.equal(accepted.replay,false);
+          let revoked=false;const pending=owner.query("DELETE FROM gas_email_acceptance_authorities WHERE instance_id='gas-test'").then(()=>{revoked=true;});
+          await new Promise(resolve=>setTimeout(resolve,100));assert.equal(revoked,false,'authority revocation must wait for the accepting transaction');
+          await a.query('COMMIT');await pending;
+          assert.equal(Number(sql('SELECT count(*)::int AS n FROM gas_email_acceptance_authorities')[0].n),0);
+          assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'terminal');
+          assert.equal(sql('SELECT authority_id FROM gas_email_acceptances')[0].authority_id,'owner-acceptance:v1');
+          assert.throws(()=>rpc('accept',payload),/acceptance authority required/);
+        }finally{await a.query('ROLLBACK').catch(()=>{});a.release();owner.release();}
+        reset();authorize();
+        rpc('ingest',input('rotateRace2'));const c2=rpc('claim');checkpoint(c2);
+        const w2=sql('SELECT work_unit_id FROM vnext_work_units')[0].work_unit_id;
+        const digest2=rpc('acceptance-context',{work_unit_id:w2}).snapshot_digest;
+        const payload2={decision_ref:'review:rotate-2',work_unit_id:w2,execution_id:c2.execution_id,fence:c2.fence,snapshot_digest:digest2,authority};
+        const b=await pool.connect(),owner2=await pool.connect();
+        try{
+          await owner2.query('BEGIN');
+          await owner2.query("UPDATE gas_email_acceptance_authorities SET authority_ref='reviewed:owner-acceptance:v2',authority_id='owner-acceptance:v2' WHERE instance_id='gas-test'");
+          await auth(b);
+          let finished=false;const pending=b.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test','accept',JSON.stringify(payload2)]).then(r=>{finished=true;return r.rows[0].r;},e=>{finished=true;return e;});
+          await new Promise(resolve=>setTimeout(resolve,100));assert.equal(finished,false,'acceptance must wait on the authority row lock');
+          await owner2.query('COMMIT');
+          const outcome=await pending;
+          assert.match(outcome.message,/acceptance authority required/);
+          await b.query('ROLLBACK');
+          assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'review');
+          assert.equal(Number(sql('SELECT count(*)::int AS n FROM gas_email_acceptances')[0].n),0);
+          const rotated=rpc('accept',{...payload2,authority:'reviewed:owner-acceptance:v2'});
+          assert.equal(rotated.status,'accepted');assert.equal(rotated.replay,false);
+          assert.equal(sql('SELECT authority_id FROM gas_email_acceptances')[0].authority_id,'owner-acceptance:v2');
+        }finally{await b.query('ROLLBACK').catch(()=>{});b.release();owner2.release();}
+      }finally{await pool.end();}
     });
     await t.test('native transaction races: input-first supersedes; admission-first blocks claims, preserves input', {skip:!process.env.TEST_DATABASE_URL},async()=>{
       const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
