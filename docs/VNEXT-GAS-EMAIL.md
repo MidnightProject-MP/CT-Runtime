@@ -34,10 +34,11 @@ The model returns `waiting`, `continue`, or `done`, summary (4,000 characters),
 question (1,000), and optional artifact (3,000). The four canonical JSON string
 values together are also capped at **15,900 UTF-8 bytes including JSON escaping**;
 GAS checks exactly that budget before checkpoint and SQL enforces it independently.
-NUL/unpaired-surrogate text is rejected before checkpoint. Waiting requires a question;
-continue is limited to three turns per input watermark, separated by five
-minutes. After the budget is exhausted there is no automatic wake until new
-input. `done` produces a **draft outcome pending human review**, and Work Unit
+NUL/unpaired-surrogate text is rejected before checkpoint. Waiting requires a question.
+A successful `continue` checkpoint records a durable, bounded continuation proposal
+instead of scheduling a wake directly; the LLM-free coordinator may consider it only
+after a five-minute cooldown and admits at most three attempts per input watermark.
+After the budget is exhausted there is no automatic wake until new input. `done` produces a **draft outcome pending human review**, and Work Unit
 state `review`, never `terminal`. There is deliberately no client-controlled
 terminal-authorization flag or automatic terminal promotion. Human follow-up in
 the same thread reopens the existing Work Unit.
@@ -84,6 +85,20 @@ replay of the same execution, fence, and normalized turn returns the recorded
 receipt even after later work has progressed; divergent content under the same
 settlement identity is rejected without mutation, so a lost COMMIT response is
 resolved by durable inspection rather than repeated model work or a second send.
+A successful nonterminal checkpoint also records one durable continuation proposal
+bound to the source attempt (instance, project, execution, fence, and captured
+input snapshot). Discovery (`claim`) evaluates proposals without mutating them: a
+pending `continue` proposal is eligible only after its cooldown, only for the exact
+recorded attempt, only while no newer input exists, and only within the
+three-attempt snapshot budget. Consumption happens only inside authorized
+admission, atomically with execution creation and authority acquisition; competing
+claims admit exactly one successor and the rest observe `busy`. `waiting`
+proposals stay durable and quiet until new human input makes the Work Unit
+eligible independently, and newer input supersedes a pending proposal. `done`
+creates no proposal; review is not continuation. The 007 backfill converts only
+actionable legacy schedules into equivalent proposals and clears that legacy
+schedule, so an upgrade neither strands an already-authorized continuation nor
+manufactures new work from historical completed or waiting turns.
 New input during a turn remains eligible. Input committed before reply admission
 supersedes the old pending reply. Admission committed first creates a project
 reconciliation block; newer inputs may be ingested but no new execution can start
@@ -458,11 +473,16 @@ All table/internal-function privileges remain denied, with fixed search paths.
 The upgrade is backward-compatible with the deployed legacy runner. Do not edit
 an already-applied extension; use another forward migration if needed.
 Later forward migrations follow the same ledger discipline: `003_model_diagnostics`,
-`004_failure_watermark_snapshot`, `005_failure_recovery_boundary`, and
-`006_settlement_receipts` are applied by the same inspect/apply command.
+`004_failure_watermark_snapshot`, `005_failure_recovery_boundary`,
+`006_settlement_receipts`, and `007_continuation_proposals` are applied by the same
+inspect/apply command.
 `006_settlement_receipts` adds the durable settlement receipt and exact-replay
 semantics by replacing only the deepest RPC in the chain; it does not edit any
-earlier extension or the bootstrap schema.
+earlier extension or the bootstrap schema. `007_continuation_proposals` replaces
+direct `continue` scheduling with a durable bounded proposal considered and
+consumed by the LLM-free coordinator only during authorized admission; it
+backfills existing authorized schedules at the upgrade boundary and likewise
+replaces only the deepest RPC in the chain.
 
 ### One historical owner-evidence repair — only after the receipt fix is deployed
 
@@ -690,17 +710,20 @@ occur on this email path.
 VMs, simulated Gmail/OpenRouter, and real SQL via the existing test-pool helper.
 It covers auth, grants, idempotency/conflicts, stale fences, bounded snapshots,
 same-thread MIME replies, reconstruction, invalid/timeout models, artifacts,
-new input, finite continuations, lost checkpoint/admission/send responses,
+new input, finite continuations through durable proposals (binding, cooldown,
+consumption, supersession, rollback, waits staying quiet), lost
+checkpoint/admission/send responses,
 settlement replay/divergence/conflict and its recorded snapshot, late-input
 eligibility across settlement replay, replay after successor admission, poison
 intake/quarantine, failed-snapshot retries, canonical multibyte/escaping byte
 boundaries, RFC2047 folding, truncated/duplicate Sent searches, and
-no Sheets/runtime-property access. CI also runs it through
+no Sheets/runtime-property access. The upgrade suite exercises the 002-006 to
+007 boundary, including backfilling only authorized legacy continuations. CI also runs it through
 `scripts/run-postgres-suite.mjs` against isolated native PostgreSQL, including
-both genuine competing-transaction admission orderings and concurrent exact
-settlement replay; native races are not
-substituted by PGlite serialization. Local non-PostgreSQL runs identify that race
-subtest as unavailable; the native CI stage is required.
+both genuine competing-transaction admission orderings, concurrent exact
+settlement replay, and concurrent proposal admission; native races are not
+substituted by PGlite serialization. Local non-PostgreSQL runs identify those race
+subtests as unavailable; the native CI stage is required.
 
 Still pending: real Neon Google-JWT/Data API integration, Gmail consent/quota and
 MIME readback, actual model JSON behavior/latency/cost, sender filter provenance,
