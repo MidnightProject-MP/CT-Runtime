@@ -123,10 +123,16 @@ test('a 002-007 database accepts pre-existing settled review work only through t
   assert.equal(context.status,'review-ready');assert.equal(context.execution_id,'accepted-exec');assert.equal(context.fence,1);assert.equal(context.input_seq,1);
   const expected=(await pool.query("SELECT encode(sha256(convert_to(jsonb_build_object('instance','gas-vnext-email','execution_id',s.execution_id,'fence',s.fence,'input_seq',s.input_seq,'turn',s.turn)::text,'UTF8')),'hex') AS digest FROM gas_email_settlements s")).rows[0].digest;
   assert.equal(context.snapshot_digest,expected);
-  const accepted=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest});
+  await assert.rejects(rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest,authority:'reviewed:text-only:v1'}),/acceptance authority required/);
+  await assert.rejects(rpc('accept',{decision_ref:'reviewed:text-only:v1',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest,authority:'reviewed:text-only:v1'}),/acceptance authority required/);
+  await assert.rejects(rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest}),/acceptance authority required/);
+  assert.equal((await pool.query("SELECT state FROM vnext_work_units WHERE work_unit_id='accepted-work'")).rows[0].state,'review');
+  await pool.query("INSERT INTO gas_email_acceptance_authorities VALUES('gas-vnext-email','reviewed:owner-acceptance:v1')");
+  const accepted=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest,authority:'reviewed:owner-acceptance:v1'});
   assert.equal(accepted.status,'accepted');assert.equal(accepted.replay,false);
   assert.equal((await pool.query("SELECT state FROM vnext_work_units WHERE work_unit_id='accepted-work'")).rows[0].state,'terminal');
-  const replay=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest});
+  assert.equal((await pool.query('SELECT authority_ref FROM gas_email_acceptances')).rows[0].authority_ref,'reviewed:owner-acceptance:v1');
+  const replay=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest,authority:'reviewed:owner-acceptance:v1'});
   assert.equal(replay.status,'accepted');assert.equal(replay.replay,true);assert.equal(replay.accepted_at,accepted.accepted_at);
   assert.deepEqual((await pool.query('SELECT upgrade_id FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows.map(row=>row.upgrade_id),['002_delivery_provider_receipts','003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals','008_acceptance_decisions']);
   }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}

@@ -18,6 +18,15 @@
 -- Acceptance moves the Work Unit to terminal and touches nothing else: the
 -- settlement receipt, results, outbox, and continuation records are
 -- untouched. There is no backfill: nothing historical becomes accepted work.
+--
+-- Acceptance is authorized by a separately provisioned acceptance authority
+-- registered per instance (owner-managed, never exposed through any RPC and
+-- never derived from the execution grant). A caller that can execute text
+-- turns cannot mint acceptance merely by presenting review context and an
+-- arbitrary reference. New acceptance is refused while the project has an
+-- unresolved reconciliation block or an active mutation authority, and the
+-- read-only context reflects the same exclusions; an exact replay of a
+-- recorded decision still returns it unchanged without changing current state.
 CREATE TABLE public.gas_email_acceptances (
  instance_id text NOT NULL REFERENCES public.gas_email_instances,
  decision_ref text NOT NULL CHECK(decision_ref ~ '^[a-zA-Z0-9_.:-]{1,150}$'),
@@ -27,10 +36,23 @@ CREATE TABLE public.gas_email_acceptances (
  fence bigint NOT NULL,
  input_seq bigint NOT NULL REFERENCES public.vnext_pilot_inputs,
  snapshot_digest text NOT NULL CHECK(snapshot_digest ~ '^[0-9a-f]{64}$'),
+ authority_ref text NOT NULL,
  accepted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(instance_id,decision_ref)
 );
 REVOKE ALL ON public.gas_email_acceptances FROM PUBLIC,authenticated,anonymous;
+
+-- Separate capability for terminal acceptance. Possession of the registered
+-- reference (never returned by any operation) authorizes acceptance for this
+-- instance and project only. An instance with no row here cannot accept work
+-- at all: the text-execution grant is never automatically extended into
+-- terminal-acceptance authority. Provision deliberately, owner-side.
+CREATE TABLE public.gas_email_acceptance_authorities (
+ instance_id text PRIMARY KEY REFERENCES public.gas_email_instances,
+ authority_ref text NOT NULL CHECK(length(authority_ref) BETWEEN 1 AND 200),
+ provisioned_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+REVOKE ALL ON public.gas_email_acceptance_authorities FROM PUBLIC,authenticated,anonymous;
 
 -- One canonical digest over the exact settlement receipt (attempt identity,
 -- fence, captured input sequence, and frozen normalized result), shared by the
@@ -49,7 +71,7 @@ DECLARE
  o public.gas_email_outbox; r public.gas_email_receipts; t public.gas_email_turns; s public.gas_email_settlements;
  acc public.gas_email_acceptances;
  seq bigint; consumed bigint; id text; wid text; envelope jsonb; turn jsonb;
- response text; disposition text; work_state text; digest text;
+ response text; disposition text; work_state text; digest text; authority text;
 BEGIN
  i := public.gas_email_principal(p_instance);
  IF jsonb_typeof(p_input) IS DISTINCT FROM 'object' OR octet_length(p_input::text)>60000 THEN
@@ -235,6 +257,10 @@ BEGIN
       OR s.turn->>'disposition' IS DISTINCT FROM 'done'
       OR EXISTS(SELECT 1 FROM public.vnext_pilot_inputs x WHERE x.work_unit_id=w.work_unit_id AND x.input_seq>s.input_seq)
     THEN RETURN jsonb_build_object('status','not-reviewable','work_state',w.state); END IF;
+    IF EXISTS(SELECT 1 FROM public.vnext_project_reconciliation_blocks WHERE project_id=i.project_id)
+    THEN RETURN jsonb_build_object('status','not-reviewable','work_state',w.state,'reason','project-blocked'); END IF;
+    IF EXISTS(SELECT 1 FROM public.vnext_project_mutation_authority WHERE project_id=i.project_id)
+    THEN RETURN jsonb_build_object('status','not-reviewable','work_state',w.state,'reason','project-busy'); END IF;
     RETURN jsonb_build_object('status','review-ready','work_unit_id',w.work_unit_id,'execution_id',s.execution_id,'fence',s.fence,
       'input_seq',s.input_seq,'snapshot_digest',public.gas_email_acceptance_digest(i.instance_id,s.execution_id,s.fence,s.input_seq,s.turn));
   ELSIF p_operation='accept' THEN
@@ -248,6 +274,11 @@ BEGIN
       OR coalesce(p_input->>'snapshot_digest','') !~ '^[0-9a-f]{64}$'
       OR coalesce(p_input->>'fence','') !~ '^[0-9]{1,18}$'
       OR coalesce(p_input->>'work_unit_id','')='' OR coalesce(p_input->>'execution_id','')='' THEN RAISE EXCEPTION 'invalid acceptance decision'; END IF;
+    -- Terminal acceptance requires the separately provisioned acceptance
+    -- authority for this instance. The execution grant (and any reference
+    -- obtainable from review context) is not acceptance authority.
+    SELECT aa.authority_ref INTO authority FROM public.gas_email_acceptance_authorities aa WHERE aa.instance_id=i.instance_id;
+    IF authority IS NULL OR p_input->>'authority' IS DISTINCT FROM authority THEN RAISE EXCEPTION 'acceptance authority required'; END IF;
     SELECT * INTO acc FROM public.gas_email_acceptances WHERE instance_id=i.instance_id AND decision_ref=p_input->>'decision_ref';
     IF FOUND THEN
       IF acc.work_unit_id IS DISTINCT FROM p_input->>'work_unit_id' OR acc.execution_id IS DISTINCT FROM p_input->>'execution_id'
@@ -256,6 +287,11 @@ BEGIN
       RETURN jsonb_build_object('status','accepted','replay',true,'decision_ref',acc.decision_ref,'work_unit_id',acc.work_unit_id,
         'execution_id',acc.execution_id,'fence',acc.fence,'input_seq',acc.input_seq,'snapshot_digest',acc.snapshot_digest,'accepted_at',acc.accepted_at);
     END IF;
+    -- New acceptance is refused while the project has unresolved external
+    -- effects or another execution holds mutation authority. Exact replay
+    -- above is unaffected: it returns the recorded decision, not new state.
+    IF EXISTS(SELECT 1 FROM public.vnext_project_reconciliation_blocks WHERE project_id=i.project_id) THEN RAISE EXCEPTION 'acceptance blocked during reconciliation'; END IF;
+    IF EXISTS(SELECT 1 FROM public.vnext_project_mutation_authority WHERE project_id=i.project_id) THEN RAISE EXCEPTION 'acceptance blocked during active execution'; END IF;
     SELECT u.* INTO w FROM public.vnext_work_units u JOIN public.gas_email_threads g USING(work_unit_id)
       WHERE g.instance_id=i.instance_id AND u.work_unit_id=p_input->>'work_unit_id' FOR UPDATE OF u;
     IF NOT FOUND THEN RAISE EXCEPTION 'unknown email work'; END IF;
@@ -268,8 +304,8 @@ BEGIN
     THEN RAISE EXCEPTION 'stale acceptance decision'; END IF;
     digest:=public.gas_email_acceptance_digest(i.instance_id,s.execution_id,s.fence,s.input_seq,s.turn);
     IF p_input->>'snapshot_digest' IS DISTINCT FROM digest THEN RAISE EXCEPTION 'acceptance snapshot mismatch'; END IF;
-    INSERT INTO public.gas_email_acceptances(instance_id,decision_ref,project_id,work_unit_id,execution_id,fence,input_seq,snapshot_digest)
-      VALUES(i.instance_id,p_input->>'decision_ref',i.project_id,w.work_unit_id,s.execution_id,s.fence,s.input_seq,digest) RETURNING * INTO acc;
+    INSERT INTO public.gas_email_acceptances(instance_id,decision_ref,project_id,work_unit_id,execution_id,fence,input_seq,snapshot_digest,authority_ref)
+      VALUES(i.instance_id,p_input->>'decision_ref',i.project_id,w.work_unit_id,s.execution_id,s.fence,s.input_seq,digest,authority) RETURNING * INTO acc;
     UPDATE public.vnext_work_units SET state='terminal',updated_at=clock_timestamp() WHERE work_unit_id=w.work_unit_id;
     RETURN jsonb_build_object('status','accepted','replay',false,'decision_ref',acc.decision_ref,'work_unit_id',acc.work_unit_id,
       'execution_id',acc.execution_id,'fence',acc.fence,'input_seq',acc.input_seq,'snapshot_digest',acc.snapshot_digest,'accepted_at',acc.accepted_at);
