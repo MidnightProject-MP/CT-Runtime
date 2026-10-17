@@ -77,7 +77,13 @@ roles a SQL login or expose an arbitrary-SQL RPC.
 Ingest is idempotent only for an identical receipt; conflicting reuse fails.
 Claim snapshots at most three inputs, advancing only through that snapshot.
 Checkpoint atomically saves the result, reply envelope, consumed watermark,
-Work Unit review/wait/continue state and releases the exact execution authority.
+Work Unit review/wait/continue state, a durable settlement receipt binding the
+normalized result to the trusted instance, project, execution, fence, and
+captured input snapshot, and releases the exact execution authority. An exact
+replay of the same execution, fence, and normalized turn returns the recorded
+receipt even after later work has progressed; divergent content under the same
+settlement identity is rejected without mutation, so a lost COMMIT response is
+resolved by durable inspection rather than repeated model work or a second send.
 New input during a turn remains eligible. Input committed before reply admission
 supersedes the old pending reply. Admission committed first creates a project
 reconciliation block; newer inputs may be ingested but no new execution can start
@@ -451,6 +457,12 @@ sole authenticated public RPC validates/records receipts and augments peek.
 All table/internal-function privileges remain denied, with fixed search paths.
 The upgrade is backward-compatible with the deployed legacy runner. Do not edit
 an already-applied extension; use another forward migration if needed.
+Later forward migrations follow the same ledger discipline: `003_model_diagnostics`,
+`004_failure_watermark_snapshot`, `005_failure_recovery_boundary`, and
+`006_settlement_receipts` are applied by the same inspect/apply command.
+`006_settlement_receipts` adds the durable settlement receipt and exact-replay
+semantics by replacing only the deepest RPC in the chain; it does not edit any
+earlier extension or the bootstrap schema.
 
 ### One historical owner-evidence repair — only after the receipt fix is deployed
 
@@ -623,6 +635,9 @@ pending/uncertain/quarantine/failure/review counts, not secrets or message bodie
 Failed model turns settle without a reply and require fresh human input. Failure
 and expiry **never advance the successful-consumption watermark**. A separate
 failed-through watermark suppresses automatic retries of already-present input.
+A lost checkpoint response is resolved through the durable settlement receipt:
+an exact replay returns the recorded settlement without repeating model work or
+sending again, even after a successor execution has been admitted.
 After a later human reply (for example, “retry”), reconstruction again includes
 the oldest unconsumed failed messages in bounded batches of three. If the failed
 batch contains three follow-ups, all three are reconstructed before the later
@@ -675,12 +690,15 @@ occur on this email path.
 VMs, simulated Gmail/OpenRouter, and real SQL via the existing test-pool helper.
 It covers auth, grants, idempotency/conflicts, stale fences, bounded snapshots,
 same-thread MIME replies, reconstruction, invalid/timeout models, artifacts,
-new input, finite continuations, lost checkpoint/admission/send responses, poison
+new input, finite continuations, lost checkpoint/admission/send responses,
+settlement replay/divergence/conflict and its recorded snapshot, late-input
+eligibility across settlement replay, replay after successor admission, poison
 intake/quarantine, failed-snapshot retries, canonical multibyte/escaping byte
 boundaries, RFC2047 folding, truncated/duplicate Sent searches, and
 no Sheets/runtime-property access. CI also runs it through
 `scripts/run-postgres-suite.mjs` against isolated native PostgreSQL, including
-both genuine competing-transaction admission orderings; native races are not
+both genuine competing-transaction admission orderings and concurrent exact
+settlement replay; native races are not
 substituted by PGlite serialization. Local non-PostgreSQL runs identify that race
 subtest as unavailable; the native CI stage is required.
 

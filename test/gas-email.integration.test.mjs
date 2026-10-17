@@ -346,18 +346,107 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),0);assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_outbox')[0].n),0);
       reset();const slow=fixture();slow.add('slow');slow.setModel(()=>{slow.advance(300000);return {disposition:'done',summary:'Too late'};});assert.equal(slow.tick().status,'model-failed');assert.equal(slow.sends,0);
     });
-    await t.test('mid-checkpoint failure rolls back result, outbox, watermark and authority atomically',()=>{
+    await t.test('mid-checkpoint failure rolls back result, outbox, watermark, receipt and authority atomically',()=>{
       reset();rpc('ingest',input('atomic'));const c=rpc('claim');
       sql("CREATE FUNCTION gas_email_test_abort() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected checkpoint failure'; END $$; CREATE TRIGGER gas_email_test_abort BEFORE UPDATE ON vnext_pilot_progress FOR EACH ROW EXECUTE FUNCTION gas_email_test_abort()");
       try {
         assert.throws(()=>checkpoint(c),/injected checkpoint failure/);
         assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),0);
         assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_outbox')[0].n),0);
+        assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),0);
         assert.equal(Number(sql('SELECT consumed_input_seq AS n FROM vnext_pilot_progress')[0].n),0);
         assert.equal(sql('SELECT execution_id FROM vnext_project_mutation_authority')[0].execution_id,c.execution_id);
         assert.equal(sql('SELECT state FROM vnext_executions')[0].state,'running');
       }finally{sql('DROP TRIGGER gas_email_test_abort ON vnext_pilot_progress; DROP FUNCTION gas_email_test_abort()');}
-      checkpoint(c);assert.throws(()=>checkpoint(c),/stale email fence/);
+      const settled=checkpoint(c);assert.equal(settled.status,'settled');assert.equal(settled.replay,false);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),1);
+      const replay=checkpoint(c);assert.equal(replay.status,'settled');assert.equal(replay.replay,true);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),1);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_outbox')[0].n),1);
+    });
+    await t.test('settlement receipts replay exactly, reject divergence, and preserve the recorded snapshot',()=>{
+      reset();rpc('ingest',input('settle'));const c=rpc('claim');
+      const seq=Number(sql('SELECT max(input_seq) AS n FROM vnext_pilot_inputs')[0].n);
+      const turn={disposition:'done',summary:'Draft complete.'};
+      const first=checkpoint(c,turn);assert.equal(first.status,'settled');assert.equal(first.replay,false);
+      assert.deepEqual(sql('SELECT instance_id,project_id,execution_id,fence::int AS fence,input_seq::int AS input_seq,work_state FROM gas_email_settlements')[0],
+        {instance_id:'gas-test',project_id:'email-project',execution_id:c.execution_id,fence:c.fence,input_seq:seq,work_state:'review'});
+      const stored=sql('SELECT turn,created_at FROM gas_email_settlements')[0];
+      const replay=checkpoint(c,turn);assert.equal(replay.status,'settled');assert.equal(replay.replay,true);
+      assert.equal(replay.disposition,'done');assert.equal(replay.work_state,'review');assert.equal(Number(replay.input_seq),seq);
+      assert.deepEqual(sql('SELECT turn,created_at FROM gas_email_settlements')[0],stored);
+      assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'review');
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_project_mutation_authority')[0].n),0);
+      assert.throws(()=>checkpoint(c,{disposition:'done',summary:'A different draft.'}),/settlement content conflict/);
+      assert.throws(()=>checkpoint({...c,fence:c.fence+1},turn),/settlement content conflict/);
+      assert.deepEqual(sql('SELECT turn,created_at FROM gas_email_settlements')[0],stored);
+      assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'pending');
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_outbox')[0].n),1);
+    });
+    await t.test('late input during the attempt stays eligible across settlement replay',()=>{
+      reset();rpc('ingest',input('capture','sqlthread','Original requirement'));
+      const c=rpc('claim');assert.deepEqual(c.inputs.map(x=>x.message),['Original requirement']);
+      rpc('ingest',input('late','sqlthread','Arrived after the capture'));
+      const seq=Number(sql('SELECT input_seq AS n FROM vnext_pilot_inputs WHERE message=$1',['Original requirement'])[0].n);
+      const settled=checkpoint(c);assert.equal(settled.status,'settled');assert.equal(settled.work_state,'actionable');
+      assert.equal(Number(sql('SELECT input_seq::int AS n FROM gas_email_settlements')[0].n),seq);
+      assert.equal(Number(sql('SELECT consumed_input_seq::int AS n FROM vnext_pilot_progress')[0].n),seq);
+      const replay=checkpoint(c);assert.equal(replay.replay,true);assert.equal(replay.work_state,'actionable');
+      assert.equal(Number(sql('SELECT consumed_input_seq::int AS n FROM vnext_pilot_progress')[0].n),seq);
+      assert.equal(rpc('delivery').status,'superseded');
+      const next=rpc('claim');assert.equal(next.status,'claimed');assert.deepEqual(next.inputs.map(x=>x.message),['Arrived after the capture']);
+    });
+    await t.test('replay after successor admission does not disturb the successor authority',()=>{
+      reset();rpc('ingest',input('first','sqlthread','First requirement'));const c1=rpc('claim');
+      const first=checkpoint(c1,{disposition:'continue',summary:'Refining draft.'});
+      assert.equal(first.status,'settled');assert.equal(first.work_state,'actionable');
+      rpc('ingest',input('second','sqlthread','Second requirement'));
+      assert.equal(rpc('delivery').status,'superseded');
+      const c2=rpc('claim');assert.equal(c2.status,'claimed');assert.deepEqual(c2.inputs.map(x=>x.message),['Second requirement']);
+      const replay=checkpoint(c1,{disposition:'continue',summary:'Refining draft.'});
+      assert.equal(replay.status,'settled');assert.equal(replay.replay,true);
+      assert.equal(sql('SELECT execution_id FROM vnext_project_mutation_authority')[0].execution_id,c2.execution_id);
+      assert.equal(sql('SELECT claim_execution_id FROM vnext_work_units')[0].claim_execution_id,c2.execution_id);
+      assert.equal(sql('SELECT state FROM vnext_executions WHERE execution_id=$1',[c2.execution_id])[0].state,'running');
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),1);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
+    });
+    await t.test('lost checkpoint response resolves through the durable settlement receipt without repeating model work',()=>{
+      reset();let modelCalls=0;const f=fixture();f.add('lostcheckpoint');
+      f.setModel(()=>{modelCalls++;return {disposition:'done',summary:'Here is a useful draft.'};});
+      f.loseNextCheckpoint();assert.equal(f.tick().status,'blocked');assert.equal(f.sends,0);assert.equal(modelCalls,1);
+      const receipt=sql('SELECT execution_id,fence::int AS fence,turn,work_state FROM gas_email_settlements')[0];
+      assert.equal(receipt.work_state,'review');
+      const replay=rawRpc('checkpoint',{execution_id:receipt.execution_id,fence:receipt.fence,turn:receipt.turn});
+      assert.equal(replay.status,'settled');assert.equal(replay.replay,true);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),1);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
+      assert.equal(f.tick().status,'idle');assert.equal(f.sends,1);assert.equal(modelCalls,1);
+      assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,'sent');
+    });
+    await t.test('native concurrent exact replay returns the original settlement without duplication', {skip:!process.env.TEST_DATABASE_URL},async()=>{
+      const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
+      const auth=async client=>{await client.query('BEGIN');await client.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify({sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800})]);await client.query('SET LOCAL ROLE authenticated');};
+      try{
+        reset();rpc('ingest',input('concurrent'));const c=rpc('claim');
+        const payload={execution_id:c.execution_id,fence:c.fence,turn:{disposition:'done',summary:'Draft complete.'}};
+        const call=client=>client.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test','checkpoint',JSON.stringify(payload)]);
+        const a=await pool.connect(),b=await pool.connect();
+        try{
+          await auth(a);await auth(b);
+          const x=(await call(a)).rows[0].r;
+          let finished=false;const pending=call(b).then(r=>{finished=true;return r.rows[0].r;});
+          await new Promise(resolve=>setTimeout(resolve,100));assert.equal(finished,false,'second settlement must wait on the project admission lock');
+          await a.query('COMMIT');const y=await pending;await b.query('COMMIT');
+          assert.equal(x.status,'settled');assert.equal(x.replay,false);
+          assert.equal(y.status,'settled');assert.equal(y.replay,true);
+          assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_settlements')[0].n),1);
+          assert.equal(Number(sql('SELECT count(*) AS n FROM vnext_pilot_results')[0].n),1);
+          assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_outbox')[0].n),1);
+        }finally{await a.query('ROLLBACK');await b.query('ROLLBACK');a.release();b.release();}
+      }finally{await pool.end();}
     });
     await t.test('new human input during model supersedes stale reply and remains eligible',()=>{
       reset();const f=fixture();f.add('during');f.setModel(()=>{rpc('ingest',input('during2','thread1','A new requirement.'));return {disposition:'done',summary:'Old answer'};});
