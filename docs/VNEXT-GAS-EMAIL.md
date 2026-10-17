@@ -103,9 +103,17 @@ A successful `done` settlement is a completion claim, not accepted work. Explici
 trusted acceptance is a separate transition: an independently issued opaque
 decision identity binds the accepted attempt (execution, fence, captured input
 snapshot) and a canonical digest over the exact settlement receipt (the frozen
-normalized result). The read-only acceptance context exposes exactly what the
-accepting transition re-derives from durable state, so verification never relies
-on caller-asserted labels or execution identity alone. An exact replay of a
+normalized result). Acceptance is authorized by a separately provisioned
+acceptance authority registered per instance
+(`gas_email_acceptance_authorities`, owner-managed, never exposed through any
+operation); the text-execution registration never automatically gains
+terminal-acceptance authority, so a caller that can obtain review context and
+its digest still cannot mint acceptance. The read-only acceptance context
+exposes exactly what the accepting transition re-derives from durable state, so
+verification never relies on caller-asserted labels or execution identity
+alone. New acceptance is refused while the project has an unresolved
+reconciliation block or an active mutation authority, and the read-only context
+reports the same exclusions. An exact replay of a
 recorded decision returns it unchanged, divergent content under the same
 identity is rejected before mutation, and a decision against superseded input,
 a newer attempt, or a different result fails closed. Acceptance moves the Work
@@ -497,9 +505,14 @@ direct `continue` scheduling with a durable bounded proposal considered and
 consumed by the LLM-free coordinator only during authorized admission; it
 backfills existing authorized schedules at the upgrade boundary and likewise
 replaces only the deepest RPC in the chain. `008_acceptance_decisions` adds the
-durable acceptance decision record, the canonical settlement-receipt digest, and
-the read-only acceptance-context plus accepting operations; it backfills nothing
-and likewise replaces only the deepest RPC in the chain.
+durable acceptance decision record (including the authority that accepted), the
+separately provisioned per-instance acceptance-authority registration, the
+canonical settlement-receipt digest, and the read-only acceptance-context plus
+accepting operations; it backfills nothing, extends no execution grant into
+acceptance authority (an instance with no authority row cannot accept), and
+likewise replaces only the deepest RPC in the chain. Provision acceptance
+deliberately, owner-side, e.g.
+`INSERT INTO gas_email_acceptance_authorities VALUES('INSTANCE','REVIEWED-REF')`.
 
 ### One historical owner-evidence repair — only after the receipt fix is deployed
 
@@ -730,7 +743,8 @@ same-thread MIME replies, reconstruction, invalid/timeout models, artifacts,
 new input, finite continuations through durable proposals (binding, cooldown,
 consumption, supersession, rollback, waits staying quiet), explicit acceptance
 (binding, exact replay, divergent-content rejection, stale supersession,
-atomic rollback, terminal transition), lost
+atomic rollback, terminal transition, unauthorized-issuer rejection, and
+refusal during reconciliation blocks or active mutation authority), lost
 checkpoint/admission/send responses,
 settlement replay/divergence/conflict and its recorded snapshot, late-input
 eligibility across settlement replay, replay after successor admission, poison
@@ -738,7 +752,8 @@ intake/quarantine, failed-snapshot retries, canonical multibyte/escaping byte
 boundaries, RFC2047 folding, truncated/duplicate Sent searches, and
 no Sheets/runtime-property access. The upgrade suite exercises the 002-007 to
 008 boundary, accepting pre-existing settled review work only through the new
-decision, and the 002-006 to
+decision and only after the acceptance authority is provisioned, and the
+002-006 to
 007 boundary, including backfilling only authorized legacy continuations. CI also runs it through
 `scripts/run-postgres-suite.mjs` against isolated native PostgreSQL, including
 both genuine competing-transaction admission orderings, concurrent exact
