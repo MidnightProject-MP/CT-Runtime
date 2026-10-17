@@ -4,10 +4,24 @@ Governing dependency map. Derived from the approved design baseline, the Phase 0
 transition-authority/lineage map, and the review of #76 / the local Phase 1
 follow-on. This document defines *what must be true*, not what is done.
 
-**Current phase: Node operating boundary for Changes 1 and 2 (#76).** The separate
-F1 GAS watermark correction is merged forward (004 snapshot binding plus 005
-batch-boundary recovery commissioning) and integration-tested, not applied live;
-recoverable dispatch (Milestone 1C) remains gated. The review findings on the
+**Current phase: combined Node/GAS baseline qualified at `ec4bc40` (evidence:
+`docs/NODE-GAS-BASELINE-QUALIFICATION.md`); recoverable dispatch (Milestone 1C)
+is the bounded next task, with its smallest change proposed there.** Changes 1
+and 2 on the Node operating boundary (#76) are done; the separate F1 GAS
+watermark correction is merged forward (004 snapshot binding plus 005
+batch-boundary recovery commissioning) and integration-tested, not applied live.
+The aggregate combined main (#85) with the reviewed email stack base (#84 at
+`c0e0d77`) and passed the applicable Node and GAS proofs together (push run
+`39074201096`, exact-head green after one pre-code ECR image-pull flake; Linux
+two-process cold-continuation proof; native GAS suites including concurrent
+acceptance and authority rotation/revocation, executed not skipped), touched one
+shared file (`.github/workflows/ci.yml`, union resolution) and no migration file,
+and is evidence only — it grants no deployment permission and does not merge the
+stack. Remaining gates are classified there as code (GAS `no_effect` recovery;
+Node recoverable dispatch), isolated runtime qualification (accepting caller,
+continuous coordinator, real-crash dispatch, GAS cutover), and production
+release configuration (F2 protections). The F3 race-test flake is fixed on main
+(#86 at `164fbda`, deterministic shared-clock claim). The review findings on the
 Node recovery boundary are closed on the branch (`f522740`, with review
 corrections on the same branch): reconciliation of uncertain effects records its
 outcome and grants a durable coordinator-owned recovery opportunity; input and
@@ -166,7 +180,8 @@ implemented and integration-proven, not operationally qualified:
 acceptance-authority provisioning, the actual accepting caller, and its
 substantive review remain operating-path qualification obligations. Nothing
 else here is implemented, applied live, or qualified; nothing is merged to
-main; recoverable dispatch (1C) stays gated.
+main. Recoverable dispatch (Milestone 1C) has no implementation yet; it is the
+next bounded task, proposed in `docs/NODE-GAS-BASELINE-QUALIFICATION.md`.
 
 **Uncertain external effect (delivery recovery, not full parity).** GAS already
 inserts a durable reconciliation block before an admitted send and clears it
