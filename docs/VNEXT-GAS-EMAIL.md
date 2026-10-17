@@ -65,7 +65,7 @@ registered project while this GAS-only grant is active.
 
 `gas_email_rpc` exposes only fixed ingest, ID-only quarantine, claim/reconstruct,
 checkpoint, failure, delivery preparation/admission, record/readback settlement,
-and health operations. These
+acceptance inspection/acceptance, and health operations. These
 are server-side transactions. SECURITY DEFINER functions have a fixed search
 path. Principal sub, audience, Google issuer, expiry, active instance, mailbox,
 project, and a nonempty reviewed grant reference are required. The project and
@@ -99,6 +99,19 @@ creates no proposal; review is not continuation. The 007 backfill converts only
 actionable legacy schedules into equivalent proposals and clears that legacy
 schedule, so an upgrade neither strands an already-authorized continuation nor
 manufactures new work from historical completed or waiting turns.
+A successful `done` settlement is a completion claim, not accepted work. Explicit
+trusted acceptance is a separate transition: an independently issued opaque
+decision identity binds the accepted attempt (execution, fence, captured input
+snapshot) and a canonical digest over the exact settlement receipt (the frozen
+normalized result). The read-only acceptance context exposes exactly what the
+accepting transition re-derives from durable state, so verification never relies
+on caller-asserted labels or execution identity alone. An exact replay of a
+recorded decision returns it unchanged, divergent content under the same
+identity is rejected before mutation, and a decision against superseded input,
+a newer attempt, or a different result fails closed. Acceptance moves the Work
+Unit to terminal and touches nothing else: settlement receipts, results, outbox,
+and continuation records are untouched. There is no backfill: nothing historical
+becomes accepted work.
 New input during a turn remains eligible. Input committed before reply admission
 supersedes the old pending reply. Admission committed first creates a project
 reconciliation block; newer inputs may be ingested but no new execution can start
@@ -474,7 +487,8 @@ The upgrade is backward-compatible with the deployed legacy runner. Do not edit
 an already-applied extension; use another forward migration if needed.
 Later forward migrations follow the same ledger discipline: `003_model_diagnostics`,
 `004_failure_watermark_snapshot`, `005_failure_recovery_boundary`,
-`006_settlement_receipts`, and `007_continuation_proposals` are applied by the same
+`006_settlement_receipts`, `007_continuation_proposals`, and
+`008_acceptance_decisions` are applied by the same
 inspect/apply command.
 `006_settlement_receipts` adds the durable settlement receipt and exact-replay
 semantics by replacing only the deepest RPC in the chain; it does not edit any
@@ -482,7 +496,10 @@ earlier extension or the bootstrap schema. `007_continuation_proposals` replaces
 direct `continue` scheduling with a durable bounded proposal considered and
 consumed by the LLM-free coordinator only during authorized admission; it
 backfills existing authorized schedules at the upgrade boundary and likewise
-replaces only the deepest RPC in the chain.
+replaces only the deepest RPC in the chain. `008_acceptance_decisions` adds the
+durable acceptance decision record, the canonical settlement-receipt digest, and
+the read-only acceptance-context plus accepting operations; it backfills nothing
+and likewise replaces only the deepest RPC in the chain.
 
 ### One historical owner-evidence repair — only after the receipt fix is deployed
 
@@ -711,17 +728,22 @@ VMs, simulated Gmail/OpenRouter, and real SQL via the existing test-pool helper.
 It covers auth, grants, idempotency/conflicts, stale fences, bounded snapshots,
 same-thread MIME replies, reconstruction, invalid/timeout models, artifacts,
 new input, finite continuations through durable proposals (binding, cooldown,
-consumption, supersession, rollback, waits staying quiet), lost
+consumption, supersession, rollback, waits staying quiet), explicit acceptance
+(binding, exact replay, divergent-content rejection, stale supersession,
+atomic rollback, terminal transition), lost
 checkpoint/admission/send responses,
 settlement replay/divergence/conflict and its recorded snapshot, late-input
 eligibility across settlement replay, replay after successor admission, poison
 intake/quarantine, failed-snapshot retries, canonical multibyte/escaping byte
 boundaries, RFC2047 folding, truncated/duplicate Sent searches, and
-no Sheets/runtime-property access. The upgrade suite exercises the 002-006 to
+no Sheets/runtime-property access. The upgrade suite exercises the 002-007 to
+008 boundary, accepting pre-existing settled review work only through the new
+decision, and the 002-006 to
 007 boundary, including backfilling only authorized legacy continuations. CI also runs it through
 `scripts/run-postgres-suite.mjs` against isolated native PostgreSQL, including
 both genuine competing-transaction admission orderings, concurrent exact
-settlement replay, and concurrent proposal admission; native races are not
+settlement replay, concurrent proposal admission, and concurrent acceptance of
+one decision; native races are not
 substituted by PGlite serialization. Local non-PostgreSQL runs identify those race
 subtests as unavailable; the native CI stage is required.
 
