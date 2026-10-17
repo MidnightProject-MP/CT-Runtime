@@ -15,7 +15,7 @@ test('known 002 prefix upgrades without relabeling its checksum; unknown prefix 
   await pool.query('CREATE TABLE gas_email_upgrade_ledger(upgrade_id text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp()); REVOKE ALL ON gas_email_upgrade_ledger FROM PUBLIC,authenticated,anonymous');
   await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('002_delivery_provider_receipts',$1)",[hash]);
   const original=(await pool.query('SELECT * FROM gas_email_upgrade_ledger')).rows[0];
-  assert.deepEqual((await upgradeDelivery(pool)).pending,['003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals']);
+  assert.deepEqual((await upgradeDelivery(pool)).pending,['003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals','008_acceptance_decisions']);
   assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
   assert.deepEqual((await pool.query("SELECT * FROM gas_email_upgrade_ledger WHERE upgrade_id='002_delivery_provider_receipts'")).rows[0],original);
   await pool.query("INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES('004_unknown','unknown')");await assert.rejects(upgradeDelivery(pool),/ledger mismatch/);
@@ -45,11 +45,11 @@ test('an exact 002-004 prefix applies only the next migration and preserves hist
   }
   const original=(await pool.query('SELECT * FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows;
   const inspect=await upgradeDelivery(pool);
-  assert.equal(inspect.status,'upgrade-ready');assert.deepEqual(inspect.pending,['005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals']);
+  assert.equal(inspect.status,'upgrade-ready');assert.deepEqual(inspect.pending,['005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals','008_acceptance_decisions']);
   assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
   const after=(await pool.query('SELECT * FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows;
   assert.deepEqual(after.slice(0,3),original);
-  assert.equal(after.length,6);assert.equal(after[5].upgrade_id,'007_continuation_proposals');
+  assert.equal(after.length,7);assert.equal(after[5].upgrade_id,'007_continuation_proposals');assert.equal(after[6].upgrade_id,'008_acceptance_decisions');
   assert.equal((await upgradeDelivery(pool)).status,'already-applied');
   }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
 });
@@ -77,7 +77,7 @@ test('a 002-006 database backfills only authorized legacy continuations at the 0
   await pool.query("INSERT INTO gas_email_threads VALUES('legacy-c','gas-vnext-email','legacythread-c')");
   await pool.query('INSERT INTO vnext_pilot_progress(work_unit_id) VALUES($1)',['legacy-c']);
   const inspect=await upgradeDelivery(pool);
-  assert.equal(inspect.status,'upgrade-ready');assert.deepEqual(inspect.pending,['007_continuation_proposals']);
+  assert.equal(inspect.status,'upgrade-ready');assert.deepEqual(inspect.pending,['007_continuation_proposals','008_acceptance_decisions']);
   assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
   const rows=(await pool.query('SELECT work_unit_id,execution_id,fence::int AS fence,input_seq::int AS input_seq,kind,state,eligible_after FROM gas_email_continuations')).rows;
   assert.equal(rows.length,1);
@@ -86,7 +86,7 @@ test('a 002-006 database backfills only authorized legacy continuations at the 0
   assert.equal(new Date(rows[0].eligible_after).getTime(),Date.parse(legacyWake));
   assert.equal((await pool.query("SELECT next_wake_at FROM vnext_pilot_progress WHERE work_unit_id='legacy-a'")).rows[0].next_wake_at,null);
   assert.notEqual((await pool.query("SELECT next_wake_at FROM vnext_pilot_progress WHERE work_unit_id='legacy-b'")).rows[0].next_wake_at,null);
-  assert.deepEqual((await pool.query('SELECT upgrade_id FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows.map(row=>row.upgrade_id),['002_delivery_provider_receipts','003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals']);
+  assert.deepEqual((await pool.query('SELECT upgrade_id FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows.map(row=>row.upgrade_id),['002_delivery_provider_receipts','003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals','008_acceptance_decisions']);
   const claims={sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800};
   const rpc=async(operation,input={})=>{const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify(claims)]);await c.query('SET LOCAL ROLE authenticated');const r=(await c.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS result',['gas-vnext-email',operation,JSON.stringify(input)])).rows[0].result;await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
   await pool.query("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second'");
@@ -94,6 +94,42 @@ test('a 002-006 database backfills only authorized legacy continuations at the 0
   assert.equal(admitted.status,'claimed');assert.notEqual(admitted.execution_id,'legacy-exec-a');
   assert.equal((await pool.query('SELECT state FROM gas_email_continuations')).rows[0].state,'consumed');
  }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
+});
+
+test('a 002-007 database accepts pre-existing settled review work only through the 008 boundary',async()=>{
+ const pool=await testPool();try{
+  await bootstrap(pool,{apply:true});
+  await pool.query('CREATE TABLE gas_email_upgrade_ledger(upgrade_id text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp()); REVOKE ALL ON gas_email_upgrade_ledger FROM PUBLIC,authenticated,anonymous');
+  for(const id of ['002_delivery_provider_receipts','003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals']){
+   const sql=(await readFile(new URL(`../deploy/gas-email/${id}.sql`,import.meta.url),'utf8')).replace(/\r\n/g,'\n');
+   await pool.query(sql);
+   await pool.query('INSERT INTO gas_email_upgrade_ledger(upgrade_id,sha256) VALUES($1,$2)',[id,createHash('sha256').update(sql).digest('hex')]);
+  }
+  await pool.query("INSERT INTO gas_email_instances VALUES('gas-vnext-email','gas-owner','gas-client','celestan-email','midnight.project.mp@gmail.com','midnightprojectantigravity@gmail.com',true,'reviewed:text-only:v1')");
+  await pool.query("INSERT INTO vnext_work_units(work_unit_id,objective_ref,state,project_id,fence,last_execution_id) VALUES('accepted-work','gmail:accepted','review','celestan-email',1,'accepted-exec')");
+  await pool.query("INSERT INTO gas_email_threads VALUES('accepted-work','gas-vnext-email','acceptedthread')");
+  await pool.query('INSERT INTO vnext_pilot_progress(work_unit_id,consumed_input_seq) VALUES($1,1)',['accepted-work']);
+  await pool.query("INSERT INTO vnext_pilot_inputs(receipt_id,work_unit_id,message) VALUES('accepted-input','accepted-work','Accepted requirement')");
+  await pool.query("INSERT INTO vnext_executions(execution_id,work_unit_id,project_id,owner,fence,state,started_at,finished_at,authorization_decision_ref) VALUES('accepted-exec','accepted-work','celestan-email','gas-vnext-email',1,'succeeded',clock_timestamp(),clock_timestamp(),'reviewed:text-only:v1')");
+  await pool.query("INSERT INTO gas_email_settlements(instance_id,execution_id,project_id,work_unit_id,fence,input_seq,turn,work_state) VALUES('gas-vnext-email','accepted-exec','celestan-email','accepted-work',1,1,'{\"disposition\":\"done\",\"summary\":\"Legacy draft.\"}'::jsonb,'review')");
+  const claims={sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800};
+  const rpc=async(operation,input={})=>{const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify(claims)]);await c.query('SET LOCAL ROLE authenticated');const r=(await c.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS result',['gas-vnext-email',operation,JSON.stringify(input)])).rows[0].result;await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
+  const inspect=await upgradeDelivery(pool);
+  assert.equal(inspect.status,'upgrade-ready');assert.deepEqual(inspect.pending,['008_acceptance_decisions']);
+  await assert.rejects(rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:'0'.repeat(64)}),/unknown email operation/);
+  assert.equal((await upgradeDelivery(pool,{apply:true})).status,'applied');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM gas_email_acceptances')).rows[0].n,0);
+  const context=await rpc('acceptance-context',{work_unit_id:'accepted-work'});
+  assert.equal(context.status,'review-ready');assert.equal(context.execution_id,'accepted-exec');assert.equal(context.fence,1);assert.equal(context.input_seq,1);
+  const expected=(await pool.query("SELECT encode(sha256(convert_to(jsonb_build_object('instance','gas-vnext-email','execution_id',s.execution_id,'fence',s.fence,'input_seq',s.input_seq,'turn',s.turn)::text,'UTF8')),'hex') AS digest FROM gas_email_settlements s")).rows[0].digest;
+  assert.equal(context.snapshot_digest,expected);
+  const accepted=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest});
+  assert.equal(accepted.status,'accepted');assert.equal(accepted.replay,false);
+  assert.equal((await pool.query("SELECT state FROM vnext_work_units WHERE work_unit_id='accepted-work'")).rows[0].state,'terminal');
+  const replay=await rpc('accept',{decision_ref:'review:legacy',work_unit_id:'accepted-work',execution_id:'accepted-exec',fence:1,snapshot_digest:context.snapshot_digest});
+  assert.equal(replay.status,'accepted');assert.equal(replay.replay,true);assert.equal(replay.accepted_at,accepted.accepted_at);
+  assert.deepEqual((await pool.query('SELECT upgrade_id FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows.map(row=>row.upgrade_id),['002_delivery_provider_receipts','003_model_diagnostics','004_failure_watermark_snapshot','005_failure_recovery_boundary','006_settlement_receipts','007_continuation_proposals','008_acceptance_decisions']);
+  }finally{if(process.env.TEST_DATABASE_URL)await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');await pool.end();}
 });
 
 test('historically applied 003 checksum is immutable and read-only inspection accepts it, rejects divergence',async()=>{
