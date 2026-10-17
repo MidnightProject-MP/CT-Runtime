@@ -5,8 +5,11 @@ transition-authority/lineage map, and the review of #76 / the local Phase 1
 follow-on. This document defines *what must be true*, not what is done.
 
 **Current phase: combined Node/GAS baseline qualified at `ec4bc40` (evidence:
-`docs/NODE-GAS-BASELINE-QUALIFICATION.md`); recoverable dispatch (Milestone 1C)
-is the bounded next task, with its smallest change proposed there.** Changes 1
+`docs/NODE-GAS-BASELINE-QUALIFICATION.md`), merged at `4c5116f`; recoverable
+dispatch (Milestone 1C) is implemented and merged on main (#88 at `9e8413a`,
+native CI green including the real-PostgreSQL and Linux process-group
+crash-recovery subtest); the bounded next task is the recurring, LLM-free
+coordinator (Milestone 2A), pending commissioning.** Changes 1
 and 2 on the Node operating boundary (#76) are done; the separate F1 GAS
 watermark correction is merged forward (004 snapshot binding plus 005
 batch-boundary recovery commissioning) and integration-tested, not applied live.
@@ -18,7 +21,8 @@ acceptance and authority rotation/revocation, executed not skipped), touched one
 shared file (`.github/workflows/ci.yml`, union resolution) and no migration file,
 and is evidence only — it grants no deployment permission and does not merge the
 stack. Remaining gates are classified there as code (GAS `no_effect` recovery;
-Node recoverable dispatch), isolated runtime qualification (accepting caller,
+Node recoverable dispatch — since closed on main at `9e8413a`), isolated runtime
+qualification (accepting caller,
 continuous coordinator, real-crash dispatch, GAS cutover), and production
 release configuration (F2 protections). The F3 race-test flake is fixed on main
 (#86 at `164fbda`, deterministic shared-clock claim). The review findings on the
@@ -58,7 +62,7 @@ cutover is implied.
 | GAS canonical settlement — durable settlement receipts | `006_settlement_receipts.sql` in #79 @ `9894d0d`; forward-only within the checksum-ledger chain 002–006; merged to the email stack base at `47c8efc` | GAS suites through the public RPC: first settlement, exact replay with the recorded snapshot, divergent-content conflict, lost COMMIT response, replay after successor admission, late-input eligibility, atomic rollback; the native CI stage executes the concurrent exact replay proof (not skipped); focused 47 pass / 2 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance binding is implemented (see the acceptance-separation row) but remains operationally unqualified; no_effect recovery remains open |
 | GAS canonical settlement — durable continuation proposals | `007_continuation_proposals.sql` in #81 @ `8f838c4`; forward-only within the checksum-ledger chain 002–007; merged to the email stack base at `95e2bd1` | GAS suites through the public RPC: proposal bound to the settling attempt (fence and captured input snapshot), cooldown-gated consideration, consumption exactly with authorized successor admission, exactly one successor under competing claims, waiting quiet, late-input supersession, delivery-first rejection staying pending, rollback and inert exact replay, and a 002–006→007 backfill admitting only authorized legacy continuations; the native CI stage executes the concurrent proposal admission proof (not skipped); focused 61 tests / 58 pass / 3 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance binding is implemented (see the acceptance-separation row) but remains operationally unqualified; no_effect recovery remains open |
 | GAS canonical settlement — acceptance separation | `008_acceptance_decisions.sql` in #84 @ accepted head `e38e702`; forward-only within the checksum-ledger chain 002–008; merged to the email stack base at `c0e0d77` | GAS suites through the public RPC: acceptance binds the settled revision to the canonical digest over the exact settlement receipt, exact replay returns the recorded decision, divergent content fails before mutation, stale decisions fail closed against superseded input / newer attempts / unknown work, the terminal transition rolls back atomically, an unprovisioned instance cannot accept, new acceptance is refused during unresolved reconciliation blocks or active mutation with the read-only context aligned, and an accepted decision replays while exclusions hold; the native CI stage executes concurrent acceptance and authority rotation/revocation racing acceptance in both orderings (verified not skipped at the accepted head); reviewer-verified focused integration/upgrade/F1 suites 61 pass / 5 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance-authority provisioning, the actual accepting caller, and its substantive review remain operating-path qualification obligations |
-| F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C not started here | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
+| F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C implemented on main (#88 at `9e8413a`), the stack inherits it on the next forward merge | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
 
 The PR's exact-head CI checks are the native evidence record; local PGlite is not
 native PostgreSQL and local Windows runs do not prove Linux process groups.
@@ -180,8 +184,9 @@ implemented and integration-proven, not operationally qualified:
 acceptance-authority provisioning, the actual accepting caller, and its
 substantive review remain operating-path qualification obligations. Nothing
 else here is implemented, applied live, or qualified; nothing is merged to
-main. Recoverable dispatch (Milestone 1C) has no implementation yet; it is the
-next bounded task, proposed in `docs/NODE-GAS-BASELINE-QUALIFICATION.md`.
+main. Recoverable dispatch (Milestone 1C) is implemented and merged on main
+(#88 at `9e8413a`); the next bounded task is the recurring, LLM-free coordinator
+(Milestone 2A), pending commissioning.
 
 **Uncertain external effect (delivery recovery, not full parity).** GAS already
 inserts a durable reconciliation block before an admitted send and clears it
