@@ -108,7 +108,15 @@ acceptance authority registered per instance
 (`gas_email_acceptance_authorities`, owner-managed, never exposed through any
 operation); the text-execution registration never automatically gains
 terminal-acceptance authority, so a caller that can obtain review context and
-its digest still cannot mint acceptance. The read-only acceptance context
+its digest still cannot mint acceptance. `authority_ref` is a bearer
+credential: provision an unpredictable, securely generated value, keep it
+separate from ordinary runtime/model context, and handle it as a credential
+(never log it; rotate on suspicion). Each registration also carries a
+non-secret `authority_id`, which is what acceptance history records for
+routine audit attribution. The authority row is locked for the accepting
+transaction, so owner-managed rotation or revocation serializes with
+acceptance: acceptance commits before revocation, or revocation wins and the
+acceptance rejects. The read-only acceptance context
 exposes exactly what the accepting transition re-derives from durable state, so
 verification never relies on caller-asserted labels or execution identity
 alone. New acceptance is refused while the project has an unresolved
@@ -505,14 +513,18 @@ direct `continue` scheduling with a durable bounded proposal considered and
 consumed by the LLM-free coordinator only during authorized admission; it
 backfills existing authorized schedules at the upgrade boundary and likewise
 replaces only the deepest RPC in the chain. `008_acceptance_decisions` adds the
-durable acceptance decision record (including the authority that accepted), the
+durable acceptance decision record (recording the non-secret authority
+identifier), the
 separately provisioned per-instance acceptance-authority registration, the
 canonical settlement-receipt digest, and the read-only acceptance-context plus
 accepting operations; it backfills nothing, extends no execution grant into
 acceptance authority (an instance with no authority row cannot accept), and
 likewise replaces only the deepest RPC in the chain. Provision acceptance
-deliberately, owner-side, e.g.
-`INSERT INTO gas_email_acceptance_authorities VALUES('INSTANCE','REVIEWED-REF')`.
+deliberately, owner-side, with a securely generated bearer credential and a
+non-secret audit identifier, e.g.
+`INSERT INTO gas_email_acceptance_authorities(instance_id,authority_ref,authority_id) VALUES('INSTANCE','<unpredictable-generated-credential>','owner-acceptance:reviewed')`
+— the credential is what the acceptance caller must possess; the identifier is
+only for audit. Do not use descriptive labels as the credential.
 
 ### One historical owner-evidence repair — only after the receipt fix is deployed
 
@@ -757,8 +769,9 @@ decision and only after the acceptance authority is provisioned, and the
 007 boundary, including backfilling only authorized legacy continuations. CI also runs it through
 `scripts/run-postgres-suite.mjs` against isolated native PostgreSQL, including
 both genuine competing-transaction admission orderings, concurrent exact
-settlement replay, concurrent proposal admission, and concurrent acceptance of
-one decision; native races are not
+settlement replay, concurrent proposal admission, concurrent acceptance of
+one decision, and authority rotation/revocation racing acceptance in both
+orderings; native races are not
 substituted by PGlite serialization. Local non-PostgreSQL runs identify those race
 subtests as unavailable; the native CI stage is required.
 
