@@ -42,7 +42,10 @@ function runCompatibilityLayer() {
       };
     }
   };
-  vm.runInNewContext(source, { Utilities, CT_GAS_DEPLOY }, { filename: 'gas_deploy_qualify.js' });
+  const context = { Utilities };
+  vm.runInNewContext(source, context, { filename: 'gas_deploy_qualify.js' });
+  const base = CT_GAS_DEPLOY.qualify;
+  CT_GAS_DEPLOY.qualify = request => context.CT_GAS_DEPLOY_QUALIFY.decorate(request, base(request));
   return { CT_GAS_DEPLOY, getCapturedRequest: () => capturedRequest };
 }
 

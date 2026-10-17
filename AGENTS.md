@@ -6,7 +6,9 @@ Keep runtime state outside the repository. Use explicit `--store`, `--project`, 
 
 ## GAS deployment authority
 
-Canonical GAS writes happen only through GitHub Actions (`gas-clasp-deploy.yml` on push to `main` or dispatch; `gas-feedback-repair.yml` dispatch-only, never pushes). No supported workflow or documented operator path performs a local `clasp push`. Before repeating an external effect, inspect reality first via `diagnoseFeedbackInbox` (Script ID plus configured spreadsheet property) and only then configure or set up on observed mismatch.
+Canonical GAS release writes happen only through manually dispatched, hash-pinned GitHub Actions (`gas-self-deploy.yml`). Main pushes do not deploy. Legacy clasp push/deploy workflows are retired and fail closed. No supported workflow or documented operator path performs a local `clasp push`. Before repeating an external effect, inspect reality first via `diagnoseFeedbackInbox` (Script ID plus configured spreadsheet property) and only then configure or set up on observed mismatch.
+
+Before every GitHub write verify `gh api user` is `MidnightProject-MP`. Do not change git identity/configuration, force-push, or amend user commits.
 
 ## Reviewer freshness
 
