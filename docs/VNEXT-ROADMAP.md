@@ -42,12 +42,12 @@ The PR's exact-head CI checks are the native evidence record; local PGlite is no
 native PostgreSQL and local Windows runs do not prove Linux process groups.
 CI explicitly runs `scripts/run-postgres-suite.mjs test/phase1-operating-boundary.test.mjs`
 in an isolated database and `scripts/prove-vnext-pilot.mjs` twice in separate Linux
-processes against the same disposable data directory. The email stack runs the
-same pipeline on every push and PR; its native stage executes the gas-email
-suites, including the concurrent settlement-replay subtest (skip-identified
-locally, executed natively), and its green run at the stack merge commit is the
-GAS increment's native evidence record. Green CI does not imply
-independent review, acceptance of this PR, or production qualification.
+processes against the same disposable data directory. The email stack runs its
+own CI workflow on pushes and PRs. Its native PostgreSQL stage executes the GAS
+email suites, including concurrent settlement replay. The green run at the
+stack merge commit is the GAS increment's native evidence record. Green CI does
+not imply independent review, acceptance of this PR, or production
+qualification.
 
 ### Node representation and compatibility
 
