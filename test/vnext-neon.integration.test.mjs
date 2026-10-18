@@ -158,6 +158,12 @@ test('Neon rejects stale settlement and preserves a newer claim', { skip: !conne
       throw error;
     }
 
+    // Elapsed time is not stop confirmation: the successor may only be
+    // admitted after recovery settles the expired attempt and releases the
+    // authority it held.
+    const recovered = await store.recoverAttempt({ projectId: original.project_id, workUnitId, executionId: execution.execution_id, fence: execution.fence, resolution: 'not-launched' });
+    assert.equal(recovered.state, 'waiting');
+
     const successorSeed = { ...begun.workUnit, state: 'actionable', claim: null, claim_expires_at: null };
     const successor = claimWorkUnit(successorSeed, { executionId: `exec-new-${suffix}`, owner: 'owner-b' });
     const successorExecution = startExecution(createExecution(successor, { executionId: successor.claim.execution_id, owner: 'owner-b' }));
