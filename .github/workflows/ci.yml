@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: '22.14.0'
   POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
@@ -15,6 +19,7 @@ env:
 jobs:
   core:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16.9-bookworm

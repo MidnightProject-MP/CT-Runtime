@@ -286,7 +286,7 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
       assert.equal((await store().listInDoubtAttempts(project)).length, 0);
     });
 
-    await t.test('a provably running attempt is stopped after claim expiry and settled conservatively', { skip: process.platform !== 'linux' }, async () => {
+    await t.test('a provably running attempt is stopped after claim expiry and settled conservatively', { skip: process.platform !== 'linux', timeout: 60000 }, async () => {
       const project = `dispatch-running-${randomUUID()}`;
       const { work_unit_id: id } = await submit(project);
       const begun = await admit(store(), id);
@@ -308,7 +308,7 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
       assert.equal(execRow.failure.reconciliation_required, true);
     });
 
-    await t.test('a launcher that exited leaves no ambiguity while its group still runs', { skip: process.platform !== 'linux' }, async () => {
+    await t.test('a launcher that exited leaves no ambiguity while its group still runs', { skip: process.platform !== 'linux', timeout: 60000 }, async () => {
       const project = `dispatch-descendant-${randomUUID()}`;
       const { work_unit_id: id } = await submit(project);
       const begun = await admit(store(), id);
@@ -319,15 +319,19 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
       const releasePath = path.join(attempt, 'release');
       // The launcher spawns a long-lived descendant in its own process group,
       // leaves a result, then exits only when released: the launcher pid dies
-      // while the recorded group stays alive.
+      // while the recorded group stays alive. The descendant handle must be
+      // unref'd and the launcher must exit explicitly, or the launcher itself
+      // would be kept alive by its child forever.
       const script = `(async () => {
         const { spawn } = require('node:child_process');
         const { writeFileSync, existsSync } = require('node:fs');
         const { setTimeout: sleep } = require('node:timers/promises');
         const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+        child.unref();
         writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));
         writeFileSync(${JSON.stringify(path.join(attempt, 'result.json'))}, ${JSON.stringify(JSON.stringify(next(id)))});
         for (let i = 0; i < 200 && !existsSync(${JSON.stringify(releasePath)}); i += 1) await sleep(50);
+        process.exit(0);
       })();`;
       const leader = spawn(process.execPath, ['-e', script], { detached: true, stdio: 'ignore' });
       try {
@@ -337,7 +341,8 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
         assert.ok(identity, 'the launcher identity is readable while it lives');
         await store().recordLaunch(begun.workUnit, begun.execution, identity);
         await writeFile(releasePath, 'go');
-        if (leader.exitCode === null) await new Promise(resolve => leader.once('exit', resolve));
+        const exited = leader.exitCode !== null || await Promise.race([new Promise(resolve => leader.once('exit', () => resolve(true))), pause(10000).then(() => false)]);
+        assert.ok(exited, 'the launcher exits once released instead of lingering for its descendant');
         assert.equal(await probeRunIdentity(identity), 'gone', 'the launcher itself is gone');
         assert.equal(await probeProcessGroup(identity.pgid), 'live', 'a descendant still runs in the recorded group');
         await expireClaim(id);
