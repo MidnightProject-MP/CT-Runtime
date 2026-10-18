@@ -126,3 +126,9 @@ failure path are preserved.
   crash-recovery subtests. The classification above remains as of `ec4bc40`; one deliberate
   refinement is recorded in the implementation — a recorded identity that is provably gone but left
   no result settles as exited-without-result into reconciliation, not retry.
+- Postscript 2: the review's recovery invariants are hardened on main (#90 at `007792d`): missing
+  or unreadable attempt storage classifies as unknown and never retries blind; the recorded process
+  group — not only the launcher pid — must be provably gone before settlement; unreadable or
+  malformed retained results settle into durable reconciliation with a bounded reason; and a
+  recorded launch can never be resolved as never-launched. Milestone 1D (lifetime and resource
+  authority) remains unimplemented before 2A commissioning.
