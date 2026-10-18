@@ -1,9 +1,9 @@
 # Milestone 1D — Lifetime and Resource Authority: scope proposal
 
-Status: **proposed, pending review.** This document scopes the work; it
-implements nothing and grants no permission. Definitions and evidence
-obligations follow the roadmap (`docs/VNEXT-ROADMAP.md`, Milestone 1, item D)
-and the completion plan.
+Status: **reviewed and approved; review decisions recorded (§5).** This document
+scopes the work; it implements nothing and grants no permission. Definitions
+and evidence obligations follow the roadmap (`docs/VNEXT-ROADMAP.md`,
+Milestone 1, item D) and the completion plan.
 
 ## Exit condition (from the roadmap)
 
@@ -23,26 +23,31 @@ authority.*
 These are real and stay; 1D completes them rather than replacing them.
 
 - **Coordinator-owned claim expiry.** `claim_expires_at` moves in one transaction
-  across Work Unit, Execution and project mutation authority (deferred trigger,
-  migration `006`); recovery consumes only expired claims.
+  across Work Unit, Execution and project mutation authority (deferred trigger
+  block `006:83-106`); recovery consumes only expired claims.
 - **Single-winner authority.** Authority acquisition is transactional under a
-  project advisory lock; `ON CONFLICT DO NOTHING` plus a row-count check makes a
-  second concurrent admission fail closed (`E_PROJECT_AUTH_HELD`).
+  project advisory lock (`neon-store.mjs:88`); the gate refuses with
+  `E_RECONCILIATION_REQUIRED`/`E_PROJECT_AUTH_HELD` at `:138`/`:143`, and the
+  insert's row-count check is `:157-158`, so a second concurrent admission
+  fails closed.
 - **Kill-then-poll (stop confirmation for the Node runner).** Recovery kills the
   recorded process group, then polls the identity probe and the group probe
-  through a bounded window before settling; `probeProcessGroup` treats zombies
-  as gone and reports `unavailable` (never `gone`) when unverifiable.
+  through a bounded window (`dispatch-recovery.mjs:115-122`) before settling;
+  `probeProcessGroup` treats zombies as gone and reports `unavailable` (never
+  `gone`) when unverifiable.
 - **Reconciliation before takeover.** Unresolved project reconciliation blocks
   refuse new admission (`E_RECONCILIATION_REQUIRED`) and acceptance; uncertain
   outcomes (unconfirmed launch, exited-without-result, unreadable or malformed
   artifacts) settle into durable blocks with bounded reasons.
 - **Deadline outside the worker (Node).** The runner timer kills the process
-  group on `timeoutMs`; claim TTL is `timeoutMs + margin`; a timeout settles as
-  conservative failure, never a silent retry.
+  group on `timeoutMs` (`command-executor.mjs:29-31`, cleanup at `:45-46`);
+  claim TTL is `timeoutMs + margin`; a timeout settles as conservative failure,
+  never a silent retry.
 - **Revision checks at admission and settlement.** `work_revision` and the
   input snapshot are captured in the admission context and re-checked at
-  `beginExecution`; settlement of a superseded attempt fails as
-  `E_STALE_REVISION` and resolves through `persistSuperseded`.
+  `beginExecution` (`neon-store.mjs:113`); settlement of a superseded attempt
+  fails as `E_STALE_REVISION` (`outer-loop.mjs:105`) and resolves through
+  `persistSuperseded`.
 - **Acceptance/terminal authority checks.** Acceptance is a distinct authorized
   decision, refused during reconciliation or active mutation, serialized with
   authority rotation/revocation (GAS).
@@ -77,12 +82,17 @@ with admission.
 Smallest sufficient change:
 
 - Admission reserves, **in the same transaction as authority**: one concurrency
-  slot (from a configured bounded pool) and any applicable counters (the
-  effective, runtime-enforced subset of cost/tool budget attributes; no
-  billing integration).
-- Refusal is fail closed with a distinct error (`E_CONCURRENCY_LIMIT` /
-  `E_BUDGET_EXHAUSTED`); the refused work keeps a coordinator-owned retry
-  opportunity, never an immediate hot retry.
+  slot from a configured bounded pool (the first budget dimension, decided).
+  Reservation rows are stored so an aggregate global cap composes later.
+- Attempt counts and wall-clock already exist (claim/attempt limits, runner
+  timer, TTL): track them, don't duplicate them. Effect counts qualify only
+  where enforceable at the boundary (GAS sends, with D3). Node model-call/turn
+  counters are not runtime-enforceable today and are deferred — no aspirational
+  counters.
+- Refusal is fail closed with a distinct error (`E_CONCURRENCY_LIMIT`, and
+  `E_BUDGET_EXHAUSTED` only where an enforceable budget dimension exists); the
+  refused work keeps a coordinator-owned retry opportunity, never an immediate
+  hot retry.
 - Release is exactly once across every exit path: settlement, failure,
   supersession, cancellation, expired-claim recovery (only after the existing
   stop-confirmation window), and reconciliation resolution.
@@ -123,8 +133,9 @@ Smallest sufficient change:
   reconciliation. `unavailable` verification never passes; it is `unknown` and
   blocks.
 - GAS sender-side revocation semantics are the stop-confirmation half of the
-  already-scoped uncertain-send `no_effect` increment; the recommendation is
-  that the two ride together rather than duplicating the mechanism.
+  already-scoped uncertain-send `no_effect` increment; the two ride together
+  (decided) rather than duplicating the mechanism. 1D states the backend-neutral
+  contract; it does not inherit the no_effect operational gate.
 
 ## 3. Explicit non-goals
 
@@ -158,17 +169,34 @@ injection, exact-head CI):
   live with launcher gone → still running; revocation evidence required for
   GAS re-admission.
 
-## 5. Open questions for review
+## 5. Decisions (recorded per review)
 
-1. Cancellation authority: a distinct authorized decision surface (proposed,
-   fail-closed, idempotent), or reuse of the existing execution authority with
-   a different scope?
-2. Cancelled work disposition: explicit `cancelled` terminal-ish disposition
-   with reactivation only via a new authorized revision — or reuse of `review`
-   with a cancellation failure record?
-3. Budget dimensions: first implementation = concurrency slots, attempt counts
-   (already bounded), wall-clock; model-call/turn and effect-count counters
-   optionally in the same reservation table?
-4. Pool scope: global-only first, or global + per-project bounds?
-5. GAS sender revocation: confirm it rides with the uncertain-send `no_effect`
-   increment (recommended) rather than a separate mechanism.
+1. **Cancellation authority — distinct authorized decision surface.** Same
+   pattern as acceptance: opaque decision ref, authorized at the coordinator
+   boundary, idempotent exact replay, divergent-content conflict. Reusing
+   execution authority would conflate "run this" with "never finish this" and
+   blur audit/verification paths; the check points need a durable verifiable
+   intent anyway.
+2. **Cancelled disposition — explicit `cancelled` state, terminal-ish.**
+   Reactivation only via a new authorized revision. Reusing `review` plus a
+   failure record would make cancelled work indistinguishable from work
+   awaiting acceptance and leak into acceptance eligibility. Attempt history
+   and effect uncertainty are preserved; reconciliation still gates project
+   reuse.
+3. **Budget dimensions — reserve only what admission can enforce and release
+   can observe.** First implementation: concurrency slots. Attempt counts and
+   wall-clock already exist — track, don't duplicate. Effect counts qualify
+   only where enforceable at the boundary (GAS sends, with the
+   `no_effect`/D3 work). Node model-call/turn counters are deferred; no
+   aspirational counters.
+4. **Pool scope — per-project bound first.** Authority is per-project; the
+   per-project bound is the enforceable unit today. Store the reservation so an
+   aggregate global cap composes later; cross-project scheduling belongs to 2D.
+5. **GAS sender revocation — rides with the uncertain-send `no_effect`
+   increment.** 1D states the backend-neutral stop-confirmation contract;
+   duplicating the GAS mechanism separately would fork the evidence contract.
+
+**Sequencing (suggested and adopted):** D4 (contract, smallest — clarifies
+release/stop semantics) → D2 (reservation primitive and exactly-once release
+paths) → D1 (cancellation intent wired to those paths) → D3 (Node guard
+definition folds in; GAS send checks ship with `no_effect`).
