@@ -93,19 +93,20 @@ test('memory acquisition serializes overlapping transitions and admits only one 
     },
     workUnits: [work],
   });
-  const claimA = claimWorkUnit(work, { executionId: 'exec-concurrent-a', owner: 'owner-a' });
+  const acquisitionNow = new Date();
+  const claimA = claimWorkUnit(work, { executionId: 'exec-concurrent-a', owner: 'owner-a', now: acquisitionNow });
   const executionA = startExecution(createExecution(claimA, { executionId: claimA.claim.execution_id, owner: claimA.claim.owner, authorizationDecisionRef: 'test-auth:exec-concurrent-a' }));
-  const claimB = claimWorkUnit(work, { executionId: 'exec-concurrent-b', owner: 'owner-b' });
+  const claimB = claimWorkUnit(work, { executionId: 'exec-concurrent-b', owner: 'owner-b', now: acquisitionNow });
   const executionB = startExecution(createExecution(claimB, { executionId: claimB.claim.execution_id, owner: claimB.claim.owner, authorizationDecisionRef: 'test-auth:exec-concurrent-b' }));
   const first = store.beginExecution(claimA, executionA, { ref: executionA.authorization_decision_ref });
   const second = store.beginExecution(claimB, executionB, { ref: executionB.authorization_decision_ref });
   await new Promise((resolve) => setImmediate(resolve));
   releaseVerifier();
   await first;
-  // Exactly one authority survives. Any of the fencing rejections is correct:
-  // which one surfaces depends on whether the two claim timestamps land in the
-  // same millisecond, so the test asserts the boundary, not a specific message.
-  await assert.rejects(second, /E_PROJECT_AUTH_HELD|Work Unit changed before execution could be claimed|claim expiration does not match Work Unit claim/);
+  // Both claims share one acquisition instant, so the loser's refusal is
+  // deterministic: the first transition already holds project authority, and
+  // the losing transition must leave no authority, execution, or work state.
+  await assert.rejects(second, /E_PROJECT_AUTH_HELD/);
   const snapshot = store.snapshot();
   assert.equal(snapshot.authorities.length, 1);
   assert.equal(snapshot.authorities[0].execution_id, 'exec-concurrent-a');
