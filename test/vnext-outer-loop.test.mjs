@@ -197,19 +197,31 @@ test('stale execution cannot mutate after the fence advances', () => {
   assert.throws(() => applyTurn(second, firstExecution, { disposition: 'continue', summary: 'stale', continuation: { mode: 'immediate', next_action: 'nope' } }), /stale execution/);
 });
 
-test('an expired execution can be taken over once, and its late settlement is fenced out', async () => {
+test('an expired execution is superseded only after recovery settles the attempt, and its late settlement is fenced out', async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
   const work = { ...createWorkUnit({ workUnitId: 'wu-expired-1', objectiveRef: 'objective-expired', projectId: 'project-expired-1' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-dead', owner: 'dead-owner', fence: 1, claim_expires_at: expired } };
   const store = createMemoryStore({ workUnits: [work], executions: [{ execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, authorization_decision_ref: 'test-auth:exec-dead', owner: 'dead-owner', fence: 1, state: 'running', attempt: 1, claim_expires_at: expired }] });
+  await assert.rejects(() => runOuterLoop({
+    wake: { type: 'recovery.wake', event_id: 'expired-wake-refused', work_unit_id: work.work_unit_id },
+    store,
+    executor: async () => { throw new Error('must not execute'); },
+  }), /E_RECONCILIATION_REQUIRED/);
+  assert.equal(store.snapshot().executions.length, 1);
+  assert.equal(store.snapshot().executions[0].state, 'running');
+
+  await store.recoverAttempt({ projectId: 'project-expired-1', workUnitId: work.work_unit_id, executionId: 'exec-dead', fence: 1, resolution: 'not-launched' });
+  await new Promise((resolve) => setTimeout(resolve, 5));
   const result = await runOuterLoop({
     wake: { type: 'recovery.wake', event_id: 'expired-wake', work_unit_id: work.work_unit_id },
     store,
+    isJustified: async () => true,
     executor: async () => ({ objective_id: 'objective-expired', disposition: 'continue', summary: 'successor continued', continuation: { mode: 'immediate', next_action: 'inspect again' } }),
   });
   assert.equal(result.disposition, 'continue');
   const snapshot = store.snapshot();
   assert.equal(snapshot.work[0].fence, 2);
-  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-dead').state, 'expired');
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-dead').state, 'failed');
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-dead').failure.reason, 'not-launched');
   assert.equal(snapshot.executions.length, 2);
   await assert.rejects(() => store.persistTurn({ workUnit: work, execution: { execution_id: 'exec-dead', work_unit_id: work.work_unit_id, project_id: work.project_id, owner: 'dead-owner', fence: 1, state: 'succeeded' }, turn: { disposition: 'continue', continuation: { mode: 'immediate' } } }), /fencing conflict/);
 });
