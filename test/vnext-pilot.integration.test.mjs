@@ -77,3 +77,22 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
     });
   } finally { await pool.end();await rm(dir,{recursive:true,force:true}); }
 });
+
+test('pilot due-time discovery keeps database time unless a coordinator clock is supplied', async () => {
+  const pool = await testPool();
+  const project = `pilot-clock-${randomUUID()}`;
+  try {
+    await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
+    await migrateVNext({ pool, directory: path.join(import.meta.dirname, '../vnext-migrations') });
+    const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, ...options });
+    const { work_unit_id: id } = await store().submit({ projectId: project, threadId: 'clock', receiptId: `receipt-${randomUUID()}`, message: 'Clock semantics.' });
+    assert.equal(await store().nextEligible(project), id, 'a fresh submit is due on the database clock');
+    await pool.query("UPDATE vnext_pilot_progress SET consumed_input_seq=(SELECT COALESCE(max(input_seq),0) FROM vnext_pilot_inputs WHERE work_unit_id=$1) WHERE work_unit_id=$1", [id]);
+    await pool.query("UPDATE vnext_pilot_progress SET next_wake_at=clock_timestamp()+interval '10 minutes' WHERE work_unit_id=$1", [id]);
+    assert.equal(await store().nextEligible(project), null, 'default discovery uses the database clock');
+    assert.equal(await store({ now: () => Date.now() + 20 * 60 * 1000 }).nextEligible(project), id, 'an explicit clock can observe a database-future due time');
+    await pool.query("UPDATE vnext_pilot_progress SET next_wake_at=clock_timestamp()-interval '10 minutes' WHERE work_unit_id=$1", [id]);
+    assert.equal(await store().nextEligible(project), id, 'default discovery sees a database-past due time');
+    assert.equal(await store({ now: () => Date.now() - 20 * 60 * 1000 }).nextEligible(project), null, 'an explicit clock can hold a database-past due time');
+  } finally { await pool.end(); }
+});
