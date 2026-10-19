@@ -21,13 +21,20 @@ const authorization = {
   verifyExecution: async (d, { execution }) => d.ref === `test:${execution.execution_id}` && execution.authorization_decision_ref === d.ref,
   authorizeTerminal: async () => false,
 };
-const pause = () => new Promise(r => setTimeout(r, 1050));
-const untilRunnable = async (s, id) => {
+let fakeNow = Date.now();
+const now = () => fakeNow;
+const advance = ms => { fakeNow += ms; };
+const dueTimes = work => [work?.pilot?.next_wake_at, work?.pilot?.pending_proposal?.runnable_at].filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite);
+const advanceUntilRunnable = async (s, id) => {
+  const due = dueTimes(await s.reconstruct({ work_unit_id: id }));
+  if (due.length) fakeNow = Math.max(fakeNow, ...due);
+};
+const waitUntilDue = async (s, id) => {
   for (;;) {
-    const work = await s.reconstruct({ work_unit_id: id });
-    const due = [work?.pilot?.next_wake_at, work?.pilot?.pending_proposal?.runnable_at].filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite);
-    if (!due.length || due.some(time => time <= Date.now())) return;
-    await new Promise(r => setTimeout(r, Math.min(100, Math.min(...due) - Date.now())));
+    const due = dueTimes(await s.reconstruct({ work_unit_id: id }));
+    const earliest = Math.min(...due);
+    if (!due.length || earliest <= Date.now()) return;
+    await new Promise(r => setTimeout(r, Math.max(1, Math.min(50, earliest - Date.now()))));
   }
 };
 
@@ -42,10 +49,15 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
     await verifyTurnEvidenceIntegrity(c.turn, { workspaceRoot: dir });
     return c.turn.summary === 'Checked outcome.' && c.evidence.length === 1;
   });
-  const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: acceptance.verifyAcceptance, ...options });
+  const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: acceptance.verifyAcceptance, ...options, now });
   let seq = 0;
-  const submit = (s, projectId, threadId = 'thread') => s.submit({ projectId, threadId, receiptId: `receipt-${randomUUID()}`, message: `Input ${++seq}` });
-  const run = (s, projectId, executor) => runPilotOnce({ store: s, projectId, workspaceRoot: dir, identityFiles: [path.join(dir, 'identity.md')], authority: authorization, executor });
+  const submit = async (s, projectId, threadId = 'thread') => {
+    const submitted = await s.submit({ projectId, threadId, receiptId: `receipt-${randomUUID()}`, message: `Input ${++seq}` });
+    const wake = (await s.reconstruct({ work_unit_id: submitted.work_unit_id }))?.pilot?.next_wake_at;
+    if (wake) fakeNow = Math.max(fakeNow, new Date(wake).getTime());
+    return submitted;
+  };
+  const run = (s, projectId, executor) => runPilotOnce({ store: s, projectId, workspaceRoot: dir, identityFiles: [path.join(dir, 'identity.md')], authority: authorization, executor, now });
   const progress = async id => (await pool.query('SELECT * FROM vnext_pilot_progress WHERE work_unit_id=$1', [id])).rows[0];
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
@@ -62,7 +74,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       await pool.end();
       pool = await testPool({ dataDir: path.join(dir, 'db') });
       const cold = store();
-      await untilRunnable(cold, id);
+      await advanceUntilRunnable(cold, id);
       assert.equal(await cold.nextEligible(project), id);
       const reconstructed = await cold.reconstruct({ work_unit_id: id });
       assert.equal(reconstructed.last_turn.learned, 'Preserve this lesson.');
@@ -79,7 +91,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const after = await cold.reconstruct({ work_unit_id: id });
       assert.ok(after.pilot.pending_proposal.id > Number(proposal.id));
       assert.equal(Number((await progress(id)).considered_proposal_id), Number(proposal.id));
-      await pause();
+      advance(5000);
       assert.equal(await cold.nextEligible(project), null);
       assert.equal((await run(cold, project, async () => { throw new Error('waiting must not spin'); })).disposition, 'quiesced');
       await submit(cold, project);
@@ -141,7 +153,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `race-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref));
-      await untilRunnable(store(), id);
+      await advanceUntilRunnable(store(), id);
       const s = store(); const w = await s.reconstruct({ work_unit_id: id });
       const candidates = await Promise.allSettled([admit(s, id, w), admit(store(), id, w)]);
       assert.equal(candidates.filter(r => r.status === 'fulfilled').length, 1);
@@ -157,7 +169,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(replays[0].execution.state, 'succeeded');
       assert.equal((await pool.query('SELECT 1 FROM vnext_pilot_results WHERE execution_id=$1', [begun.execution.execution_id])).rowCount, 1);
       await assert.rejects(s.persistTurn({ ...result, handoff: { ...result.handoff, summary: 'divergent' } }), /conflict/);
-      await untilRunnable(store(), id);
+      await advanceUntilRunnable(store(), id);
       const old = await admit(store(), id);
       await s.reviseWorkRequirements(id, { expectedRevision: 1, requirements: { finish: 'changed while executing' } });
       await assert.rejects(s.persistTurn(applyTurn(old.workUnit, old.execution, turn)), /stale work revision/);
@@ -191,7 +203,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `recover-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
-      await untilRunnable(store(), id);
+      await advanceUntilRunnable(store(), id);
       await assert.rejects(
         run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
         /outcome uncertain/,
@@ -240,7 +252,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `recover-input-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
-      await untilRunnable(store(), id);
+      await advanceUntilRunnable(store(), id);
       await assert.rejects(
         run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
         /outcome uncertain/,
@@ -269,7 +281,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `recover-revise-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
-      await untilRunnable(store(), id);
+      await advanceUntilRunnable(store(), id);
       await assert.rejects(
         run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
         /outcome uncertain/,
@@ -447,7 +459,7 @@ test('memory continuation cursor survives full snapshot reconstruction and is co
   const pending = (await cold.reconstruct({ work_unit_id: work.work_unit_id })).pilot.pending_proposal;
   assert.equal(pending.work_unit_id, work.work_unit_id);
   await assert.rejects(admit(cold, work.work_unit_id), /not justified/);
-  await untilRunnable(cold, work.work_unit_id);
+  await waitUntilDue(cold, work.work_unit_id);
   const current = await cold.reconstruct({ work_unit_id: work.work_unit_id });
   const denied = createMemoryStore({ ...options, ...saved, workUnits: saved.work, authorizationVerifier: async () => false });
   await assert.rejects(admit(denied, work.work_unit_id), /not valid/);
