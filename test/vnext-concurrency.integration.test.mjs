@@ -285,7 +285,7 @@ test('Neon counts authorities that predate the configured pool', { skip: !connec
 test('Neon makes the durable pool policy bind every writer', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 8 });
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
-  const { projects, workUnits, claimants } = poolProjects(suffix, ['policy-a', 'policy-b', 'policy-c']);
+  const { projects, workUnits, claimants } = poolProjects(suffix, ['policy-a', 'policy-b', 'policy-c', 'policy-d']);
   const configured = createNeonStore({ pool, maxConcurrency: 2 });
   const unconfigured = createNeonStore({ pool });
   const conflicting = createNeonStore({ pool, maxConcurrency: 3 });
@@ -317,9 +317,10 @@ test('Neon makes the durable pool policy bind every writer', { skip: !connection
     assert.equal(await authorityCount(pool, projects), 2);
 
     // An explicit operator policy of unbounded conflicts with any configured
-    // capacity rather than being silently overridden.
+    // capacity rather than being silently overridden (fresh attempt, so the
+    // policy is the first refusal reached).
     await pool.query("UPDATE vnext_pool_policy SET max_concurrency=NULL WHERE policy='coordinator-concurrency'");
-    await assert.rejects(() => configured.beginExecution(claimants[2].claim, claimants[2].execution), /E_POOL_POLICY_CONFLICT/);
+    await assert.rejects(() => configured.beginExecution(claimants[3].claim, claimants[3].execution), /E_POOL_POLICY_CONFLICT/);
   } finally {
     await cleanup(pool, workUnits.map((work) => work.work_unit_id), projects);
     await pool.end();
