@@ -4,27 +4,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Pool } from 'pg';
+import { requiredSuites, parseTap, targetIssue, verificationVerdict } from './verify-rules.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const mode = process.argv[2];
 const selected = process.argv.slice(3);
 const results = [];
-
-const coreSuites = [
-  'test/postgres.integration.test.mjs',
-  'test/observer.integration.test.mjs',
-  'test/vnext-neon.integration.test.mjs',
-  'test/vnext-a9-postgres.integration.test.mjs',
-  'test/vnext-pilot.integration.test.mjs',
-  'test/phase1-operating-boundary.test.mjs',
-  'test/vnext-recoverable-dispatch.integration.test.mjs',
-  'test/vnext-feedback-evaluation.integration.test.mjs',
-  'test/vnext-project-authority-owner.integration.test.mjs',
-  'test/vnext-project-authority.integration.test.mjs',
-  'test/vnext-project-authority-upgrade.integration.test.mjs',
-  'test/vnext-concurrency.integration.test.mjs',
-  'test/vnext-postgres-isolation.integration.test.mjs',
-];
 
 function fail(message) {
   console.error(`verify: FAILED: ${message}`);
@@ -46,13 +31,7 @@ function text(command, args) {
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
-function parseTap(output) {
-  const counts = { tests: 0, pass: 0, fail: 0, skipped: 0 };
-  for (const match of output.matchAll(/^# (tests|pass|fail|skipped) (\d+)$/gm)) counts[match[1]] = Number(match[2]);
-  return counts;
-}
-
-function step(label, command, args) {
+function step(label, command, args, coverage = 'none') {
   const child = spawn(command, args, { cwd: root, env: childEnv(), stdio: ['ignore', 'pipe', 'inherit'] });
   let output = '';
   child.stdout.on('data', (chunk) => {
@@ -60,7 +39,7 @@ function step(label, command, args) {
     process.stdout.write(chunk);
   });
   return new Promise((resolve) => {
-    child.once('close', (code) => resolve({ label, code: code ?? 1, output }));
+    child.once('close', (code) => resolve({ label, code: code ?? 1, output, coverage }));
   });
 }
 
@@ -122,17 +101,19 @@ function summarize(identity, environment) {
     const tally = counts.tests ? ` tests=${counts.tests} pass=${counts.pass} fail=${counts.fail} skipped=${counts.skipped}` : '';
     console.log(`verify: ${result.label}: ${result.code === 0 ? 'pass' : 'FAIL'}${tally}`);
   }
-  const failed = results.filter((result) => result.code !== 0).length;
-  const skipped = results.reduce((total, result) => total + parseTap(result.output).skipped, 0);
-  console.log(`verify: skipped=${skipped}`);
-  console.log(`verify: result=${failed === 0 ? 'PASS' : 'FAIL'}${failed ? ` (${failed} failed step${failed === 1 ? '' : 's'})` : ''}`);
-  process.exitCode = failed === 0 ? 0 : 1;
+  const verdict = verificationVerdict(results);
+  for (const issue of verdict.issues) console.error(`verify: FAILED: ${issue}`);
+  console.log(`verify: skipped=${verdict.skipped}`);
+  console.log(`verify: result=${verdict.pass ? 'PASS' : 'FAIL'}${verdict.issues.length ? ` (${verdict.issues.length} issue${verdict.issues.length === 1 ? '' : 's'})` : ''}`);
+  process.exitCode = verdict.pass ? 0 : 1;
 }
 
 if (mode !== 'targeted' && mode !== 'core') fail('usage: node scripts/verify.mjs targeted <suite...> | core');
 checkNode();
 if (mode === 'targeted' && selected.length === 0) fail('targeted verification needs at least one suite path');
 for (const suite of selected) {
+  const issue = targetIssue(suite);
+  if (issue) fail(issue);
   if (!existsSync(path.resolve(root, suite))) fail(`suite does not exist: ${suite}`);
 }
 const postgres = await checkPostgres();
@@ -142,19 +123,19 @@ const environment = `node ${process.versions.node} ${process.platform}/${process
 if (mode === 'targeted') {
   for (const suite of selected) {
     note(`suite ${suite}`);
-    results.push(await step(suite, process.execPath, ['scripts/run-postgres-suite.mjs', suite]));
+    results.push(await step(suite, process.execPath, ['scripts/run-postgres-suite.mjs', suite], 'required'));
   }
 } else {
   if (process.platform !== 'linux') fail('core verification requires Linux for the cross-process proof');
   checkObserver();
   note('local tests');
   const files = readdirSync(path.join(root, 'test')).filter((name) => name.endsWith('.test.mjs')).sort().map((name) => path.join('test', name));
-  results.push(await step('local tests', process.execPath, ['--test', ...files]));
+  results.push(await step('local tests', process.execPath, ['--test', ...files], 'broad'));
   note('migrations');
   results.push(await step('migrations', process.execPath, ['bin/ct-runtime.mjs', 'migrate', '--database-url', process.env.POSTGRES_URL]));
-  for (const suite of coreSuites) {
+  for (const suite of requiredSuites) {
     note(`suite ${suite}`);
-    results.push(await step(suite, process.execPath, ['scripts/run-postgres-suite.mjs', suite]));
+    results.push(await step(suite, process.execPath, ['scripts/run-postgres-suite.mjs', suite], 'required'));
   }
   note('cross-process proof');
   results.push(await crossProcessProof());
