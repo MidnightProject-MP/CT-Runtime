@@ -170,6 +170,28 @@ test('heartbeat fence loss aborts the child and does not write stale terminal st
   const result = await invoke({ store, executionId: 'run-1', command: process.execPath, commandArgs: ['-e', 'setTimeout(()=>{},5000)'], model: 'm', agent: 'a', task: 't', maxRetries: 0, heartbeatIntervalMs: 100 }); assert.equal(result.failure.category, 'ownership-lost'); assert.equal(result.process.terminated, true); const manifest = await store.manifest('run-1'); assert.equal(manifest.execution.status, 'running'); assert.equal(manifest.execution.finishedAt, undefined);
 });
 
+test('an already-aborted signal terminates the child instead of letting it run to completion', async () => {
+  const controller = new AbortController(); controller.abort(new Error('aborted before the child started'));
+  const started = Date.now();
+  const result = await runProcess({ command: process.execPath, args: ['-e', 'setTimeout(()=>{},5000)'], timeoutMs: 30000, signal: controller.signal });
+  assert.equal(result.terminated, true); assert.equal(result.aborted, true); assert.equal(result.timedOut, false); assert.equal(Date.now() - started < 4000, true);
+});
+
+test('a wall clock step backwards does not fail an otherwise successful attempt', async () => {
+  const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(store);
+  const RealDate = Date; const baseMs = RealDate.now(); let reads = 0;
+  class SkewedDate extends RealDate { constructor(...args) { if (args.length === 0) super(baseMs - (++reads) * 1000); else super(...args); } }
+  globalThis.Date = SkewedDate;
+  let result;
+  try {
+    result = await invoke({ store, executionId: 'run-1', command: process.execPath, commandArgs: [fixture], model: 'm', agent: 'a', task: 't', maxRetries: 0 });
+  } finally {
+    globalThis.Date = RealDate;
+  }
+  assert.equal(result.status, 'success');
+  assert.equal((await store.inferenceRecords({ executionId: 'run-1' }))[0].timing.latencyMs >= 0, true);
+});
+
 test('bounded single-handle reads reject oversized result and semantic files', async () => {
   const resultStore = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(resultStore); const result = await invoke({ store: resultStore, executionId: 'run-1', command: process.execPath, commandArgs: [fixture], model: 'm', agent: 'a', task: 't', env: { RESULT_SIZE: 'large' }, maxRetries: 0 }); assert.equal(result.status, 'failed'); assert.equal((await resultStore.manifest('run-1')).failure.category, 'validation');
   const semanticStore = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(semanticStore); await invoke({ store: semanticStore, executionId: 'run-1', command: process.execPath, commandArgs: [fixture], model: 'm', agent: 'a', task: 'oversized semantic fixture', maxRetries: 0 }); const semantic = path.join(semanticStore.root, 'semantic.json'); await writeFile(semantic, JSON.stringify({ schema: 'celestan-semantic-observation-v1', executionId: 'run-1', status: 'complete', summary: 'x'.repeat(70000), confidence: 0.9, signals: [] })); const pending = await observePending({ store: semanticStore, observerPath, semanticResultFile: semantic }); assert.equal(pending[0].status, 'semantic-analysis-pending');

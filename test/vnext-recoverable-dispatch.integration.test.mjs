@@ -113,9 +113,9 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
   // move in one statement batch with one transaction timestamp.
   const expireClaim = async id => {
     if (!/^[A-Za-z0-9._:-]+$/.test(id)) throw new Error('unsafe test identifier');
-    await pool.query(`UPDATE vnext_work_units SET claim_expires_at=now()-interval '1 second' WHERE work_unit_id='${id}';
-      UPDATE vnext_executions SET claim_expires_at=now()-interval '1 second' WHERE work_unit_id='${id}' AND state IN ('created','running');
-      UPDATE vnext_project_mutation_authority SET claim_expires_at=now()-interval '1 second' WHERE work_unit_id='${id}';`);
+    await pool.query(`UPDATE vnext_work_units SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}';
+      UPDATE vnext_executions SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}' AND state IN ('created','running');
+      UPDATE vnext_project_mutation_authority SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}';`);
   };
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
@@ -136,10 +136,10 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
       assert.equal(result.recovered[0].verdict, 'not-launched');
       assert.equal(result.recovered[0].action, 'retry-eligible');
       assert.equal(executions, 1, 'the reclaimed attempt runs and the settled one never re-enters');
-      const rows = await pool.query("SELECT state,failure FROM vnext_executions WHERE work_unit_id=$1 ORDER BY started_at", [id]);
-      assert.equal(rows.rows[0].state, 'failed');
-      assert.equal(rows.rows[0].failure.reason, 'not-launched');
-      assert.equal(rows.rows[0].failure.reconciliation_required, undefined);
+      const original = (await pool.query('SELECT state,failure FROM vnext_executions WHERE execution_id=$1', [begun.execution.execution_id])).rows[0];
+      assert.equal(original.state, 'failed');
+      assert.equal(original.failure.reason, 'not-launched');
+      assert.equal(original.failure.reconciliation_required, undefined);
       const cleared = await pool.query('SELECT 1 FROM vnext_project_mutation_authority WHERE project_id=$1', [project]);
       assert.equal(cleared.rowCount, 0);
       assert.equal(Number((await pool.query('SELECT count(*)::int AS c FROM vnext_events WHERE event_id=$1', [`recovered:${begun.execution.execution_id}`])).rows[0].c), 1);
