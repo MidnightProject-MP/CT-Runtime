@@ -35,13 +35,16 @@ Consequences by construction:
 ## Durable pool policy (shared writers)
 
 `maxConcurrency` is coordinator configuration, but the bound is durable so a
-shared database enforces one policy for every writer. Admission always takes
-the pool lock (`ct-runtime:vnext-concurrency-pool`) and resolves the policy row
-(`vnext_pool_policy`, `policy='coordinator-concurrency'`):
+shared database enforces one policy for every writer. A configured writer
+establishes the row before its admission transaction (serialized on the pool
+lock, `INSERT ... ON CONFLICT DO NOTHING`, committed independently), so a
+capacity refusal cannot roll the shared bound back with the refused attempt.
+Admission then takes the pool lock again and re-reads the row, adopting or
+verifying it:
 
 | Durable policy | Writer configured `maxConcurrency` | Result |
 | --- | --- | --- |
-| absent | set (`N`) | writer establishes `N`; enforced |
+| absent | set (`N`) | writer establishes `N` in its own committed transaction; enforced |
 | absent | unset | unbounded |
 | `N` | `N` | enforced |
 | `N` | unset | writer adopts `N`; enforced — unconfigured writers cannot bypass |
@@ -53,9 +56,11 @@ count reaches the effective capacity, admission refuses with
 `E_CONCURRENCY_LIMIT: the coordinator concurrency pool is exhausted`. The
 refusal is ordered after the stop-confirmation refusals, so an attempt blocked
 by authority or reconciliation state reports that cause first. A refusal writes
-nothing: no Execution row, no claim, no authority; the Work Unit stays
-actionable and eligible, and retry is coordinator-owned (the next tick
-rediscovers it when a slot releases).
+no Execution row, no claim, and no authority; the Work Unit stays actionable
+and eligible, and retry is coordinator-owned (the next tick rediscovers it when
+a slot releases). The first configured refusal may still leave the pool policy
+established — that is the point: the bound must not depend on admission
+success.
 
 The memory store is single-writer in-process; it enforces the same cap by
 construction and has no durable policy row.

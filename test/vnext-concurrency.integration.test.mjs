@@ -326,3 +326,42 @@ test('Neon makes the durable pool policy bind every writer', { skip: !connection
     await pool.end();
   }
 });
+
+test('Neon keeps the policy established by a refused first configured admission', { skip: !connectionString, timeout: 60000 }, async () => {
+  const pool = new Pool({ connectionString, max: 8 });
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const { projects, workUnits, claimants } = poolProjects(suffix, ['bootstrap-a', 'bootstrap-b', 'bootstrap-c', 'bootstrap-d']);
+  const unbounded = createNeonStore({ pool });
+  const configured = createNeonStore({ pool, maxConcurrency: 2 });
+  const conflicting = createNeonStore({ pool, maxConcurrency: 3 });
+  try {
+    await migrateVNext({ pool, directory: path.join(import.meta.dirname, '..', 'vnext-migrations') });
+    for (const work of workUnits) await configured.createWorkUnit(work);
+
+    // Two unconfigured writers fill the pool before any durable bound exists.
+    await unbounded.beginExecution(claimants[0].claim, claimants[0].execution);
+    await unbounded.beginExecution(claimants[1].claim, claimants[1].execution);
+
+    // The first configured admission establishes the bound even though the
+    // already-full pool refuses it in the same attempt.
+    await assert.rejects(() => configured.beginExecution(claimants[2].claim, claimants[2].execution), /E_CONCURRENCY_LIMIT/);
+    assert.deepEqual((await pool.query("SELECT max_concurrency FROM vnext_pool_policy WHERE policy='coordinator-concurrency'")).rows, [{ max_concurrency: 2 }]);
+    // The refusal still leaves no execution, claim, or authority behind.
+    const refusedWork = (await pool.query('SELECT state,fence,claim_execution_id FROM vnext_work_units WHERE work_unit_id=$1', [workUnits[2].work_unit_id])).rows[0];
+    assert.equal(refusedWork.state, 'actionable');
+    assert.equal(Number(refusedWork.fence), 0);
+    assert.equal(refusedWork.claim_execution_id, null);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE execution_id=$1', [claimants[2].execution.execution_id])).rows[0].count, 0);
+    assert.equal(await authorityCount(pool, projects), 2);
+
+    // A later unconfigured writer adopts the persisted bound instead of
+    // reading the pool as unbounded.
+    await assert.rejects(() => unbounded.beginExecution(claimants[3].claim, claimants[3].execution), /E_CONCURRENCY_LIMIT/);
+    // A differently configured writer fails closed against the durable bound.
+    await assert.rejects(() => conflicting.beginExecution(claimants[3].claim, claimants[3].execution), /E_POOL_POLICY_CONFLICT/);
+    assert.equal(await authorityCount(pool, projects), 2);
+  } finally {
+    await cleanup(pool, workUnits.map((work) => work.work_unit_id), projects);
+    await pool.end();
+  }
+});
