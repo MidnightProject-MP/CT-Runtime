@@ -31,7 +31,10 @@ try {
       // the outer loop was granted. A reference the authority will not confirm
       // here cannot settle work as terminal.
       acceptanceVerifier: authority.verifyAcceptance,
-      intervalMs: config.intervalMs ?? 60000
+      intervalMs: config.intervalMs ?? 60000,
+      // Coordinator-configured global pool capacity; null keeps accounting
+      // on with no cap.
+      maxConcurrency: config.maxConcurrency ?? null
     });
     if (action === 'submit') {
       const file = option('--message-file');
