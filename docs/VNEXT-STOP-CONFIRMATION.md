@@ -38,9 +38,11 @@ therefore means an unsettled predecessor, and it always blocks admission.
 
 ## What counts as stop evidence
 
-- Recovery settlement (`recoverAttempt`) is the only path that releases expired
-  authority and expired claims. It settles the attempt, clears the claim, and
-  deletes the authority row in one transaction.
+- Recovery-controlled settlement paths are the only paths that release expired
+  authority and expired claims: `recoverAttempt`, and settled attempts recovered
+  through `persistTurn(..., { recovery: true })` or
+  `persistSuperseded(..., { recovery: true })`. Each settles the attempt,
+  clears the claim, and deletes the authority row in one transaction.
 - Classification is a durable-records decision, never a timing guess:
   - no launch record + intact empty attempt directory -> `not-launched`
     (retry-eligible; exact replay is idempotent, divergent content fails
