@@ -24,6 +24,7 @@ async function setup(pool, suffix) {
 }
 
 async function cleanup(pool, workUnitId) {
+  await pool.query('DELETE FROM vnext_concurrency_reservations WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_project_mutation_authority WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_evidence_refs WHERE work_unit_id=$1', [workUnitId]).catch(() => {});
   await pool.query('DELETE FROM vnext_continuations WHERE work_unit_id=$1', [workUnitId]).catch(() => {});

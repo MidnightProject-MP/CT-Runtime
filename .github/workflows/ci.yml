@@ -94,6 +94,7 @@ jobs:
           node scripts/run-postgres-suite.mjs test/vnext-project-authority-owner.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-project-authority.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-project-authority-upgrade.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/vnext-concurrency.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/vnext-postgres-isolation.integration.test.mjs
       - name: Prove timestamp-free continuation across Linux worker and coordinator processes
         run: |
