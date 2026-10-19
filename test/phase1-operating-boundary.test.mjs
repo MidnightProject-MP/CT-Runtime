@@ -57,9 +57,15 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
     if (wake) fakeNow = Math.max(fakeNow, new Date(wake).getTime());
     return submitted;
   };
-  const run = (s, projectId, executor) => runPilotOnce({ store: s, projectId, workspaceRoot: dir, identityFiles: [path.join(dir, 'identity.md')], authority: authorization, executor, now });
+  const run = async (s, projectId, executor) => {
+    const known = (await pool.query('SELECT work_unit_id FROM vnext_work_units WHERE project_id=$1 LIMIT 1', [projectId])).rows[0];
+    if (known) await advanceUntilRunnable(s, known.work_unit_id);
+    return runPilotOnce({ store: s, projectId, workspaceRoot: dir, identityFiles: [path.join(dir, 'identity.md')], authority: authorization, executor, now });
+  };
+  const admitDue = async (s, id, work = null) => { await advanceUntilRunnable(s, id); return admit(s, id, work); };
   const progress = async id => (await pool.query('SELECT * FROM vnext_pilot_progress WHERE work_unit_id=$1', [id])).rows[0];
   try {
+    fakeNow = (await pool.query('SELECT clock_timestamp() AS now')).rows[0].now.getTime();
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
     await migrateVNext({ pool, directory: path.join(import.meta.dirname, '../vnext-migrations') });
     await t.test('timestamp-free continuation survives closed connection/dataDir; waiting remains visible but quiet', async () => {
@@ -138,7 +144,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
         if (change === 'pilot-result') await pool.query("UPDATE vnext_pilot_results SET turn=jsonb_set(turn,'{summary}','\"changed\"') WHERE work_unit_id=$1", [id]);
         if (change === 'project-authority' || change === 'reconciliation') {
           const other = await submit(s, project, 'other');
-          const active = await admit(s, other.work_unit_id);
+          const active = await admitDue(s, other.work_unit_id);
           if (change === 'reconciliation') await s.persistFailure(failExecution(active.workUnit, active.execution, { maxAttempts: 1, reconciliationRequired: true }));
         }
         const before = await pool.query('SELECT state,work_revision,last_turn FROM vnext_work_units WHERE work_unit_id=$1', [id]);
@@ -155,7 +161,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref));
       await advanceUntilRunnable(store(), id);
       const s = store(); const w = await s.reconstruct({ work_unit_id: id });
-      const candidates = await Promise.allSettled([admit(s, id, w), admit(store(), id, w)]);
+      const candidates = await Promise.allSettled([admitDue(s, id, w), admitDue(store(), id, w)]);
       assert.equal(candidates.filter(r => r.status === 'fulfilled').length, 1);
       const begun = candidates.find(r => r.status === 'fulfilled').value;
       assert.equal(Number((await progress(id)).considered_proposal_id), w.pilot.pending_proposal.id);
@@ -170,14 +176,14 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal((await pool.query('SELECT 1 FROM vnext_pilot_results WHERE execution_id=$1', [begun.execution.execution_id])).rowCount, 1);
       await assert.rejects(s.persistTurn({ ...result, handoff: { ...result.handoff, summary: 'divergent' } }), /conflict/);
       await advanceUntilRunnable(store(), id);
-      const old = await admit(store(), id);
+      const old = await admitDue(store(), id);
       await s.reviseWorkRequirements(id, { expectedRevision: 1, requirements: { finish: 'changed while executing' } });
       await assert.rejects(s.persistTurn(applyTurn(old.workUnit, old.execution, turn)), /stale work revision/);
     });
     await t.test('lost COMMIT responses are resolved from durable settlement and acceptance receipts', async () => {
       const project = `commit-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
-      const begun = await admit(store(), id);
+      const begun = await admitDue(store(), id);
       const turn = done(begun.workUnit.objective_ref);
       const result = { ...applyTurn(begun.workUnit, begun.execution, turn), handoff: canonicalHandoff(turn, begun.execution.admission) };
       const loseCommit = () => {
@@ -231,7 +237,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.ok(due.next_wake_at && due.next_wake_at.getTime() <= Date.now(), 'reconciliation creates a coordinator-owned due time');
       assert.equal(await store().nextEligible(project), id);
       const w = await cold.reconstruct({ work_unit_id: id });
-      const racers = await Promise.allSettled([admit(cold, id, w), admit(store(), id, w)]);
+      const racers = await Promise.allSettled([admitDue(cold, id, w), admitDue(store(), id, w)]);
       assert.equal(racers.filter(r => r.status === 'fulfilled').length, 1, 'overlapping wakes admit exactly one recovery attempt');
       const recovery = racers.find(r => r.status === 'fulfilled').value;
       assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE work_unit_id=$1', [id])).rows[0].count, 3);
@@ -299,7 +305,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(reconciled.state, 'actionable');
       assert.equal(await cold.nextEligible(project), id);
       const w = await cold.reconstruct({ work_unit_id: id });
-      const racers = await Promise.allSettled([admit(cold, id, w), admit(store(), id, w)]);
+      const racers = await Promise.allSettled([admitDue(cold, id, w), admitDue(store(), id, w)]);
       assert.equal(racers.filter(r => r.status === 'fulfilled').length, 1, 'exactly one authorized recovery admission');
       const recovery = racers.find(r => r.status === 'fulfilled').value;
       assert.equal(Number(recovery.execution.admission.work_revision), 2, 'the recovery admission binds the new revision');
@@ -363,7 +369,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const replayedLater = await store().persistSuperseded({ workUnit: { work_unit_id: id, project_id: project }, execution: staleArgs });
       assert.deepEqual(replayedLater, recorded.result, 'a later revision does not retroactively change the committed supersession identity');
       assert.deepEqual((await pool.query('SELECT state,claim_execution_id,last_execution_id,attempt,work_revision FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0], afterRevision, 'replay after a later revision changes nothing');
-      const successorAdmission = await admit(store(), id);
+      const successorAdmission = await admitDue(store(), id);
       const replayedHeld = await store().persistSuperseded({ workUnit: { work_unit_id: id, project_id: project }, execution: staleArgs });
       assert.deepEqual(replayedHeld, recorded.result);
       const held = (await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0];
