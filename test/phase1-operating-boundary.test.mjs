@@ -22,6 +22,14 @@ const authorization = {
   authorizeTerminal: async () => false,
 };
 const pause = () => new Promise(r => setTimeout(r, 1050));
+const untilRunnable = async (s, id) => {
+  for (;;) {
+    const work = await s.reconstruct({ work_unit_id: id });
+    const due = [work?.pilot?.next_wake_at, work?.pilot?.pending_proposal?.runnable_at].filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite);
+    if (!due.length || due.some(time => time <= Date.now())) return;
+    await new Promise(r => setTimeout(r, Math.min(100, Math.min(...due) - Date.now())));
+  }
+};
 
 test('real pilot cold continuation, admission cursor, separate acceptance and stale snapshots', { timeout: 90000 }, async t => {
   const dir = await mkdtemp(path.join(tmpdir(), 'operating-boundary-'));
@@ -53,8 +61,8 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(await store().nextEligible(project), null, 'coordinator cooldown, not worker timestamp');
       await pool.end();
       pool = await testPool({ dataDir: path.join(dir, 'db') });
-      await pause();
       const cold = store();
+      await untilRunnable(cold, id);
       assert.equal(await cold.nextEligible(project), id);
       const reconstructed = await cold.reconstruct({ work_unit_id: id });
       assert.equal(reconstructed.last_turn.learned, 'Preserve this lesson.');
@@ -133,7 +141,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `race-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref));
-      await pause();
+      await untilRunnable(store(), id);
       const s = store(); const w = await s.reconstruct({ work_unit_id: id });
       const candidates = await Promise.allSettled([admit(s, id, w), admit(store(), id, w)]);
       assert.equal(candidates.filter(r => r.status === 'fulfilled').length, 1);
@@ -149,7 +157,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(replays[0].execution.state, 'succeeded');
       assert.equal((await pool.query('SELECT 1 FROM vnext_pilot_results WHERE execution_id=$1', [begun.execution.execution_id])).rowCount, 1);
       await assert.rejects(s.persistTurn({ ...result, handoff: { ...result.handoff, summary: 'divergent' } }), /conflict/);
-      await pause();
+      await untilRunnable(store(), id);
       const old = await admit(store(), id);
       await s.reviseWorkRequirements(id, { expectedRevision: 1, requirements: { finish: 'changed while executing' } });
       await assert.rejects(s.persistTurn(applyTurn(old.workUnit, old.execution, turn)), /stale work revision/);
@@ -183,7 +191,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `recover-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
-      await pause();
+      await untilRunnable(store(), id);
       await assert.rejects(
         run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
         /outcome uncertain/,
@@ -232,7 +240,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `recover-input-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
-      await pause();
+      await untilRunnable(store(), id);
       await assert.rejects(
         run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
         /outcome uncertain/,
@@ -261,7 +269,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const project = `recover-revise-${randomUUID()}`;
       const { work_unit_id: id } = await submit(store(), project);
       assert.equal((await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref))).disposition, 'continue');
-      await pause();
+      await untilRunnable(store(), id);
       await assert.rejects(
         run(store(), project, async () => { throw new Error('outcome uncertain before any effect is known'); }),
         /outcome uncertain/,
@@ -439,7 +447,7 @@ test('memory continuation cursor survives full snapshot reconstruction and is co
   const pending = (await cold.reconstruct({ work_unit_id: work.work_unit_id })).pilot.pending_proposal;
   assert.equal(pending.work_unit_id, work.work_unit_id);
   await assert.rejects(admit(cold, work.work_unit_id), /not justified/);
-  await pause();
+  await untilRunnable(cold, work.work_unit_id);
   const current = await cold.reconstruct({ work_unit_id: work.work_unit_id });
   const denied = createMemoryStore({ ...options, ...saved, workUnits: saved.work, authorizationVerifier: async () => false });
   await assert.rejects(admit(denied, work.work_unit_id), /not valid/);
