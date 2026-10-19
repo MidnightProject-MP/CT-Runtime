@@ -29,6 +29,10 @@ const advanceUntilRunnable = async (s, id) => {
   const due = dueTimes(await s.reconstruct({ work_unit_id: id }));
   if (due.length) fakeNow = Math.max(fakeNow, ...due);
 };
+const alignToSettlement = async (s, id) => {
+  const settled = (await s.reconstruct({ work_unit_id: id }))?.pilot?.pending_proposal;
+  if (settled?.finished_at) fakeNow = new Date(settled.finished_at).getTime();
+};
 const waitUntilDue = async (s, id) => {
   for (;;) {
     const due = dueTimes(await s.reconstruct({ work_unit_id: id }));
@@ -73,6 +77,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const { work_unit_id: id } = await submit(store(), project);
       const first = await run(store(), project, async ({ workUnit }) => next(workUnit.objective_ref));
       assert.equal(first.disposition, 'continue');
+      await alignToSettlement(store(), id);
       const proposal = (await pool.query('SELECT * FROM vnext_continuations WHERE work_unit_id=$1', [id])).rows[0];
       assert.equal(Number((await progress(id)).considered_proposal_id), 0);
       assert.equal((await progress(id)).next_wake_at, null);
@@ -233,8 +238,9 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const recorded = (await pool.query('SELECT event_type,payload FROM vnext_events WHERE event_id=$1', [`reconciliation:${failedExecution.execution_id}`])).rows[0];
       assert.equal(recorded.event_type, 'reconciliation.recorded');
       assert.equal(recorded.payload.result.state, 'actionable');
+      await advanceUntilRunnable(cold, id);
       const due = await progress(id);
-      assert.ok(due.next_wake_at && due.next_wake_at.getTime() <= Date.now(), 'reconciliation creates a coordinator-owned due time');
+      assert.ok(due.next_wake_at && due.next_wake_at.getTime() <= now(), 'reconciliation creates a coordinator-owned due time');
       assert.equal(await store().nextEligible(project), id);
       const w = await cold.reconstruct({ work_unit_id: id });
       const racers = await Promise.allSettled([admitDue(cold, id, w), admitDue(store(), id, w)]);
@@ -274,6 +280,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(await cold.nextEligible(project), null, 'uncertainty still excludes the project after restart');
       const reconciled = await cold.reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
       assert.equal(reconciled.state, 'actionable');
+      await advanceUntilRunnable(cold, id);
       assert.equal(await cold.nextEligible(project), id);
       const recovery = await run(cold, project, async ({ workUnit }) => {
         assert.equal(workUnit.pilot.input_seq, fresh.input_seq, 'the recovery attempt sees the new input');
@@ -303,6 +310,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       assert.equal(await cold.nextEligible(project), null, 'uncertainty still excludes the project after restart');
       const reconciled = await cold.reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
       assert.equal(reconciled.state, 'actionable');
+      await advanceUntilRunnable(cold, id);
       assert.equal(await cold.nextEligible(project), id);
       const w = await cold.reconstruct({ work_unit_id: id });
       const racers = await Promise.allSettled([admitDue(cold, id, w), admitDue(store(), id, w)]);
@@ -393,6 +401,7 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
       const failedExecution = (await pool.query('SELECT execution_id,fence FROM vnext_executions WHERE work_unit_id=$1', [id])).rows[0];
       const reconciled = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: failedExecution.execution_id, fence: Number(failedExecution.fence), resolution: 'no_effect' });
       assert.equal(reconciled.state, 'actionable');
+      await advanceUntilRunnable(store(), id);
       assert.equal(await store().nextEligible(project), id, 'resolving uncertainty makes the revised work discoverable');
       const progressed = await run(store(), project, async ({ workUnit }) => {
         assert.equal(workUnit.work_revision, 2);
