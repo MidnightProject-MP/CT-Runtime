@@ -26,8 +26,13 @@ test('timeout kills the process group and never accepts an early result',async()
   const execute=createCommandExecutor({command:process.execPath,args:[script],stateDirectory:dir});
   await assert.rejects(execute({execution:{execution_id:'test-timeout'},workspaceRoot:dir,timeoutMs:2000}),/timed out/);
   const pid=Number(await readFile(path.join(dir,'pid'),'utf8'));
-  // A killed descendant can briefly remain as a zombie until PID 1 reaps it.
-  let state='';try {state=await readFile(`/proc/${pid}/stat`,'utf8');}catch(e){assert.equal(e.code,'ENOENT');}
-  if(state) assert.match(state,/\) [ZX] /);
+  // A killed descendant can briefly remain running or a zombie until the signal is delivered and PID 1 reaps it.
+  let state=null;
+  for (const deadline=Date.now()+2000;;) {
+   try {state=await readFile(`/proc/${pid}/stat`,'utf8');} catch(e) {assert.equal(e.code,'ENOENT');state=null;break;}
+   if (/\) [ZX] /.test(state)||Date.now()>=deadline) break;
+   await new Promise(r=>setTimeout(r,20));
+  }
+  if(state) assert.match(state,/\) [ZX] /,`descendant ${pid} still running after timeout`);
  } finally {await rm(dir,{recursive:true,force:true});}
 });
