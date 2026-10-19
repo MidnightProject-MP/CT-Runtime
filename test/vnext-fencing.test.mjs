@@ -21,7 +21,7 @@ function executionPair() {
   return { workUnit, firstClaim, firstExecution };
 }
 
-test('memory store rejects an expired execution after a newer fence takes the Work Unit', async () => {
+test('memory store refuses an expired execution takeover until recovery, then late settlement is fenced out', async () => {
   const { workUnit, firstClaim, firstExecution } = executionPair();
   const store = createMemoryStore({ workUnits: [workUnit] });
   await store.beginExecution(workUnit, firstExecution, { ref: firstExecution.authorization_decision_ref });
@@ -34,6 +34,16 @@ test('memory store rejects an expired execution after a newer fence takes the Wo
   const secondExecution = startExecution(createExecution(secondClaim, {
     executionId: 'exec-2', owner: 'owner-2', startedAt: '2026-09-16T12:00:02.000Z',
   }));
+  await assert.rejects(
+    () => store.beginExecution(firstClaim, secondExecution, { ref: secondExecution.authorization_decision_ref }),
+    /E_RECONCILIATION_REQUIRED/,
+  );
+  let snapshot = store.snapshot();
+  assert.equal(snapshot.executions.length, 1);
+  assert.equal(snapshot.executions[0].state, 'running');
+  assert.equal(snapshot.work[0].claim.execution_id, 'exec-1');
+
+  await store.recoverAttempt({ projectId: 'project-fence', workUnitId: 'wu-fence', executionId: 'exec-1', fence: 1, resolution: 'not-launched' });
   await store.beginExecution(firstClaim, secondExecution, { ref: secondExecution.authorization_decision_ref });
 
   await assert.rejects(
@@ -49,10 +59,10 @@ test('memory store rejects an expired execution after a newer fence takes the Wo
     /fencing conflict/,
   );
 
-  const snapshot = store.snapshot();
+  snapshot = store.snapshot();
   assert.equal(snapshot.work[0].fence, 2);
   assert.equal(snapshot.work[0].claim.execution_id, 'exec-2');
-  assert.equal(snapshot.executions.find((e) => e.execution_id === 'exec-1').state, 'expired');
+  assert.equal(snapshot.executions.find((e) => e.execution_id === 'exec-1').state, 'failed');
   assert.equal(snapshot.executions.find((e) => e.execution_id === 'exec-2').state, 'running');
 });
 

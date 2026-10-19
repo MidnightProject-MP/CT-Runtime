@@ -128,7 +128,7 @@ test('A9 PostgreSQL failure rollback preserves running state and authority', { s
   }
 });
 
-test('A9 PostgreSQL takeover rollback restores the expired predecessor and commits no successor', { skip: !connectionString, timeout: 60000 }, async () => {
+test('A9 PostgreSQL refuses an expired-predecessor takeover and admits only after recovery', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 5 });
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   let work;
@@ -153,20 +153,36 @@ test('A9 PostgreSQL takeover rollback restores the expired predecessor and commi
     } finally {
       expiryClient.release();
     }
-    const predecessorBefore = await pool.query('SELECT state,claim_execution_id,claim_owner,claim_fence,claim_expires_at,fence FROM vnext_work_units WHERE work_unit_id=$1', [work.work_unit_id]);
+    const workBefore = await pool.query('SELECT state,claim_execution_id,claim_owner,claim_fence,claim_expires_at,fence FROM vnext_work_units WHERE work_unit_id=$1', [work.work_unit_id]);
     const executionBefore = await pool.query('SELECT state,claim_expires_at,fence FROM vnext_executions WHERE execution_id=$1', [predecessorExecution.execution_id]);
     const authorityBefore = await pool.query('SELECT * FROM vnext_project_mutation_authority WHERE project_id=$1', [work.project_id]);
 
     const successorClaim = claimWorkUnit({ ...begun.workUnit, state: 'actionable', claim: null, claim_expires_at: null }, { executionId: `exec-new-${suffix}`, owner: 'new-owner' });
     const successorExecution = startExecution(createExecution(successorClaim, { executionId: successorClaim.claim.execution_id, owner: successorClaim.claim.owner, authorizationDecisionRef: `test-auth:${successorClaim.claim.execution_id}` }));
-    await assert.rejects(() => withInjectedFailure(pool, sql => sql.startsWith("UPDATE vnext_work_units SET state='actionable'"), wrappedPool =>
-      createNeonStore({ pool: wrappedPool, authorizationVerifier: verifier }).beginExecution(successorClaim, successorExecution, authorize(successorExecution))
-    ), /A9 injected transaction failure/);
 
-    assert.deepEqual((await pool.query('SELECT state,claim_execution_id,claim_owner,claim_fence,claim_expires_at,fence FROM vnext_work_units WHERE work_unit_id=$1', [work.work_unit_id])).rows, predecessorBefore.rows);
+    // The refusal is a deterministic rejection, not a rolled-back takeover:
+    // the predecessor, its claim, and its authority all remain untouched.
+    await assert.rejects(() => store.beginExecution(successorClaim, successorExecution, authorize(successorExecution)), /E_RECONCILIATION_REQUIRED/);
+    assert.deepEqual((await pool.query('SELECT state,claim_execution_id,claim_owner,claim_fence,claim_expires_at,fence FROM vnext_work_units WHERE work_unit_id=$1', [work.work_unit_id])).rows, workBefore.rows);
     assert.deepEqual((await pool.query('SELECT state,claim_expires_at,fence FROM vnext_executions WHERE execution_id=$1', [predecessorExecution.execution_id])).rows, executionBefore.rows);
     assert.deepEqual((await pool.query('SELECT * FROM vnext_project_mutation_authority WHERE project_id=$1', [work.project_id])).rows, authorityBefore.rows);
     assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE execution_id=$1', [successorExecution.execution_id])).rows[0].count, 0);
+
+    // Recovery is the only transition that records stop evidence and releases
+    // the expired authority; only then may the successor be admitted.
+    await store.recoverAttempt({ projectId: work.project_id, workUnitId: work.work_unit_id, executionId: predecessorExecution.execution_id, fence: 1, resolution: 'not-launched' });
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=$1', [work.project_id])).rows[0].count, 0);
+
+    // A failed successor admission after recovery still commits nothing.
+    await assert.rejects(() => withInjectedFailure(pool, sql => sql.startsWith('INSERT INTO vnext_executions'), wrappedPool =>
+      createNeonStore({ pool: wrappedPool, authorizationVerifier: verifier }).beginExecution(successorClaim, successorExecution, authorize(successorExecution))
+    ), /A9 injected transaction failure/);
+    assert.deepEqual((await pool.query('SELECT state,claim_execution_id FROM vnext_work_units WHERE work_unit_id=$1', [work.work_unit_id])).rows, [{ state: 'waiting', claim_execution_id: null }]);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=$1', [work.project_id])).rows[0].count, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE execution_id=$1', [successorExecution.execution_id])).rows[0].count, 0);
+
+    await store.beginExecution(successorClaim, successorExecution, authorize(successorExecution));
+    assert.deepEqual((await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [work.project_id])).rows, [{ execution_id: successorExecution.execution_id }]);
   } finally {
     if (work) await cleanup(pool, work.work_unit_id);
     await pool.end();

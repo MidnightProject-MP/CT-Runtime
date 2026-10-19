@@ -6,7 +6,7 @@ const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
 import { createMemoryStore as createMemoryStoreCore } from '../lib/vnext/memory-store.mjs';
-import { applyTurn, claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
+import { applyTurn, claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, reactivateWorkUnit, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
 
 function claimedExecution(workUnit, executionId, owner, now = new Date('2026-09-16T12:00:00.000Z'), claimExpiresAt = '2099-09-16T12:00:00.000Z') {
   const claimed = claimWorkUnit(workUnit, { executionId, owner, now, claimExpiresAt });
@@ -153,7 +153,7 @@ test('memory store rejects settlement when execution claim expiry diverges from 
   );
 });
 
-test('memory store rejects settlement after project authority expiry without a takeover', async () => {
+test('memory store rejects settlement of an expired authority without stop confirmation', async () => {
   const work = createWorkUnit({ workUnitId: 'wu-expired-settlement', objectiveRef: 'objective-expired-settlement', projectId: 'project-expired-settlement' });
   const first = claimedExecution(work, 'exec-expired-settlement', 'owner-a', new Date('2026-09-16T12:00:00.000Z'), '2026-09-16T11:59:59.000Z');
   const store = createMemoryStore({
@@ -184,7 +184,7 @@ test('kernel rejects a cross-project execution during a pure Work Unit transitio
   );
 });
 
-test('expired project authority is revoked before another Work Unit acquires the project', async () => {
+test('expired project authority is not taken over until recovery settles the attempt', async () => {
   const firstWork = createWorkUnit({ workUnitId: 'wu-expired-a', objectiveRef: 'objective-expired-a', projectId: 'project-expired' });
   const secondWork = createWorkUnit({ workUnitId: 'wu-expired-b', objectiveRef: 'objective-expired-b', projectId: 'project-expired' });
   const store = createMemoryStore({ workUnits: [firstWork, secondWork] });
@@ -193,11 +193,22 @@ test('expired project authority is revoked before another Work Unit acquires the
   await store.beginExecution(first.claimed, first.execution, { ref: first.execution.authorization_decision_ref });
 
   const second = claimedExecution(secondWork, 'exec-expired-b', 'owner-b', new Date('2026-09-16T12:00:02.000Z'), '2099-09-16T12:01:00.000Z');
-  await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
+  await assert.rejects(() => store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref }), /E_RECONCILIATION_REQUIRED/);
 
-  const snapshot = store.snapshot();
-  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-expired-a').state, 'expired');
-  assert.equal(snapshot.work.find((item) => item.work_unit_id === firstWork.work_unit_id).claim, null);
+  // Elapsed time is not stop confirmation: the predecessor attempt, its
+  // claim, and its authority survive the refusal, and no successor exists.
+  let snapshot = store.snapshot();
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-expired-a').state, 'running');
+  assert.equal(snapshot.work.find((item) => item.work_unit_id === firstWork.work_unit_id).claim.execution_id, 'exec-expired-a');
+  assert.equal(snapshot.authorities[0].execution_id, 'exec-expired-a');
+  assert.equal(snapshot.executions.length, 1);
+
+  const recovered = await store.recoverAttempt({ projectId: 'project-expired', workUnitId: 'wu-expired-a', executionId: 'exec-expired-a', fence: 1, resolution: 'not-launched' });
+  assert.equal(recovered.state, 'waiting');
+  assert.deepEqual(store.snapshot().authorities, []);
+
+  await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
+  snapshot = store.snapshot();
   assert.deepEqual(snapshot.authorities, [{
     project_id: 'project-expired',
     work_unit_id: 'wu-expired-b',
@@ -207,6 +218,28 @@ test('expired project authority is revoked before another Work Unit acquires the
     claim_expires_at: second.execution.claim_expires_at,
     authorization_decision_ref: second.execution.authorization_decision_ref,
   }]);
+});
+
+test('memory store refuses to supersede an expired Work Unit claim until recovery settles the attempt', async () => {
+  const work = createWorkUnit({ workUnitId: 'wu-stale-claim', objectiveRef: 'objective-stale-claim', projectId: 'project-stale-claim' });
+  const store = createMemoryStore({ workUnits: [work] });
+  const first = claimedExecution(work, 'exec-stale-a', 'owner-a', new Date('2026-09-16T12:00:00.000Z'), '2026-09-16T11:59:59.000Z');
+  await store.beginExecution(first.claimed, first.execution, { ref: first.execution.authorization_decision_ref });
+
+  const successor = claimedExecution(first.claimed, 'exec-stale-b', 'owner-b', new Date('2026-09-16T12:00:02.000Z'), '2099-09-16T12:05:00.000Z');
+  await assert.rejects(() => store.beginExecution(successor.claimed, successor.execution, { ref: successor.execution.authorization_decision_ref }), /E_RECONCILIATION_REQUIRED/);
+  const blocked = store.snapshot();
+  assert.equal(blocked.executions.length, 1);
+  assert.equal(blocked.work[0].claim.execution_id, 'exec-stale-a');
+
+  const recovered = await store.recoverAttempt({ projectId: 'project-stale-claim', workUnitId: work.work_unit_id, executionId: 'exec-stale-a', fence: 1, resolution: 'not-launched' });
+  assert.equal(recovered.state, 'waiting');
+
+  const retry = claimedExecution(reactivateWorkUnit(store.snapshot().work[0]), 'exec-stale-b', 'owner-b', new Date('2026-09-16T12:00:03.000Z'), '2099-09-16T12:05:00.000Z');
+  await store.beginExecution(retry.claimed, retry.execution, { ref: retry.execution.authorization_decision_ref });
+  const snapshot = store.snapshot();
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-stale-b').state, 'running');
+  assert.equal(snapshot.authorities[0].execution_id, 'exec-stale-b');
 });
 
 test('memory acquisition rejects a consistently forged project without changing durable state', async () => {
