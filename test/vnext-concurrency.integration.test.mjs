@@ -196,10 +196,17 @@ test('Neon recovery releases the reservation held by a stop-unconfirmed attempt'
     await store.createWorkUnit(workUnits[0]);
     await store.createWorkUnit(workUnits[1]);
     await store.beginExecution(claimants[0].claim, claimants[0].execution);
-    const expired = await expireClaim(pool, claimants[0].claim, claimants[0].execution);
+    await expireClaim(pool, claimants[0].claim, claimants[0].execution);
 
+    const sameProjectWork = createWorkUnit({ workUnitId: `wu-pool-recovery-same-${suffix}`, objectiveRef: `objective-pool-recovery-same-${suffix}`, projectId: claimants[0].claim.project_id });
+    await store.createWorkUnit(sameProjectWork);
+    const sameProjectClaim = claimWorkUnit(sameProjectWork, { executionId: `exec-pool-recovery-same-${suffix}`, owner: 'owner-same' });
+    const sameProjectExecution = startExecution(createExecution(sameProjectClaim, { executionId: sameProjectClaim.claim.execution_id, owner: 'owner-same' }));
+
+    // The stop-confirmation refusal is reported before the pool refusal, and
+    // the cross-project admission is refused by the pool the attempt holds.
+    await assert.rejects(() => store.beginExecution(sameProjectClaim, sameProjectExecution), /E_RECONCILIATION_REQUIRED/);
     await assert.rejects(() => store.beginExecution(claimants[1].claim, claimants[1].execution), /E_CONCURRENCY_LIMIT/);
-    await assert.rejects(() => store.beginExecution(expired.claim, expired.execution), /E_RECONCILIATION_REQUIRED/);
     assert.equal(await reservationCount(pool, projects), 1);
 
     const recovered = await store.recoverAttempt({ projectId: claimants[0].claim.project_id, workUnitId: workUnits[0].work_unit_id, executionId: claimants[0].execution.execution_id, fence: 1, resolution: 'not-launched' });
@@ -210,7 +217,7 @@ test('Neon recovery releases the reservation held by a stop-unconfirmed attempt'
     const rows = (await pool.query('SELECT project_id FROM vnext_concurrency_reservations WHERE project_id = ANY($1)', [projects])).rows;
     assert.deepEqual(rows, [{ project_id: claimants[1].claim.project_id }]);
   } finally {
-    await cleanup(pool, workUnits.map((work) => work.work_unit_id), projects);
+    await cleanup(pool, [...workUnits.map((work) => work.work_unit_id), `wu-pool-recovery-same-${suffix}`], projects);
     await pool.end();
   }
 });
