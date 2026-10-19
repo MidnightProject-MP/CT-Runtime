@@ -113,9 +113,9 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
   // move in one statement batch with one transaction timestamp.
   const expireClaim = async id => {
     if (!/^[A-Za-z0-9._:-]+$/.test(id)) throw new Error('unsafe test identifier');
-    await pool.query(`UPDATE vnext_work_units SET claim_expires_at=now()-interval '1 second' WHERE work_unit_id='${id}';
-      UPDATE vnext_executions SET claim_expires_at=now()-interval '1 second' WHERE work_unit_id='${id}' AND state IN ('created','running');
-      UPDATE vnext_project_mutation_authority SET claim_expires_at=now()-interval '1 second' WHERE work_unit_id='${id}';`);
+    await pool.query(`UPDATE vnext_work_units SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}';
+      UPDATE vnext_executions SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}' AND state IN ('created','running');
+      UPDATE vnext_project_mutation_authority SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}';`);
   };
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");

@@ -42,7 +42,7 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
       const saved=await pool.query('SELECT * FROM vnext_pilot_results WHERE execution_id=$1',[result.execution_id]);
       assert.equal(saved.rows[0].turn.learned,'Keep the useful observation.');
       assert.equal(await store().nextEligible(projectId),null);
-      await pool.query("UPDATE vnext_pilot_progress SET next_wake_at=clock_timestamp()-interval '1 second' WHERE work_unit_id=$1",[a.work_unit_id]);
+      await pool.query("UPDATE vnext_pilot_progress SET next_wake_at='2000-01-01T00:00:00Z' WHERE work_unit_id=$1",[a.work_unit_id]);
       await writeFile(path.join(dir,'proof.txt'),'verified result');
       const hash=createHash('sha256').update('verified result').digest('hex');
       const terminal=await run(store(),async ({workUnit})=>{assert.equal(workUnit.last_turn.learned,'Keep the useful observation.');return {objective_id:workUnit.objective_ref,disposition:'done',summary:'Outcome checked.',outcome_evidence:[{kind:'file',path:'proof.txt',sha256:hash}]};});

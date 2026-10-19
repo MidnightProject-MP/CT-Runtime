@@ -29,7 +29,7 @@ test('timeout kills the process group and never accepts an early result',async()
   // A killed descendant can briefly remain running or a zombie until the signal is delivered and PID 1 reaps it.
   let state=null;
   for (const deadline=Date.now()+2000;;) {
-   try {state=await readFile(`/proc/${pid}/stat`,'utf8');} catch(e) {assert.equal(e.code,'ENOENT');state=null;break;}
+   try {state=await readFile(`/proc/${pid}/stat`,'utf8');} catch(e) {assert.ok(e.code==='ENOENT'||e.code==='ESRCH',`unexpected /proc read failure: ${e.code}`);state=null;break;}
    if (/\) [ZX] /.test(state)||Date.now()>=deadline) break;
    await new Promise(r=>setTimeout(r,20));
   }
