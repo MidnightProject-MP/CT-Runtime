@@ -28,7 +28,7 @@ test('concurrency pool configuration is validated at construction', () => {
   assert.ok(createPilotStore({ pool: {}, maxConcurrency: 1 }));
 });
 
-test('reservations are recorded for every admitted attempt even without a configured cap', async () => {
+test('pool occupancy is derived from the authorities even without a configured cap', async () => {
   const workUnits = [projectWorkUnit('free-a'), projectWorkUnit('free-b'), projectWorkUnit('free-c')];
   const store = createMemoryStore({ workUnits });
   for (const [index, work] of workUnits.entries()) {
@@ -41,7 +41,7 @@ test('reservations are recorded for every admitted attempt even without a config
     { project_id: 'project-pool-free-b', work_unit_id: 'wu-pool-free-b', execution_id: 'exec-pool-free-1', fence: 1, owner: 'owner-1' },
     { project_id: 'project-pool-free-c', work_unit_id: 'wu-pool-free-c', execution_id: 'exec-pool-free-2', fence: 1, owner: 'owner-2' },
   ]);
-  assert.deepEqual(store.snapshot().reservations, reservations);
+  assert.equal(store.snapshot().authorities.length, 3);
 });
 
 test('an exhausted pool refuses admission without changing durable state', async () => {

@@ -5,91 +5,99 @@ Status: **enforced** (Milestone 1D, item D2). Adopted sequencing: D4 -> D2 -> D1
 contract; the stores enforce it. The stop-confirmation boundary
 (`docs/VNEXT-STOP-CONFIRMATION.md`) is preserved unchanged.
 
+## Scope record
+
+§5 of the milestone scope ordered "per-project bound first, store for later
+global cap". By explicit decision during D2 the pool is enforced as an
+aggregate **global capacity now**; per-project caps, fairness, and
+cross-project scheduling remain 2D. This paragraph is the explicit record.
+
 ## The rule
 
-The coordinator owns a **global execution pool**. An attempt occupies one slot
-for exactly as long as it holds its project mutation authority:
+The coordinator owns a global execution pool. **Occupancy is derived from the
+project mutation authority rows themselves**: one authority row is one occupied
+slot, for exactly as long as the attempt holds authority. There is no separate
+reservation table, so accounting can never orphan, drift, or disagree with the
+state that actually admits and settles attempts (the memory store has always
+derived reservations from reconstructed authorities; PostgreSQL now uses the
+same single source of truth).
 
-- admission writes one durable reservation for the admitted attempt (always —
-  accounting is part of the record, not an optional counter);
-- settlement of that attempt deletes it exactly once;
-- capacity is **coordinator configuration** (`maxConcurrency`, a positive
-  integer); when unset, reservations are still recorded and released but no
-  admission is refused for capacity.
+Consequences by construction:
 
-Because authority is already at most one per project, reservations are keyed by
-project: a slot cannot be double-held, and per-project bounds can compose with
-the aggregate cap later (2D).
+- an attempt admitted before any capacity was configured is counted as soon as
+  a bound exists — nothing to backfill, no upgrade window;
+- an expired, stop-unconfirmed predecessor keeps its authority (D4) and
+  therefore keeps its slot until recovery settles it;
+- settlement of an attempt deletes its authority, which is its release —
+  exactly once, in the settling transaction, guarded by the same identity
+  checks that already govern settlement.
 
-## Enforcement at admission
+## Durable pool policy (shared writers)
 
-`beginExecution` (both stores) refuses with
-`E_CONCURRENCY_LIMIT: the coordinator concurrency pool is exhausted` when the
-configured cap is reached. The refusal is ordered after the stop-confirmation
-refusals, so an attempt blocked by authority or reconciliation state reports
-that cause first. A refusal writes nothing:
+`maxConcurrency` is coordinator configuration, but the bound is durable so a
+shared database enforces one policy for every writer. Admission always takes
+the pool lock (`ct-runtime:vnext-concurrency-pool`) and resolves the policy row
+(`vnext_pool_policy`, `policy='coordinator-concurrency'`):
 
-- no Execution row, no claim, no authority, no reservation;
-- the Work Unit stays actionable and eligible;
-- retry is coordinator-owned: the next tick re-discovers it when a slot
-  releases. There is no hot retry and nothing to clean up.
+| Durable policy | Writer configured `maxConcurrency` | Result |
+| --- | --- | --- |
+| absent | set (`N`) | writer establishes `N`; enforced |
+| absent | unset | unbounded |
+| `N` | `N` | enforced |
+| `N` | unset | writer adopts `N`; enforced — unconfigured writers cannot bypass |
+| `N` | `M != N` | `E_POOL_POLICY_CONFLICT` (fail closed) |
+| `NULL` (operator-set unbounded) | set | `E_POOL_POLICY_CONFLICT` |
 
-## Locking and exactly-once release
+Capacity is enforced by counting authority rows under the pool lock; when the
+count reaches the effective capacity, admission refuses with
+`E_CONCURRENCY_LIMIT: the coordinator concurrency pool is exhausted`. The
+refusal is ordered after the stop-confirmation refusals, so an attempt blocked
+by authority or reconciliation state reports that cause first. A refusal writes
+nothing: no Execution row, no claim, no authority; the Work Unit stays
+actionable and eligible, and retry is coordinator-owned (the next tick
+rediscovers it when a slot releases).
 
-- Admission takes the project lock first and the pool lock second
-  (`ct-runtime:vnext-concurrency-pool`) for the count-and-reserve step. No
-  other path ever takes the pool lock, so the lock order is acyclic.
-- Release never takes the pool lock: settlement commits the reservation delete
-  with the authority delete, and a committed row is simply absent from the
-  next count.
-- Release points (all inside the settling transaction, guarded by exact
-  attempt identity `execution_id` + `fence` so a stale replay can never free a
-  successor's slot):
-  - settlement — `persistTurn` (both boundaries, including recovery mode);
-  - failure — `persistFailure`;
-  - supersession — `persistSuperseded` (including recovery mode);
-  - recovery — `recoverAttempt`.
-- Exactly-once follows from the authority: the reservation exists iff the
-  authority exists. An attempt whose stop is unconfirmed keeps its authority
-  (D4) and therefore keeps its slot until recovery settles it.
+The memory store is single-writer in-process; it enforces the same cap by
+construction and has no durable policy row.
 
-## Schema
+## Locking
 
-Migration `014_concurrency_reservations.sql` adds
-`vnext_concurrency_reservations` (project primary key, attempt binding, owner,
-`reserved_at`). A deferred constraint trigger rejects any reservation row that
-would commit without its matching project mutation authority; the check is
-per-row so it cannot be defeated by unrelated orphaned rows. Direct SQL cannot
-fabricate pool occupancy.
+- Admission takes the project lock first and the pool lock second. No other
+  path ever takes the pool lock, so the lock order is acyclic.
+- Release never takes the pool lock: settlement deletes the authority in its
+  transaction, and a committed delete is simply absent from the next count.
+
+## Inspectability
+
+`listReservations()` on both stores is a read-only view derived from the
+authorities (project, Work Unit, execution, fence, owner). It is an operator
+and test surface, not a control plane, and it cannot disagree with enforcement.
 
 ## Scope boundaries
 
-- The cap is global and coordinator-configured. Per-project caps, fairness, and
-  cross-project scheduling are deferred to 2D.
+- The cap is global; per-project caps and fairness are 2D.
 - Budget exhaustion (`E_BUDGET_EXHAUSTED`) is D3 and stays out of this pool.
-- Inspectability only: `listReservations()` on both stores is a read surface for
-  operators and tests, not a control plane.
 
 ## Enforcement map
 
-- `vnext-migrations/014_concurrency_reservations.sql` — table and deferred
-  authorization trigger.
-- `lib/vnext/neon-store.mjs` — option and validation, pool lock and count,
-  reservation insert after the authority insert, releases, `listReservations`.
-- `lib/vnext/memory-store.mjs` — reference implementation: reservations derived
-  from reconstructed authorities, released on the same four paths.
-- `lib/vnext/postgres-boundary.mjs`, `lib/vnext/memory-boundary.mjs` —
-  reservation delete inside `persistTurn`.
+- `vnext-migrations/014_pool_policy.sql` — durable policy table.
+- `lib/vnext/neon-store.mjs` — policy resolution under the pool lock, authority
+  count enforcement, `listReservations`.
+- `lib/vnext/memory-store.mjs` — in-process enforcement, derived
+  `listReservations`.
 - `lib/vnext/pilot-store.mjs`, `bin/vnext-pilot.mjs` — `maxConcurrency`
   passthrough from pilot config.
 
 ## Evidence
 
-- Exhaustion refusal with zero durable trace, concurrent cross-project
-  admission never exceeding the cap, release on each settlement path,
-  stop-unconfirmed slot retention until recovery, rollback atomicity when the
-  admission transaction fails after reserving, and rejection of forged
-  reservations: `test/vnext-concurrency.integration.test.mjs`.
+- Exhaustion refusal with zero durable trace; concurrent cross-project
+  admission never exceeding the cap; release on each settlement path;
+  stop-unconfirmed slot retention until recovery with refusal-cause ordering;
+  rollback atomicity when the admission transaction fails after the authority
+  insert; authorities predating the configured pool (active and
+  expired-unsettled) being counted with no backfill; the durable policy binding
+  every writer (adoption, fail-closed mismatch, explicit unbounded); coherent
+  slot release by authority removal:
+  `test/vnext-concurrency.integration.test.mjs`.
 - Same rules against the reference store, including reconstruction deriving
-  reservations from recovered authorities:
-  `test/vnext-concurrency.test.mjs`.
+  occupancy from recovered authorities: `test/vnext-concurrency.test.mjs`.
