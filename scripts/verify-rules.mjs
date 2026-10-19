@@ -6,6 +6,7 @@ export const requiredSuites = [
   'test/vnext-pilot.integration.test.mjs',
   'test/phase1-operating-boundary.test.mjs',
   'test/vnext-recoverable-dispatch.integration.test.mjs',
+  'test/vnext-cancellation.integration.test.mjs',
   'test/vnext-feedback-evaluation.integration.test.mjs',
   'test/vnext-project-authority-owner.integration.test.mjs',
   'test/vnext-project-authority.integration.test.mjs',
