@@ -67,8 +67,11 @@ construction and has no durable policy row.
 
 ## Locking
 
-- Admission takes the project lock first and the pool lock second. No other
-  path ever takes the pool lock, so the lock order is acyclic.
+- Policy initialization (`ensurePoolPolicy`) takes only the pool lock, in its
+  own transaction, and commits before that attempt's admission begins.
+- Admission takes the project lock first and the pool lock second. The order is
+  acyclic: initialization never holds a project lock, and release takes no pool
+  lock.
 - Release never takes the pool lock: settlement deletes the authority in its
   transaction, and a committed delete is simply absent from the next count.
 
