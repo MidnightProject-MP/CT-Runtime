@@ -662,6 +662,41 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.throws(()=>rpc('accept',{...decision,execution_id:'other-execution'}),/acceptance decision conflict/);
       assert.throws(()=>rpc('accept',{...decision,decision_ref:'review:thread-2',snapshot_digest:'b'.repeat(64)}),/not settled for acceptance/);
     });
+    await t.test('recorded acceptance replays after rotation or revocation; new decisions need current authority',()=>{
+      const acceptedWork=tag=>{
+        rpc('ingest',input(tag,`${tag}thread`,`Deliver ${tag}.`));const c=rpc('claim');assert.equal(checkpoint(c).work_state,'review');
+        const w=sql("SELECT work_unit_id FROM vnext_work_units WHERE state='review'")[0].work_unit_id;
+        const context=rpc('acceptance-context',{work_unit_id:w});assert.equal(context.status,'review-ready');
+        return {decision_ref:`review:${tag}`,work_unit_id:w,execution_id:c.execution_id,fence:c.fence,snapshot_digest:context.snapshot_digest};
+      };
+      reset();const old=authorize();
+      const rotatedDecision=acceptedWork('rotationReplay');
+      const rotatedAccepted=rpc('accept',{...rotatedDecision,authority:old});
+      assert.equal(rotatedAccepted.status,'accepted');assert.equal(rotatedAccepted.replay,false);
+      sql("UPDATE gas_email_acceptance_authorities SET authority_ref='reviewed:owner-acceptance:v2',authority_id='owner-acceptance:v2' WHERE instance_id='gas-test'");
+      const rotatedReplay=rpc('accept',{...rotatedDecision,authority:old});
+      assert.equal(rotatedReplay.status,'accepted');assert.equal(rotatedReplay.replay,true);assert.equal(rotatedReplay.accepted_at,rotatedAccepted.accepted_at);
+      assert.equal(sql('SELECT authority_id FROM gas_email_acceptances')[0].authority_id,'owner-acceptance:v1');
+      const rotationNew=acceptedWork('rotationNew');
+      assert.throws(()=>rpc('accept',{...rotationNew,authority:old}),/acceptance authority required/);
+      const rotationAccepted=rpc('accept',{...rotationNew,authority:'reviewed:owner-acceptance:v2'});
+      assert.equal(rotationAccepted.status,'accepted');assert.equal(rotationAccepted.replay,false);
+      assert.equal(sql("SELECT authority_id FROM gas_email_acceptances WHERE decision_ref='review:rotationNew'")[0].authority_id,'owner-acceptance:v2');
+
+      reset();const revokedAuthority=authorize();
+      const revokedDecision=acceptedWork('revocationReplay');
+      const revokedAccepted=rpc('accept',{...revokedDecision,authority:revokedAuthority});
+      assert.equal(revokedAccepted.status,'accepted');assert.equal(revokedAccepted.replay,false);
+      sql("DELETE FROM gas_email_acceptance_authorities WHERE instance_id='gas-test'");
+      const revokedReplay=rpc('accept',{...revokedDecision,authority:revokedAuthority});
+      assert.equal(revokedReplay.status,'accepted');assert.equal(revokedReplay.replay,true);assert.equal(revokedReplay.accepted_at,revokedAccepted.accepted_at);
+      const revocationNew=acceptedWork('revocationNew');
+      assert.throws(()=>rpc('accept',{...revocationNew,authority:revokedAuthority}),/acceptance authority required/);
+      sql("INSERT INTO gas_email_acceptance_authorities VALUES('gas-test','reviewed:owner-acceptance:v2','owner-acceptance:v2')");
+      const revocationAccepted=rpc('accept',{...revocationNew,authority:'reviewed:owner-acceptance:v2'});
+      assert.equal(revocationAccepted.status,'accepted');assert.equal(revocationAccepted.replay,false);
+      assert.equal(sql("SELECT authority_id FROM gas_email_acceptances WHERE decision_ref='review:revocationNew'")[0].authority_id,'owner-acceptance:v2');
+    });
     await t.test('stale decisions fail closed against superseded input, newer attempts and unknown work',()=>{
       reset();const authority=authorize();
       rpc('ingest',input('oldAttempt','sqlthread','Original requirement'));const c1=rpc('claim');
@@ -773,7 +808,8 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
           assert.equal(Number(sql('SELECT count(*)::int AS n FROM gas_email_acceptance_authorities')[0].n),0);
           assert.equal(sql('SELECT state FROM vnext_work_units')[0].state,'terminal');
           assert.equal(sql('SELECT authority_id FROM gas_email_acceptances')[0].authority_id,'owner-acceptance:v1');
-          assert.throws(()=>rpc('accept',payload),/acceptance authority required/);
+          const replay=rpc('accept',payload);
+          assert.equal(replay.status,'accepted');assert.equal(replay.replay,true);assert.equal(replay.accepted_at,accepted.accepted_at);
         }finally{await a.query('ROLLBACK').catch(()=>{});a.release();owner.release();}
         reset();authorize();
         rpc('ingest',input('rotateRace2'));const c2=rpc('claim');checkpoint(c2);
@@ -796,6 +832,8 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
           const rotated=rpc('accept',{...payload2,authority:'reviewed:owner-acceptance:v2'});
           assert.equal(rotated.status,'accepted');assert.equal(rotated.replay,false);
           assert.equal(sql('SELECT authority_id FROM gas_email_acceptances')[0].authority_id,'owner-acceptance:v2');
+          const replay=rpc('accept',payload2);
+          assert.equal(replay.status,'accepted');assert.equal(replay.replay,true);assert.equal(replay.accepted_at,rotated.accepted_at);
         }finally{await b.query('ROLLBACK').catch(()=>{});b.release();owner2.release();}
       }finally{await pool.end();}
     });
