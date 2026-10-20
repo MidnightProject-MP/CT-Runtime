@@ -281,7 +281,7 @@ var CT_GAS_VNEXT_EMAIL = (function () {
   function tick(){
     var trace={stage:'persisted-config'},result;
     try{result=tickRun(trace);}catch(e){trace.failure=safeFailure(e);result={status:'blocked'};}
-    var allowed=['disabled','busy','uncertain','blocked','budget','idle','model-failed','checkpointed','sent','superseded','intake-unavailable','delivery-first'];
+    var allowed=['disabled','busy','uncertain','blocked','budget','idle','model-failed','checkpointed','sent','superseded','cancelled','intake-unavailable','delivery-first'];
     var out={status:allowed.indexOf(result.status)>=0?result.status:'blocked',stage:trace.stage};
     if(trace.failure)out.failure=trace.failure;
     if(trace.intakeFailure)out.intakeFailure=trace.intakeFailure;

@@ -19,6 +19,60 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
   const reset=()=>sql('TRUNCATE gas_email_instances, vnext_work_units CASCADE; INSERT INTO gas_email_instances VALUES (\'gas-test\',\'gas-owner\',\'gas-client\',\'email-project\',\'midnight.project.mp@gmail.com\',\'midnightprojectantigravity@gmail.com\',true,\'reviewed:text-only:v1\')');
   const authorize=()=>{sql("INSERT INTO gas_email_acceptance_authorities VALUES ('gas-test','reviewed:owner-acceptance:v1','owner-acceptance:v1')");return 'reviewed:owner-acceptance:v1';};
   try {
+    const cancelAuthority=()=>{sql("INSERT INTO gas_email_cancellation_authorities(instance_id,authority_ref,authority_id) VALUES ('gas-test','owner:cancel:v1','cancel:v1')");return 'owner:cancel:v1';};
+    const cancelInput=(decision_ref='cancel:1')=>({...sql('SELECT work_unit_id,input_seq::int AS input_seq FROM gas_email_receipts JOIN vnext_pilot_inputs USING(input_seq) ORDER BY input_seq DESC LIMIT 1')[0],decision_ref,authority:'owner:cancel:v1'});
+    const prepare=()=>{reset();rpc('ingest',input('admission'));const c=rpc('claim');checkpoint(c);return c;};
+    const counts=()=>sql("SELECT (SELECT count(*)::int FROM gas_email_admissions) AS admissions,(SELECT count(*)::int FROM vnext_project_reconciliation_blocks) AS blocks,(SELECT state FROM gas_email_outbox LIMIT 1) AS state")[0];
+    await t.test('send admission binds exact settled envelope and immutable digests; replay never sends',()=>{
+      const c=prepare(),peek=rpc('delivery-peek');assert.deepEqual(counts(),{admissions:0,blocks:0,state:'pending'});
+      assert.throws(()=>rpc('delivery',{execution_id:'wrong'}),/stale delivery preparation/);
+      const sent=rpc('delivery',{execution_id:c.execution_id});assert.equal(sent.status,'send');assert.equal(sent.replay,false);assert.deepEqual(sent.envelope,peek.envelope);
+      const row=sql('SELECT * FROM gas_email_admissions')[0];
+      assert.equal(row.execution_id,c.execution_id);assert.equal(Number(row.fence),c.fence);assert.equal(row.instance_id,'gas-test');assert.equal(row.project_id,'email-project');assert.equal(row.message_id,`<${c.execution_id}@ct-runtime.invalid>`);
+      const expected=sql("SELECT encode(sha256(convert_to(o.envelope::text,'UTF8')),'hex') AS envelope_digest,encode(sha256(convert_to(jsonb_build_object('instance',a.instance_id,'execution_id',a.execution_id,'project_id',a.project_id,'work_unit_id',a.work_unit_id,'fence',a.fence,'input_seq',a.input_seq,'envelope_digest',a.envelope_digest,'message_id',a.message_id)::text,'UTF8')),'hex') AS admission_digest FROM gas_email_admissions a JOIN gas_email_outbox o USING(execution_id)")[0];
+      assert.equal(sent.envelope_digest,expected.envelope_digest);assert.equal(sent.admission_digest,expected.admission_digest);
+      for(const statement of ["UPDATE gas_email_admissions SET envelope_digest=repeat('0',64)",'DELETE FROM gas_email_admissions'])assert.throws(()=>sql(statement),/immutable email send admission/);
+      assert.deepEqual(rpc('delivery',{execution_id:c.execution_id}),{...sent,status:'reconcile',replay:true});
+      assert.deepEqual(rpc('delivery-peek'),{...sent,status:'reconcile',replay:true,providerReceipt:null});assert.deepEqual(counts(),{admissions:1,blocks:1,state:'admitted'});
+    });
+    await t.test('envelope, execution, fence and settlement mismatches fail before admission',()=>{
+      for(const statement of ["UPDATE gas_email_outbox SET envelope=jsonb_set(envelope,'{body}','\"tampered\"')","UPDATE vnext_executions SET owner='other'","UPDATE vnext_work_units SET fence=fence+1",'DELETE FROM gas_email_settlements']){
+        prepare();sql(statement);assert.throws(()=>rpc('delivery'),/delivery (binding|envelope mismatch)/);assert.deepEqual(counts(),{admissions:0,blocks:0,state:'pending'});
+      }
+    });
+    await t.test('admission and reconciliation insert failures roll back the entire send boundary',()=>{
+      for(const table of ['gas_email_admissions','vnext_project_reconciliation_blocks']){
+        prepare();sql(`CREATE FUNCTION injected_admission_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected admission failure'; END $$; CREATE TRIGGER injected_failure BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION injected_admission_failure()`);
+        try{assert.throws(()=>rpc('delivery'),/injected admission failure/);assert.deepEqual(counts(),{admissions:0,blocks:0,state:'pending'});}
+        finally{sql(`DROP TRIGGER injected_failure ON ${table}; DROP FUNCTION injected_admission_failure()`);}
+        assert.equal(rpc('delivery').status,'send');
+      }
+    });
+    await t.test('cancellation requires separate authority and exact replay survives rotation and revocation',()=>{
+      prepare();const payload=cancelInput();authorize();
+      for(const authority of [undefined,'reviewed:text-only:v1','reviewed:owner-acceptance:v1'])assert.throws(()=>rpc('cancel',{...payload,authority}),/cancellation authority required/);
+      cancelAuthority();const recorded=rpc('cancel',payload);assert.equal(recorded.state,'pending');assert.equal(recorded.replay,false);
+      sql("UPDATE gas_email_cancellation_authorities SET authority_ref='owner:cancel:v2',authority_id='cancel:v2'");
+      assert.deepEqual(rpc('cancel',payload),{...recorded,replay:true});
+      sql('DELETE FROM gas_email_cancellation_authorities');assert.deepEqual(rpc('cancel',{...payload,authority:undefined}),{...recorded,replay:true});
+      for(const change of [{input_seq:payload.input_seq+1},{work_unit_id:'other'}])assert.throws(()=>rpc('cancel',{...payload,...change}),/cancellation decision conflict/);
+      assert.throws(()=>rpc('cancel',{...payload,decision_ref:'new'}),/cancellation authority required/);
+      assert.equal(sql('SELECT authority_id FROM gas_email_cancellations')[0].authority_id,'cancel:v1');
+      assert.equal(rpc('delivery').status,'cancelled');assert.deepEqual(counts(),{admissions:0,blocks:0,state:'superseded'});
+    });
+    await t.test('after-admission cancellation preserves uncertainty; ingest supersedes pending intent only',()=>{
+      prepare();cancelAuthority();const sent=rpc('delivery'),payload=cancelInput(),before=sql('SELECT * FROM gas_email_outbox');
+      const late=rpc('cancel',payload);assert.equal(late.state,'after_admission');assert.equal(late.admission_execution_id,sent.execution_id);assert.equal(late.admitted_at,sent.admitted_at);
+      assert.deepEqual(sql('SELECT * FROM gas_email_outbox'),before);assert.deepEqual(counts(),{admissions:1,blocks:1,state:'admitted'});assert.equal(rpc('delivery').status,'reconcile');
+      prepare();cancelAuthority();const old=cancelInput();rpc('cancel',old);rpc('ingest',input('newer'));
+      assert.equal(rpc('cancel',old).state,'superseded');assert.equal(rpc('cancel',cancelInput('cancel:2')).state,'pending');
+      assert.deepEqual(sql('SELECT state FROM gas_email_cancellations ORDER BY input_seq').map(x=>x.state),['superseded','pending']);
+    });
+    await t.test('GAS intercepts cancellation between preparation and admission with zero sends',()=>{
+      reset();cancelAuthority();let intercepted=false;
+      const f=gasEmailFixture((op,data)=>{if(op==='delivery'&&!intercepted){intercepted=true;rpc('cancel',cancelInput());}return rawRpc(op,data);});
+      f.add('cancelrunner');assert.equal(f.tick().status,'cancelled');assert.equal(intercepted,true);assert.equal(f.sends,0);assert.deepEqual(counts(),{admissions:0,blocks:0,state:'superseded'});
+    });
     await t.test('closed diagnostics, stale fence rollback and old runtime compatibility',()=>{
       for(const legacy of [false,true]){
         reset();rpc('ingest',input('diagnostics'));const c=rpc('claim');
@@ -838,6 +892,28 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
           assert.equal(replay.status,'accepted');assert.equal(replay.replay,true);assert.equal(replay.accepted_at,rotated.accepted_at);
         }finally{await b.query('ROLLBACK').catch(()=>{});b.release();owner2.release();}
       }finally{await pool.end();}
+    });
+    await t.test('native admission/cancellation races serialize send, replay and competing decisions', {skip:!process.env.TEST_DATABASE_URL},async()=>{
+      const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});
+      const auth=async client=>{await client.query('BEGIN');await client.query("SELECT set_config('request.jwt.claims',$1,true)",[JSON.stringify({sub:'gas-owner',aud:'gas-client',iss:'https://accounts.google.com',exp:4102444800})]);await client.query('SET LOCAL ROLE authenticated');};
+      const call=(client,op,data)=>client.query('SELECT gas_email_rpc($1,$2,$3::jsonb) AS r',['gas-test',op,JSON.stringify(data)]);
+      try{for(const mode of ['two-admissions','cancel-first','delivery-first','same-decision','different-decision']){
+        const c=prepare();cancelAuthority();const payload=cancelInput(),delivery={execution_id:c.execution_id};
+        const first=mode==='cancel-first'||mode.endsWith('decision')?'cancel':'delivery';
+        const second=mode==='two-admissions'||mode==='cancel-first'?'delivery':'cancel';
+        const a=await pool.connect(),b=await pool.connect();
+        try{
+          await auth(a);await auth(b);const x=(await call(a,first,first==='cancel'?payload:delivery)).rows[0].r;
+          let finished=false;const pending=call(b,second,second==='delivery'?delivery:{...payload,decision_ref:mode==='different-decision'?'cancel:other':payload.decision_ref}).then(r=>{finished=true;return r.rows[0].r;},e=>{finished=true;return e;});
+          await new Promise(resolve=>setTimeout(resolve,100));assert.equal(finished,false,'competing operation must wait');await a.query('COMMIT');const y=await pending;
+          if(mode==='different-decision'){assert.match(y.message,/cancellation already pending/);await b.query('ROLLBACK');}
+          else{await b.query('COMMIT');assert.equal(y.status,{'two-admissions':'reconcile','cancel-first':'cancelled','delivery-first':'after-admission','same-decision':'cancelled'}[mode]);}
+          if(mode==='two-admissions'){assert.equal(x.status,'send');assert.equal(y.replay,true);assert.equal(y.admission_digest,x.admission_digest);}
+          if(mode==='same-decision')assert.equal(y.replay,true);
+          assert.deepEqual(counts(),['two-admissions','delivery-first'].includes(mode)?{admissions:1,blocks:1,state:'admitted'}:{admissions:0,blocks:0,state:mode==='cancel-first'?'superseded':'pending'});
+          assert.equal(sql('SELECT count(*)::int AS n FROM gas_email_cancellations')[0].n,mode==='two-admissions'?0:1);
+        }finally{await a.query('ROLLBACK');await b.query('ROLLBACK');a.release();b.release();}
+      }}finally{await pool.end();}
     });
     await t.test('native transaction races: input-first supersedes; admission-first blocks claims, preserves input', {skip:!process.env.TEST_DATABASE_URL},async()=>{
       const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,max:3});

@@ -53,6 +53,85 @@ live gates. Do not label arbitrary/unverified mail. Attachments are ignored; a
 plain-text MIME part and valid Message-ID are required. UTF-8/ASCII encoded-word
 subjects are decoded; unsupported encodings remain queued for review.
 
+## Increment A: send admission and cancellation (010)
+
+`deploy/gas-email/010_send_admission.sql` is a forward-only upgrade after 009;
+the pinned schema, bootstrap, and migrations 002–009 remain unchanged. This is
+source/test coverage, not a live deployment or activation attestation. The upgrade
+does **not** backfill admission receipts for legacy admitted outboxes: those remain
+reconciliation-only evidence and must never be sent again.
+
+`delivery-peek` is read-only preparation, not permission to send. Only a committed
+`delivery({execution_id})` response with `status: send` authorizes the prepared
+send. Admission verifies the exact instance/project/Work Unit/execution/fence and
+captured input against the successful execution, current Work Unit, and settlement.
+It reconstructs the frozen envelope from the input receipt and settled turn, including
+the deterministic `<execution_id@ct-runtime.invalid>` Message-ID. In one transaction
+it inserts an immutable `gas_email_admissions` receipt, creates one reconciliation
+block, and changes the outbox to `admitted`. Any failure rolls all three back.
+
+The receipt holds a SHA-256 digest of PostgreSQL's UTF-8 JSONB envelope text and a
+SHA-256 digest of the JSONB binding (instance, execution_id, project_id, work_unit_id,
+fence, input_seq, envelope_digest, message_id), plus admission time. Admitted replay
+returns `reconcile`, never another `send`; receipt digests/time remain unchanged.
+A lost admission response therefore leaves uncertainty, not permission to retry
+the external effect. Provider evidence and exact readback still govern settlement.
+
+Cancellation is a separate authenticated RPC operation:
+
+```js
+cancel({decision_ref, work_unit_id, input_seq, authority})
+```
+
+Before a **new** decision, an owner must separately register the instance's
+`gas_email_cancellation_authorities` row: `instance_id`, current `authority_ref`,
+and non-secret audit `authority_id` (with default `provisioned_at`). This owner-only
+registration is not supplied by the execution grant or acceptance registration.
+Use an independently issued cancellation credential; do not place its value in
+logs, events, or documentation. Rotation updates that row and revocation removes
+it. The authenticated runtime role cannot write this table directly. Registration
+and the `cancel` RPC are not automatic effects of receiving a cancellation email.
+
+Owner-side registration uses a parameterized statement (parameters are supplied
+through the owner's credential-handling path, never interpolated into logs):
+
+```sql
+INSERT INTO public.gas_email_cancellation_authorities
+  (instance_id, authority_ref, authority_id)
+VALUES ($1, $2, $3);
+```
+
+Only one pending cancellation is permitted per Work Unit, and only one decision
+per captured snapshot.
+
+The decision identity binds exactly to Work Unit and captured `input_seq`. Exact
+replay returns the recorded decision even after authority rotation/revocation;
+divergent binding under the same reference is rejected. A different reference
+cannot create a second decision for the same snapshot. States mean:
+
+- `pending`: cancellation committed before admission. Delivery closes that
+  snapshot's pending outbox as `superseded`, returns `cancelled`, and sends nothing;
+  it creates neither an admission receipt nor a reconciliation block.
+- `after_admission` (RPC status `after-admission`): the send was already admitted.
+  The decision records its admission execution/time but leaves outbox and block
+  intact. **Cancellation cannot stop an admitted send or clear its uncertainty.**
+- `superseded`: newer input overtook the pending snapshot. Ingest supersedes a
+  pending intent, allowing a new cancellation for the next snapshot; replay of the
+  old decision reports its superseded state. It does not cancel the new input.
+
+Project serialization decides cancellation-versus-delivery races. The GAS runner
+treats `cancelled` as a no-send outcome even when cancellation arrives between
+preparation and admission. Cancellation does not terminate model computation or
+claim to retract a delivered message.
+
+The integration suite covers binding/digest replay, immutable admission receipts,
+binding mismatches, transaction rollback, authority rotation/revocation,
+cancellation supersession, and zero-send runner behavior. Native PostgreSQL tests
+cover competing admissions and cancellation writers and both cancellation/send
+orderings. The upgrade suite covers the 009-to-010 boundary without receipt
+backfill. PGlite skips native concurrency tests; passing it alone does not qualify
+the native concurrency behavior.
+
 ## Durable state and concurrency
 
 All per-message, turn, watermark, result, failure, and outbox state is in Neon.
