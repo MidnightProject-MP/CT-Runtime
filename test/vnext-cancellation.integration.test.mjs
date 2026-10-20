@@ -103,8 +103,7 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       const decision = { ref: `cancel:${randomUUID()}` };
       const intent = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: before.work_revision, decision });
       assert.equal(intent.state, 'pending');
-      await assert.rejects(store().assertEffectAdmissible({ projectId: project, workUnitId: id, workRevision: before.work_revision }), /E_CANCELLED/);
-      assert.equal(await store().assertEffectAdmissible({ projectId: project, workUnitId: id, workRevision: before.work_revision + 1 }), true);
+      await assert.rejects(store().assertEffectAdmissible({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id }), /E_CANCELLED/);
       await expireClaim(id);
       const summaries = await recoverDispatches({ store: store(), projectId: project, stateDirectory: attemptsDirectory });
       assert.equal(summaries.length, 1);
@@ -124,6 +123,27 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       // Effect uncertainty blocks a conflicting work unit in the same project.
       const second = await submit(project, `other-${randomUUID()}`);
       await assert.rejects(admit(store(), second.work_unit_id), /E_RECONCILIATION_REQUIRED/);
+    });
+
+    await t.test('effect admission guards the current revision and project uncertainty', async () => {
+      const project = `effect-admission-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(project);
+      const before = await store().reconstruct({ work_unit_id: id });
+      const begun = await admit(store(), id);
+      const guard = () => store().assertEffectAdmissible({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id });
+      assert.equal(await guard(), true);
+      assert.equal(await guard(), true);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0].c, 0);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_cancellation_intents WHERE work_unit_id=$1', [id])).rows[0].c, 0);
+
+      await store().reviseWorkRequirements(id, { expectedRevision: before.work_revision, requirements: { finish: 'A newer authorized deliverable.' } });
+      await assert.rejects(guard(), /E_STALE_REVISION/);
+
+      const blockedProject = `effect-blocked-${randomUUID()}`;
+      const blocked = await submit(blockedProject);
+      const blockedBegun = await admit(store(), blocked.work_unit_id);
+      await pool.query("INSERT INTO vnext_project_reconciliation_blocks(project_id,work_unit_id,execution_id,fence,reason) VALUES ($1,$2,$3,$4,'external-effect-uncertain')", [blockedProject, blocked.work_unit_id, blockedBegun.execution.execution_id, blockedBegun.execution.fence]);
+      await assert.rejects(store().assertEffectAdmissible({ projectId: blockedProject, workUnitId: blocked.work_unit_id, executionId: blockedBegun.execution.execution_id }), /E_RECONCILIATION_REQUIRED/);
     });
 
     await t.test('reconciliation resolves uncertainty without revoking cancellation', async () => {
