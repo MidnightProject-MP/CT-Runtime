@@ -145,6 +145,31 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       }
     });
 
+    await t.test('cancellation recorded after an uncertain settlement still governs reconciliation', async () => {
+      for (const resolution of ['no_effect', 'effect_applied']) {
+        const project = `cancel-after-uncertain-${resolution}-${randomUUID()}`;
+        const { work_unit_id: id } = await submit(project);
+        const before = await store().reconstruct({ work_unit_id: id });
+        const begun = await admit(store(), id);
+        await store().persistFailure(failExecution(begun.workUnit, begun.execution, { reconciliationRequired: true }));
+        assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0].c, 1);
+        // The attempt is already settled and unclaimed, so cancellation is idle:
+        // it consumes its intent without naming a consuming execution.
+        const recorded = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: before.work_revision, decision: { ref: `cancel:${randomUUID()}` } });
+        assert.equal(recorded.state, 'cancelled');
+        assert.equal((await pool.query('SELECT consumed_by_execution_id FROM vnext_cancellation_intents WHERE work_unit_id=$1 AND work_revision=$2', [id, before.work_revision])).rows[0].consumed_by_execution_id, null);
+        const reconciled = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: begun.execution.fence, resolution });
+        assert.equal(reconciled.state, 'cancelled');
+        assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'cancelled');
+        assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0].c, 0);
+        assert.equal(await store().nextEligible(project), null);
+        await assert.rejects(admit(store(), id), /cancelled|changed/);
+        await store().reviseWorkRequirements(id, { expectedRevision: before.work_revision, requirements: { finish: 'A new authorized deliverable.' } });
+        assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'actionable');
+        assert.equal(await store().nextEligible(project), id);
+      }
+    });
+
     await t.test('later revisions can be cancelled while earlier receipts remain replayable', async () => {
       const project = `cancel-revisions-${randomUUID()}`;
       const { work_unit_id: id } = await submit(project);
