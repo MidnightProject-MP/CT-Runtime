@@ -10,7 +10,7 @@ import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
 import { runPilotOnce } from '../lib/vnext/pilot.mjs';
 import { recoverDispatches } from '../lib/vnext/dispatch-recovery.mjs';
 import { createCommandExecutor } from '../lib/vnext/command-executor.mjs';
-import { claimWorkUnit, createExecution, startExecution } from '../lib/vnext/kernel.mjs';
+import { claimWorkUnit, createExecution, failExecution, startExecution } from '../lib/vnext/kernel.mjs';
 
 const next = objective_id => ({ objective_id, disposition: 'continue', summary: 'Checked increment.', continuation: { mode: 'immediate', next_action: 'Check again.' } });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -34,12 +34,21 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
   await writeFile(path.join(dir, 'identity.md'), 'Cancel only through an authorized durable intent.');
   const attemptsDirectory = path.join(dir, 'attempts');
   const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: async () => false, cancellationVerifier: async (decision, context) => decision.ref.startsWith('cancel:') && context.workRevision > 0, ...options });
-  const submit = projectId => store().submit({ projectId, threadId: 'thread', receiptId: `receipt-${randomUUID()}`, message: 'Cancel-safe input.' });
+  const submit = (projectId, threadId = 'thread') => store().submit({ projectId, threadId, receiptId: `receipt-${randomUUID()}`, message: 'Cancel-safe input.' });
   const expireClaim = async id => {
     if (!/^[A-Za-z0-9._:-]+$/.test(id)) throw new Error('unsafe test identifier');
     await pool.query(`UPDATE vnext_work_units SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}';
       UPDATE vnext_executions SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}' AND state IN ('created','running');
       UPDATE vnext_project_mutation_authority SET claim_expires_at='2000-01-01T00:00:00Z' WHERE work_unit_id='${id}';`);
+  };
+  const cancelWithUncertainty = async (project, id, expectedRevision) => {
+    const begun = await admit(store(), id);
+    const decision = { ref: `cancel:${randomUUID()}` };
+    const recorded = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision, decision });
+    assert.equal(recorded.state, 'pending');
+    const settled = await store().persistFailure(failExecution(begun.workUnit, begun.execution, { reconciliationRequired: true }));
+    assert.equal(settled.state, 'cancelled');
+    return { begun, decision, settled };
   };
   try {
     await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
@@ -108,7 +117,57 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       const execution = (await pool.query('SELECT state,failure FROM vnext_executions WHERE execution_id=$1', [begun.execution.execution_id])).rows[0];
       assert.equal(execution.state, 'failed');
       assert.equal(execution.failure.reason, 'cancelled');
+      assert.equal(execution.failure.reconciliation_required, true);
+      assert.equal(after.failure.reconciliation_required, true);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1 AND execution_id=$2', [project, begun.execution.execution_id])).rows[0].c, 1);
       assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0].c, 0);
+      // Effect uncertainty blocks a conflicting work unit in the same project.
+      const second = await submit(project, `other-${randomUUID()}`);
+      await assert.rejects(admit(store(), second.work_unit_id), /E_RECONCILIATION_REQUIRED/);
+    });
+
+    await t.test('reconciliation resolves uncertainty without revoking cancellation', async () => {
+      for (const resolution of ['no_effect', 'effect_applied']) {
+        const project = `cancel-reconcile-${resolution}-${randomUUID()}`;
+        const { work_unit_id: id } = await submit(project);
+        const before = await store().reconstruct({ work_unit_id: id });
+        const { begun } = await cancelWithUncertainty(project, id, before.work_revision);
+        const reconciled = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: begun.execution.fence, resolution });
+        assert.equal(reconciled.state, 'cancelled');
+        assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'cancelled');
+        assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0].c, 0);
+        assert.equal(await store().nextEligible(project), null);
+        await assert.rejects(admit(store(), id), /cancelled|changed/);
+        // Reconciliation alone grants no new admission; an authorized revision does.
+        await store().reviseWorkRequirements(id, { expectedRevision: 1, requirements: { finish: 'A new authorized deliverable.' } });
+        assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'actionable');
+        assert.equal(await store().nextEligible(project), id);
+      }
+    });
+
+    await t.test('later revisions can be cancelled while earlier receipts remain replayable', async () => {
+      const project = `cancel-revisions-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(project);
+      const first = { ref: `cancel:${randomUUID()}` };
+      const firstResult = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: 1, decision: first });
+      assert.equal(firstResult.created, true);
+      assert.equal(firstResult.state, 'cancelled');
+      await store().reviseWorkRequirements(id, { expectedRevision: 1, requirements: { finish: 'Second authorized deliverable.' } });
+      assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'actionable');
+      const second = { ref: `cancel:${randomUUID()}` };
+      const secondResult = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: 2, decision: second });
+      assert.equal(secondResult.created, true);
+      assert.equal(secondResult.state, 'cancelled');
+      const replay = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: 1, decision: first });
+      assert.equal(replay.created, false);
+      assert.equal(replay.work_revision, 1);
+      assert.equal(replay.state, 'cancelled');
+      assert.equal((await store().getCancellationIntent(id)).work_revision, 2);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_cancellation_intents WHERE work_unit_id=$1', [id])).rows[0].c, 2);
+      await store().reviseWorkRequirements(id, { expectedRevision: 2, requirements: { finish: 'Third authorized deliverable.' } });
+      const third = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: 3, decision: { ref: `cancel:${randomUUID()}` } });
+      assert.equal(third.created, true);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_cancellation_intents WHERE work_unit_id=$1', [id])).rows[0].c, 3);
     });
 
     await t.test('a cancellation racing settlement wins and accepts no result', async () => {
