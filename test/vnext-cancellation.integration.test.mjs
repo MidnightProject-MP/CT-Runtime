@@ -146,6 +146,51 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       await assert.rejects(store().assertEffectAdmissible({ projectId: blockedProject, workUnitId: blocked.work_unit_id, executionId: blockedBegun.execution.execution_id }), /E_RECONCILIATION_REQUIRED/);
     });
 
+    await t.test('effect admission refuses an expired, stop-unconfirmed attempt', async () => {
+      const project = `effect-expired-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(project);
+      const begun = await admit(store(), id);
+      const guard = () => store().assertEffectAdmissible({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id });
+      assert.equal(await guard(), true);
+      await expireClaim(id);
+      await assert.rejects(guard(), /E_AUTHORITY_EXPIRED/);
+      assert.equal((await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [begun.execution.execution_id])).rows[0].state, 'running');
+      assert.equal((await pool.query('SELECT claim_execution_id FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0].claim_execution_id, begun.execution.execution_id);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0].c, 1);
+    });
+
+    await t.test('effect admission refuses a missing or mismatched authority', async () => {
+      const missingProject = `effect-missing-authority-${randomUUID()}`;
+      const missing = await submit(missingProject);
+      const missingBegun = await admit(store(), missing.work_unit_id);
+      await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [missingProject]);
+      await assert.rejects(store().assertEffectAdmissible({ projectId: missingProject, workUnitId: missing.work_unit_id, executionId: missingBegun.execution.execution_id }), /E_AUTHORITY_UNAVAILABLE/);
+
+      const project = `effect-mismatched-authority-${randomUUID()}`;
+      const first = await submit(project);
+      const begun = await admit(store(), first.work_unit_id);
+      const other = await submit(project, `other-${randomUUID()}`);
+      const otherExecution = `exec-${randomUUID()}`;
+      const expires = new Date(Date.now() + 3600000).toISOString();
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("UPDATE vnext_work_units SET state='waiting',fence=1,claim_execution_id=$2,claim_owner='test-owner',claim_fence=1,claim_expires_at=$3 WHERE work_unit_id=$1", [other.work_unit_id, otherExecution, expires]);
+        await client.query("INSERT INTO vnext_executions(execution_id,work_unit_id,project_id,owner,fence,state,started_at,claim_expires_at,authorization_decision_ref,attempt,admission) VALUES ($1,$2,$3,'test-owner',1,'running',clock_timestamp(),$4,$5,1,'{}'::jsonb)", [otherExecution, other.work_unit_id, project, expires, `test:${otherExecution}`]);
+        await client.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [project]);
+        await client.query("INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at,authorization_decision_ref) VALUES ($1,$2,$3,1,'test-owner',$4,$5)", [project, other.work_unit_id, otherExecution, expires, `test:${otherExecution}`]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+      await assert.rejects(store().assertEffectAdmissible({ projectId: project, workUnitId: first.work_unit_id, executionId: begun.execution.execution_id }), /E_AUTHORITY_UNAVAILABLE/);
+      assert.equal((await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [begun.execution.execution_id])).rows[0].state, 'running');
+      assert.equal((await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0].execution_id, otherExecution);
+    });
+
     await t.test('reconciliation resolves uncertainty without revoking cancellation', async () => {
       for (const resolution of ['no_effect', 'effect_applied']) {
         const project = `cancel-reconcile-${resolution}-${randomUUID()}`;
