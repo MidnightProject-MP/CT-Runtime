@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: '22.14.0'
   POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
@@ -15,6 +19,7 @@ env:
 jobs:
   core:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: public.ecr.aws/docker/library/postgres:16.9-bookworm
@@ -72,22 +77,10 @@ jobs:
           END
           $$;
           SQL
-      - name: Run all local tests
-        run: npm test
-      - name: Apply migrations explicitly
-        run: npm run migrate -- --database-url "$POSTGRES_URL"
-      - name: Run native PostgreSQL integration suites in isolated databases
+      - name: Verify core (local tests, migrations, PostgreSQL suites, cross-process proof)
+        run: npm run verify:core
+      - name: Verify GAS stack in isolated native PostgreSQL databases
         run: |
-          node scripts/run-postgres-suite.mjs test/postgres.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/observer.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-neon.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-a9-postgres.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-pilot.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-feedback-evaluation.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-project-authority-owner.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-project-authority.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-project-authority-upgrade.integration.test.mjs
-          node scripts/run-postgres-suite.mjs test/vnext-postgres-isolation.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/gas-email.integration.test.mjs
           node scripts/run-postgres-suite.mjs test/gas-email-bootstrap.test.mjs
           node scripts/run-postgres-suite.mjs test/gas-email-delivery-upgrade.test.mjs

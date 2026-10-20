@@ -22,12 +22,17 @@ test('timeout kills the process group and never accepts an early result',async()
  const dir=await mkdtemp(path.join(tmpdir(),'timeout-'));
  try {
   const script=path.join(dir,'worker.mjs');
-  await writeFile(script,`import {writeFileSync} from 'node:fs';import {spawn} from 'node:child_process';writeFileSync(process.env.CT_VNEXT_RESULT_FILE,'{}');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writeFileSync(${JSON.stringify(path.join(dir,'pid'))},String(c.pid));setInterval(()=>{},1000);`);
+  await writeFile(script,`import {writeFileSync} from 'node:fs';import {spawn} from 'node:child_process';const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writeFileSync(${JSON.stringify(path.join(dir,'pid'))},String(c.pid));writeFileSync(process.env.CT_VNEXT_RESULT_FILE,'{}');setInterval(()=>{},1000);`);
   const execute=createCommandExecutor({command:process.execPath,args:[script],stateDirectory:dir});
-  await assert.rejects(execute({execution:{execution_id:'test-timeout'},workspaceRoot:dir,timeoutMs:250}),/timed out/);
+  await assert.rejects(execute({execution:{execution_id:'test-timeout'},workspaceRoot:dir,timeoutMs:2000}),/timed out/);
   const pid=Number(await readFile(path.join(dir,'pid'),'utf8'));
-  // A killed descendant can briefly remain as a zombie until PID 1 reaps it.
-  let state='';try {state=await readFile(`/proc/${pid}/stat`,'utf8');}catch(e){assert.equal(e.code,'ENOENT');}
-  if(state) assert.match(state,/\) [ZX] /);
+  // A killed descendant can briefly remain running or a zombie until the signal is delivered and PID 1 reaps it.
+  let state=null;
+  for (const deadline=Date.now()+2000;;) {
+   try {state=await readFile(`/proc/${pid}/stat`,'utf8');} catch(e) {assert.ok(e.code==='ENOENT'||e.code==='ESRCH',`unexpected /proc read failure: ${e.code}`);state=null;break;}
+   if (/\) [ZX] /.test(state)||Date.now()>=deadline) break;
+   await new Promise(r=>setTimeout(r,20));
+  }
+  if(state) assert.match(state,/\) [ZX] /,`descendant ${pid} still running after timeout`);
  } finally {await rm(dir,{recursive:true,force:true});}
 });

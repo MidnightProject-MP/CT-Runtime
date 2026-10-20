@@ -10,6 +10,12 @@ import { aggregateOperationalCatalog, applyRoutingPolicySignals, createInference
 const at = '2026-08-31T10:00:00.000Z';
 const record = (reference, purpose, outcome = 'success', extra = {}) => createInferenceRecord({ workOrder: 'work-identity', executionId: extra.executionId || 'run-identity', agent: 'luna', role: 'implementation-worker', taskPurpose: purpose, modelReference: reference, attempt: 1, maxRetries: 0, startedAt: at, finishedAt: '2026-08-31T10:00:01.000Z', failure: outcome === 'failure' ? (extra.failure || 'unknown') : null, cost: extra.cost, quota: extra.quota });
 
+test('an explicit monotonic latency measurement overrides wall-clock derivation', () => {
+  const fields = { workOrder: 'work-latency', executionId: 'run-latency', agent: 'luna', taskPurpose: 'implementation', modelReference: 'provider/model', attempt: 1, maxRetries: 0, startedAt: '2026-08-31T10:00:05.000Z', finishedAt: '2026-08-31T10:00:01.000Z' };
+  assert.equal(createInferenceRecord({ ...fields, latencyMs: 42 }).timing.latencyMs, 42);
+  assert.throws(() => createInferenceRecord(fields), /latencyMs must be a non-negative finite number/);
+});
+
 test('failure taxonomy is exact, mapped to Foundry, and terminal account/request/context failures do not retry', () => {
   assert.deepEqual(INFERENCE_FAILURE_CLASSES, ['rate_limited', 'quota_exhausted', 'insufficient_balance', 'model_unavailable', 'provider_unavailable', 'context_exceeded', 'malformed_or_invalid_request', 'transient_provider_error', 'model/output_failure', 'unknown']);
   const cases = [

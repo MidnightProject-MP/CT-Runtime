@@ -8,11 +8,13 @@ import { testPool } from './pilot-test-pool.mjs';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
 import { runPilotOnce } from '../lib/vnext/pilot.mjs';
+import { testAcceptanceAuthority } from './vnext-test-acceptance.mjs';
+import { verifyTurnEvidenceIntegrity } from '../lib/objective-turn.mjs';
 
 const authority = {
   authorizeExecution: async ({execution}) => ({ref:`test:${execution.execution_id}`}),
   verifyExecution: async (d,{execution}) => d.ref === `test:${execution.execution_id}`,
-  authorizeTerminal: async () => true,
+  authorizeTerminal: async () => ({ ref: "acceptance:pilot-test-accepter" }),
 };
 const next = objective_id => ({objective_id,disposition:'continue',summary:'Verified one useful change.',learned:'Keep the useful observation.',continuation:{mode:'immediate',next_action:'Check next consequence.'}});
 
@@ -22,11 +24,13 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
   await writeFile(path.join(dir,'identity.md'),'Celestan: reconstruct, do, check, persist.');
   await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
   await migrateVNext({pool,directory:path.join(import.meta.dirname,'../vnext-migrations')});
-  const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,intervalMs:1000});
+   const acceptance = testAcceptanceAuthority(async c => { await verifyTurnEvidenceIntegrity(c.turn, { workspaceRoot: dir }); return c.turn.summary === 'Outcome checked.'; });
+   const operatingAuthority = { ...authority, ...acceptance };
+   const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,acceptanceVerifier:acceptance.verifyAcceptance,intervalMs:1000});
   const projectId = `pilot-test-${randomUUID()}`;
   let n=0;
   const input = (s,thread,message='Improve one concrete thing.') => s.submit({projectId,threadId:thread,receiptId:`receipt-${++n}`,message});
-  const run = (s,executor) => runPilotOnce({store:s,projectId,workspaceRoot:dir,identityFiles:[path.join(dir,'identity.md')],authority,executor});
+   const run = (s,executor) => runPilotOnce({store:s,projectId,workspaceRoot:dir,identityFiles:[path.join(dir,'identity.md')],authority:operatingAuthority,executor});
   try {
     await t.test('idempotent receipt and conflicting content', async () => {
       const s=store();const args={projectId,threadId:'first',receiptId:'fixed-'+projectId,message:'Improve it.'};
@@ -38,7 +42,7 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
       const saved=await pool.query('SELECT * FROM vnext_pilot_results WHERE execution_id=$1',[result.execution_id]);
       assert.equal(saved.rows[0].turn.learned,'Keep the useful observation.');
       assert.equal(await store().nextEligible(projectId),null);
-      await pool.query("UPDATE vnext_pilot_progress SET next_wake_at=clock_timestamp()-interval '1 second' WHERE work_unit_id=$1",[a.work_unit_id]);
+      await pool.query("UPDATE vnext_pilot_progress SET next_wake_at='2000-01-01T00:00:00Z' WHERE work_unit_id=$1",[a.work_unit_id]);
       await writeFile(path.join(dir,'proof.txt'),'verified result');
       const hash=createHash('sha256').update('verified result').digest('hex');
       const terminal=await run(store(),async ({workUnit})=>{assert.equal(workUnit.last_turn.learned,'Keep the useful observation.');return {objective_id:workUnit.objective_ref,disposition:'done',summary:'Outcome checked.',outcome_evidence:[{kind:'file',path:'proof.txt',sha256:hash}]};});
@@ -63,7 +67,7 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
     });
     await t.test('failed result settlement rolls back result and eligibility together, no retry of uncertain effects',async()=>{
       const s=store();const a=await input(s,'rollback');
-      const broken={...s,persistTurn:async result=>{result.workUnit.pilot.input_seq=-1;return s.persistTurn(result);}};
+      const broken={...s,persistTurn:async result=>{result.handoff.runtime.input_seq=-1;return s.persistTurn(result);}};
       await assert.rejects(run(broken,async ({workUnit})=>next(workUnit.objective_ref)));
       const row=await s.reconstruct({work_unit_id:a.work_unit_id});assert.ok(row.claim);
       assert.equal((await pool.query('SELECT * FROM vnext_pilot_results WHERE work_unit_id=$1',[a.work_unit_id])).rowCount,0);
@@ -72,4 +76,23 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
       await input(s,'other');assert.equal(await s.nextEligible(projectId),null);
     });
   } finally { await pool.end();await rm(dir,{recursive:true,force:true}); }
+});
+
+test('pilot due-time discovery keeps database time unless a coordinator clock is supplied', async () => {
+  const pool = await testPool();
+  const project = `pilot-clock-${randomUUID()}`;
+  try {
+    await pool.query("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anonymous') THEN CREATE ROLE anonymous; END IF; END $$");
+    await migrateVNext({ pool, directory: path.join(import.meta.dirname, '../vnext-migrations') });
+    const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, ...options });
+    const { work_unit_id: id } = await store().submit({ projectId: project, threadId: 'clock', receiptId: `receipt-${randomUUID()}`, message: 'Clock semantics.' });
+    assert.equal(await store().nextEligible(project), id, 'a fresh submit is due on the database clock');
+    await pool.query("UPDATE vnext_pilot_progress SET consumed_input_seq=(SELECT COALESCE(max(input_seq),0) FROM vnext_pilot_inputs WHERE work_unit_id=$1) WHERE work_unit_id=$1", [id]);
+    await pool.query("UPDATE vnext_pilot_progress SET next_wake_at=clock_timestamp()+interval '10 minutes' WHERE work_unit_id=$1", [id]);
+    assert.equal(await store().nextEligible(project), null, 'default discovery uses the database clock');
+    assert.equal(await store({ now: () => Date.now() + 20 * 60 * 1000 }).nextEligible(project), id, 'an explicit clock can observe a database-future due time');
+    await pool.query("UPDATE vnext_pilot_progress SET next_wake_at=clock_timestamp()-interval '10 minutes' WHERE work_unit_id=$1", [id]);
+    assert.equal(await store().nextEligible(project), id, 'default discovery sees a database-past due time');
+    assert.equal(await store({ now: () => Date.now() - 20 * 60 * 1000 }).nextEligible(project), null, 'an explicit clock can hold a database-past due time');
+  } finally { await pool.end(); }
 });

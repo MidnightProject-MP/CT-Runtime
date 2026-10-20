@@ -65,7 +65,7 @@ test('Neon grants one mutation authority across different Work Units in one proj
     const secondExecution = startExecution(createExecution(secondClaim, { executionId: secondClaim.claim.execution_id, owner: 'owner-b' }));
     await assert.rejects(() => store.beginExecution(secondClaim, secondExecution), /project mutation authority is already held/);
 
-    const settled = applyTurn(firstClaim, firstExecution, { disposition: 'waiting', continuation: { mode: 'condition', condition: { kind: 'external', condition: 'next input' } } });
+    const settled = applyTurn(firstClaim, firstExecution, { objective_id: firstWork.objective_ref, summary: 'Waiting for next input.', disposition: 'waiting', continuation: { mode: 'condition', condition: { kind: 'external', condition: 'next input' } } });
     await store.persistTurn(settled);
 
     await store.beginExecution(secondClaim, secondExecution);
@@ -115,7 +115,7 @@ test('Neon serializes simultaneous authority acquisition across different Work U
   }
 });
 
-test('Neon expires an old project authority before takeover by another Work Unit', { skip: !connectionString, timeout: 60000 }, async () => {
+test('Neon refuses an expired-authority takeover until recovery settles the attempt', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 8 });
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const projectId = `project-expired-${suffix}`;
@@ -134,13 +134,25 @@ test('Neon expires an old project authority before takeover by another Work Unit
 
     const secondClaim = claimWorkUnit(secondWork, { executionId: `exec-expired-b-${suffix}`, owner: 'owner-b', now: new Date('2026-09-16T12:00:02.000Z'), claimExpiresAt: '2099-09-16T12:01:00.000Z' });
     const secondExecution = startExecution(createExecution(secondClaim, { executionId: secondClaim.claim.execution_id, owner: 'owner-b', startedAt: '2026-09-16T12:00:02.000Z' }));
-    await store.beginExecution(secondClaim, secondExecution);
+    await assert.rejects(() => store.beginExecution(secondClaim, secondExecution), /E_RECONCILIATION_REQUIRED/);
 
-    const oldExecution = (await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [firstExecution.execution_id])).rows[0];
-    const oldWork = (await pool.query('SELECT claim_execution_id,claim_fence,state FROM vnext_work_units WHERE work_unit_id=$1', [firstWork.work_unit_id])).rows[0];
+    // Elapsed time is not stop confirmation: the predecessor attempt, its
+    // claim, and its authority all survive the refusal, and no successor
+    // Execution or authority is created.
+    assert.deepEqual((await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [firstExecution.execution_id])).rows[0], { state: 'running' });
+    assert.deepEqual((await pool.query('SELECT state,claim_execution_id,claim_fence FROM vnext_work_units WHERE work_unit_id=$1', [firstWork.work_unit_id])).rows[0], { state: 'actionable', claim_execution_id: firstExecution.execution_id, claim_fence: '1' });
+    assert.deepEqual((await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId])).rows, [{ execution_id: firstExecution.execution_id }]);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE execution_id=$1', [secondExecution.execution_id])).rows[0].count, 0);
+
+    // Recovery is the only transition that records stop evidence and releases
+    // the expired authority; only then may the project admit a successor.
+    const recovered = await store.recoverAttempt({ projectId, workUnitId: firstWork.work_unit_id, executionId: firstExecution.execution_id, fence: 1, resolution: 'not-launched' });
+    assert.equal(recovered.state, 'waiting');
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId])).rows[0].count, 0);
+    assert.deepEqual((await pool.query('SELECT state,claim_execution_id FROM vnext_work_units WHERE work_unit_id=$1', [firstWork.work_unit_id])).rows[0], { state: 'waiting', claim_execution_id: null });
+
+    await store.beginExecution(secondClaim, secondExecution);
     const authorities = (await pool.query('SELECT project_id,work_unit_id,execution_id,fence FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId])).rows;
-    assert.deepEqual(oldExecution, { state: 'expired' });
-    assert.deepEqual(oldWork, { claim_execution_id: null, claim_fence: null, state: 'waiting' });
     assert.deepEqual(authorities, [{ project_id: projectId, work_unit_id: secondWork.work_unit_id, execution_id: secondExecution.execution_id, fence: '1' }]);
   } finally {
     await cleanup(pool, [firstWork.work_unit_id, secondWork.work_unit_id], [projectId]);
@@ -148,7 +160,7 @@ test('Neon expires an old project authority before takeover by another Work Unit
   }
 });
 
-test('Neon rejects settlement after project authority expiry without a takeover', { skip: !connectionString, timeout: 60000 }, async () => {
+test('Neon rejects settlement of an expired authority without stop confirmation', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 8 });
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const projectId = `project-expired-settlement-${suffix}`;
@@ -276,7 +288,7 @@ test('Neon rejects continuation and evidence references that pair one Work Unit 
 });
 
 for (const settlement of ['turn', 'failure']) {
-  test(`Neon cross-WU takeover does not deadlock with expired-holder ${settlement}`, { skip: !connectionString, timeout: 30000 }, async () => {
+  test(`Neon expired-authority refusal serializes with predecessor ${settlement} settlement without deadlock`, { skip: !connectionString, timeout: 30000 }, async () => {
     const pool = new Pool({ connectionString, max: 6 });
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
     const projectId = `project-lock-${suffix}`;
@@ -320,7 +332,7 @@ for (const settlement of ['turn', 'failure']) {
       const nextExecution = startExecution(createExecution(successor, { executionId: successor.claim.execution_id, owner: 'owner-b' }));
       takeover = createNeonStore({ pool: controlledPool('takeover') }).beginExecution(successor, nextExecution);
       const takeoverResult = takeover.then(value => ({ value }), error => ({ error }));
-      await Promise.race([entered, takeoverResult.then(result => { throw result.error || new Error('takeover completed before lock barrier'); })]);
+      await Promise.race([entered, takeoverResult.then(result => { throw result.error || new Error('refusal completed before lock barrier'); })]);
       const oldStore = createNeonStore({ pool: controlledPool('settlement') });
       settle = settlement === 'turn'
         ? oldStore.persistTurn(applyTurn(expired.claim, expired.execution, { disposition: 'done' }))
@@ -331,12 +343,19 @@ for (const settlement of ['turn', 'failure']) {
         if (settlementPid) blocked = (await pool.query('SELECT $1::int = ANY(pg_blocking_pids($2)) AS blocked', [takeoverPid, settlementPid])).rows[0].blocked;
         if (!blocked) await new Promise(resolve => setTimeout(resolve, 20));
       }
-      assert.equal(blocked, true, 'settlement must contend while takeover holds authority');
+      assert.equal(blocked, true, 'settlement must contend while admission holds the project lock');
       releaseTakeover();
-      const [taken, rejected] = await Promise.all([takeoverResult, settlementResult]);
-      assert.ifError(taken.error);
-      assert.match(rejected.error?.message || '', /fencing conflict/);
+      const [refused, rejected] = await Promise.all([takeoverResult, settlementResult]);
+      assert.match(refused.error?.message || '', /E_RECONCILIATION_REQUIRED/);
+      assert.match(rejected.error?.message || '', /project mutation authority expired/);
       assert.notEqual(rejected.error?.code, '40P01');
+
+      // Nothing moved: the predecessor stays in doubt until recovery records
+      // its stop evidence, and only then can the successor acquire authority.
+      assert.equal((await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId])).rows[0].execution_id, initialExecution.execution_id);
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE execution_id=$1', [nextExecution.execution_id])).rows[0].count, 0);
+      await store.recoverAttempt({ projectId, workUnitId: first.work_unit_id, executionId: initialExecution.execution_id, fence: 1, resolution: 'not-launched' });
+      await store.beginExecution(successor, nextExecution);
       const authority = (await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [projectId])).rows[0];
       assert.equal(authority.execution_id, nextExecution.execution_id);
     } finally {

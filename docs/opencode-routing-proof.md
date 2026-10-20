@@ -1,5 +1,11 @@
 # OpenCode Routing Proof
 
+Historical record: this document captures the 2026-09-03 routing-failure
+investigation and its database-backed proof. Routing has since moved to role
+profiles with explicit per-work-order model binding (`implementation` /
+`strategic`), and the pinned `luna-implementation` / `sol-strategic` workers
+named below are no longer required.
+
 ## Failure Found
 
 The global OpenCode configuration had no agent definitions. Calls to the
@@ -16,9 +22,10 @@ The verified OpenCode catalog lists `openai/gpt-5.6-luna` and the configured
 variant is `default`. `openai/gpt-5.6-luna-fast` is a separate catalog model,
 not an assumed variant, and is not used as fallback.
 
-Implementation work must use the global `luna-implementation` subagent, whose
-agent definition explicitly binds that model and variant. A routing-policy
-plugin refuses implementation-shaped calls targeting an unbound generic agent.
+At the time, implementation work was required to use the global
+`luna-implementation` subagent, whose agent definition explicitly bound that
+model and variant; a routing-policy plugin refused implementation-shaped calls
+targeting an unbound generic agent.
 
 ## Controlled Proof
 

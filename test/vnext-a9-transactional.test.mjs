@@ -59,7 +59,7 @@ test('memory failure settlement is exception-atomic when failure cannot be clone
   assert.deepEqual(store.snapshot(), before);
 });
 
-test('failed takeover preserves the expired predecessor and commits no successor state', async () => {
+test('expired predecessor admission is refused until recovery settles the attempt', async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
   const work = { ...createWorkUnit({ workUnitId: 'wu-takeover-atomic', objectiveRef: 'objective', projectId: 'project' }), fence: 1, attempt: 1, claim_expires_at: expired, claim: { execution_id: 'exec-predecessor', owner: 'old-owner', fence: 1, claim_expires_at: expired } };
   const predecessor = { execution_id: 'exec-predecessor', work_unit_id: work.work_unit_id, project_id: work.project_id, authorization_decision_ref: 'test-auth:exec-predecessor', owner: 'old-owner', fence: 1, state: 'running', attempt: 1, claim_expires_at: expired };
@@ -67,10 +67,20 @@ test('failed takeover preserves the expired predecessor and commits no successor
   const before = store.snapshot();
   const successorClaim = claimWorkUnit({ ...work, claim: null, claim_expires_at: null, state: 'actionable' }, { executionId: 'exec-successor', owner: 'new-owner' });
   const successor = startExecution(createExecution(successorClaim, { executionId: 'exec-successor', owner: 'new-owner', authorizationDecisionRef: 'test-auth:exec-successor' }));
-  await assert.rejects(() => store.beginExecution(successorClaim, { ...successor, invalid: () => {} }, { ref: successor.authorization_decision_ref }), /could not be cloned|DataCloneError|structuredClone/i);
+
+  await assert.rejects(
+    () => store.beginExecution(successorClaim, successor, { ref: successor.authorization_decision_ref }),
+    /E_RECONCILIATION_REQUIRED/,
+  );
   assert.deepEqual(store.snapshot(), before);
-  assert.equal(store.snapshot().executions.find((item) => item.execution_id === 'exec-predecessor').state, 'running');
-  assert.equal(store.snapshot().authorities.length, 1);
+
+  const recovered = await store.recoverAttempt({ projectId: 'project', workUnitId: work.work_unit_id, executionId: 'exec-predecessor', fence: 1, resolution: 'not-launched' });
+  assert.equal(recovered.state, 'waiting');
+  await store.beginExecution(successorClaim, successor, { ref: successor.authorization_decision_ref });
+  const snapshot = store.snapshot();
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-successor').state, 'running');
+  assert.equal(snapshot.authorities[0].execution_id, 'exec-successor');
+  assert.equal(snapshot.executions.find((item) => item.execution_id === 'exec-predecessor').state, 'failed');
 });
 
 test('runtime exposes only transactional mutation transitions', () => {
@@ -93,16 +103,20 @@ test('memory acquisition serializes overlapping transitions and admits only one 
     },
     workUnits: [work],
   });
-  const claimA = claimWorkUnit(work, { executionId: 'exec-concurrent-a', owner: 'owner-a' });
+  const acquisitionNow = new Date();
+  const claimA = claimWorkUnit(work, { executionId: 'exec-concurrent-a', owner: 'owner-a', now: acquisitionNow });
   const executionA = startExecution(createExecution(claimA, { executionId: claimA.claim.execution_id, owner: claimA.claim.owner, authorizationDecisionRef: 'test-auth:exec-concurrent-a' }));
-  const claimB = claimWorkUnit(work, { executionId: 'exec-concurrent-b', owner: 'owner-b' });
+  const claimB = claimWorkUnit(work, { executionId: 'exec-concurrent-b', owner: 'owner-b', now: acquisitionNow });
   const executionB = startExecution(createExecution(claimB, { executionId: claimB.claim.execution_id, owner: claimB.claim.owner, authorizationDecisionRef: 'test-auth:exec-concurrent-b' }));
   const first = store.beginExecution(claimA, executionA, { ref: executionA.authorization_decision_ref });
   const second = store.beginExecution(claimB, executionB, { ref: executionB.authorization_decision_ref });
   await new Promise((resolve) => setImmediate(resolve));
   releaseVerifier();
   await first;
-  await assert.rejects(second, /E_PROJECT_AUTH_HELD|Work Unit changed before execution could be claimed/);
+  // Both claims share one acquisition instant, so the loser's refusal is
+  // deterministic: the first transition already holds project authority, and
+  // the losing transition must leave no authority, execution, or work state.
+  await assert.rejects(second, /E_PROJECT_AUTH_HELD/);
   const snapshot = store.snapshot();
   assert.equal(snapshot.authorities.length, 1);
   assert.equal(snapshot.authorities[0].execution_id, 'exec-concurrent-a');

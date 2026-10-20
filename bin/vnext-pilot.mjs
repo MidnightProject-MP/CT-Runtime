@@ -23,7 +23,19 @@ try {
     console.log(JSON.stringify(await migrateVNext({ pool, directory: path.join(import.meta.dirname,'../vnext-migrations') })));
   } else {
     const authority = action === 'tick' ? await import(pathToFileURL(await realpath(config.authorityModule)).href) : {};
-    const store = createPilotStore({ pool, authorizationVerifier: authority.verifyExecution, intervalMs: config.intervalMs ?? 60000 });
+    const store = createPilotStore({
+      pool,
+      authorizationVerifier: authority.verifyExecution,
+      // The store independently re-evaluates the acceptance decision for this
+      // exact work, execution and turn, and requires the same decision identity
+      // the outer loop was granted. A reference the authority will not confirm
+      // here cannot settle work as terminal.
+      acceptanceVerifier: authority.verifyAcceptance,
+      intervalMs: config.intervalMs ?? 60000,
+      // Coordinator-configured global pool capacity; null keeps accounting
+      // on with no cap.
+      maxConcurrency: config.maxConcurrency ?? null
+    });
     if (action === 'submit') {
       const file = option('--message-file');
       if (!file) throw new Error('--message-file is required');
@@ -33,7 +45,8 @@ try {
       if (config.enabled !== true || config.legacyExcluded !== true) throw new Error('pilot is disabled; qualify legacy exclusion before enabling');
       // This is an operator assertion, not proof of deployment/exclusion.
       const result = await runPilotOnce({ store, projectId: config.projectId, workspaceRoot: await realpath(config.workspaceRoot), identityFiles: config.identityFiles, authority,
-        timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor) });
+        timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor),
+        recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: config.executor.stateDirectory } : null });
       console.log(JSON.stringify(result));
     }
   }
