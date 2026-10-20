@@ -12,9 +12,13 @@ crash-recovery subtest), with the review's recovery invariants hardened on main
 (#90 at `007792d`: storage-integrity classification, process-group verification,
 durable uncertainty on ingestion failure, store-level launch guard, plus a CI
 job timeout and superseded-run cancellation); the next bounded milestone task is
-the recurring, LLM-free coordinator (Milestone 2A), but Milestone 1D (lifetime
-and resource authority) remains unimplemented and must be closed before 2A is
-commissioned.** Changes 1
+the recurring, LLM-free coordinator (Milestone 2A), but Milestone 1D is not
+closed: its Node/store-side D3 scope is delivered on main (#98 at `a5aeb36`,
+merge `e38c179`, native CI green), while GAS send-side enforcement and the
+uncertain-send `no_effect` obligation remain open. The Node delivery is a
+point-in-time eligibility check, not live effect-adapter integration or
+production commissioning, and 2A must not be commissioned on it alone.**
+Changes 1
 and 2 on the Node operating boundary (#76) are done; the separate F1 GAS
 watermark correction is merged forward (004 snapshot binding plus 005
 batch-boundary recovery commissioning) and integration-tested, not applied live.
@@ -65,6 +69,7 @@ cutover is implied.
 | Separate snapshot-bound acceptance | `getAcceptanceContext` / `acceptWork`; independently issued opaque decisions | Same real pilot suite: fresh-store acceptance, concurrent exact replay, stale input/revision/evidence/result, revoked verifier, project authority, changed artifact, lost COMMIT | None |
 | Timestamp-free continuation | Durable pending proposal; consume precisely the selected proposal only in authorized admission; fixed coordinator cooldown | Actual submit → `runPilotOnce` → closed pool/dataDir → new store → second admission; waiting quiet and late input; native suite and two-process Linux proof are CI gates | None; no scheduler enabled |
 | Recovery after reconciliation and revision change | `f522740` + review corrections; `reconcileFailure` records its outcome, grants a coordinator due time, and resolves from the authoritative block and failed-attempt binding; input and requirements updates preserve a pending reconciliation disposition; outer loop settles a revision-invalidated attempt via `persistSuperseded` | Real pilot suite: cold-restart discovery, input- or revision-during-uncertainty recovery seeing the new input and binding the new revision, exactly one recovery admission under overlapping wakes, idempotent and divergent receipts failing closed before mutation in both adapters (identity stable across later revisions), bounded further failure, late-result fencing | None; no live DB apply |
+| Effect admission — Node/store-side D3 | #98 at `a5aeb36`, merged at `e38c179`; builds on cancellation intent #97 at `581266f`, merged at `f4295ed` | Guard refuses a stale revision, pending cancellation, unresolved project block, or expired stop-unconfirmed claim/authority; missing and mismatched authority fail closed. Cancellation suite 11/11 and targeted verification 70/70 at `a5aeb36`; exact-head core CI `39450786089`/`39450792576`, post-merge `39452666025` | Not claimed — no external-effect adapter is wired; GAS send admission and `no_effect` recovery remain deferred; `true` is point-in-time eligibility, not durable permission |
 | GAS canonical settlement — durable settlement receipts | `006_settlement_receipts.sql` in #79 @ `9894d0d`; forward-only within the checksum-ledger chain 002–006; merged to the email stack base at `47c8efc` | GAS suites through the public RPC: first settlement, exact replay with the recorded snapshot, divergent-content conflict, lost COMMIT response, replay after successor admission, late-input eligibility, atomic rollback; the native CI stage executes the concurrent exact replay proof (not skipped); focused 47 pass / 2 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance binding is implemented (see the acceptance-separation row) but remains operationally unqualified; no_effect recovery remains open |
 | GAS canonical settlement — durable continuation proposals | `007_continuation_proposals.sql` in #81 @ `8f838c4`; forward-only within the checksum-ledger chain 002–007; merged to the email stack base at `95e2bd1` | GAS suites through the public RPC: proposal bound to the settling attempt (fence and captured input snapshot), cooldown-gated consideration, consumption exactly with authorized successor admission, exactly one successor under competing claims, waiting quiet, late-input supersession, delivery-first rejection staying pending, rollback and inert exact replay, and a 002–006→007 backfill admitting only authorized legacy continuations; the native CI stage executes the concurrent proposal admission proof (not skipped); focused 61 tests / 58 pass / 3 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance binding is implemented (see the acceptance-separation row) but remains operationally unqualified; no_effect recovery remains open |
 | GAS canonical settlement — acceptance separation | `008_acceptance_decisions.sql` in #84 @ accepted head `e38e702`; forward-only within the checksum-ledger chain 002–008; merged to the email stack base at `c0e0d77` | GAS suites through the public RPC: acceptance binds the settled revision to the canonical digest over the exact settlement receipt, exact replay returns the recorded decision, divergent content fails before mutation, stale decisions fail closed against superseded input / newer attempts / unknown work, the terminal transition rolls back atomically, an unprovisioned instance cannot accept, new acceptance is refused during unresolved reconciliation blocks or active mutation with the read-only context aligned, and an accepted decision replays while exclusions hold; the native CI stage executes concurrent acceptance and authority rotation/revocation racing acceptance in both orderings (verified not skipped at the accepted head); reviewer-verified focused integration/upgrade/F1 suites 61 pass / 5 native-only skips / 0 fail | Not claimed — not on main, not applied live; acceptance-authority provisioning, the actual accepting caller, and its substantive review remain operating-path qualification obligations |
@@ -193,10 +198,14 @@ else here is implemented, applied live, or qualified; nothing is merged to
 main. Recoverable dispatch (Milestone 1C) is implemented and merged on main
 (#88 at `9e8413a`) and hardened by its follow-up review (#90 at `007792d`:
 storage-integrity classification, process-group verification, durable
-uncertainty on ingestion failure, store-level launch guard). Milestone 1D
-(lifetime and resource authority) remains unimplemented: it is the remaining
-Milestone 1 obligation and must be closed before the recurring, LLM-free
-coordinator (Milestone 2A) is commissioned.
+uncertainty on ingestion failure, store-level launch guard). Milestone 1D's
+Node/store-side D3 scope is delivered on main (#98 at `a5aeb36`, merge
+`e38c179`): effect admission rechecks revision, cancellation, project
+reconciliation, and unexpired claim/authority binding. That is a transactionally
+consistent eligibility check, not durable authorization, and no external-effect
+adapter is wired. The remaining 1D obligation is GAS send-side enforcement plus
+the `no_effect` recovery and sender-revocation contract; 1D is not closed, and
+2A must not be commissioned on the Node-side delivery alone.
 
 **Uncertain external effect (delivery recovery, not full parity).** GAS already
 inserts a durable reconciliation block before an admitted send and clears it
@@ -222,7 +231,9 @@ sender termination, effective capability revocation, or an execution-boundary
 guarantee that prevents further sends; database conditions such as an expired
 claim, absent authority or an unrenewable fence do not by themselves stop an
 already-running sender — and (b) authoritative evidence supports no_effect
-rather than merely "not found". Otherwise the state must remain uncertain.
+rather than merely "not found". Otherwise the state must remain uncertain. The
+Node D3 guard delivered in #98 is an eligibility check only; it does not provide
+sender termination, capability revocation, or no-effect evidence.
 
 **Remaining Change 2 obligations in GAS (existing / missing).**
 - *Canonical handoff semantics:* existing — trusted-context binding (RPC
@@ -285,7 +296,21 @@ head `e38e702`, merged at `c0e0d77`). Implemented and integration-proven, not
 operationally qualified: acceptance-authority provisioning, the actual
 accepting caller, and its substantive review remain operating-path
 qualification obligations. Uncertain-send no_effect recovery keeps its own
-evidence contract above and remains a separate, not-started increment.
+evidence contract above and remains a separate, still-open increment.
+
+**Completed increment this cycle: Node/store-side D3 effect admission.** The
+Node boundary now refuses an external effect when the Work Unit revision has
+advanced past the attempt's admission revision, a cancellation intent is
+pending, an unresolved project reconciliation block exists, or the attempt's
+claim/authority is expired or mismatched, including an expired stop-unconfirmed
+attempt that still holds its claim and running state. The guard verifies the
+project mutation authority against the Execution, Work Unit, owner, fence,
+authorization reference, and claim expiration under the project lock (#98 at
+`a5aeb36`, merged at `e38c179`; cancellation suite 11/11, targeted verification
+70/70, exact-head and post-merge core CI green). This closes the Node/store-side
+D3 scope only: it is a transactionally consistent eligibility check, not durable
+authorization; no effect adapter is wired, and GAS send admission plus
+uncertain-send `no_effect` recovery remain the open 1D obligation.
 
 **In-flight requirements revision:** GAS email has no trusted material-revision
 path, and its equivalent — human input arriving during execution — is already
@@ -319,7 +344,9 @@ running, completed, unknown. Preserve uncertainty.
 worker process. Reserve concurrency and applicable cost/tool budgets atomically.
 Retain project mutation exclusion by default. Require stop confirmation,
 effective revocation, or reconciliation before conflicting takeover. Check
-revision and cancellation at dispatch, settlement, and effect admission.
+revision and cancellation at dispatch, settlement, and effect admission. The
+Node/store-side effect-admission guard is delivered (#98); GAS send-side
+enforcement and `no_effect` recovery remain open.
 
 *Milestone 1 exit: authorized work can be claimed, launched, and reconciled
 under stable identity without blind duplication or overlapping mutation
