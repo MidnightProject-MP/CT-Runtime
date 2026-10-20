@@ -664,6 +664,8 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
     });
     await t.test('recorded acceptance replays after rotation or revocation; new decisions need current authority',()=>{
       const acceptedWork=tag=>{
+        const pending=rpc('delivery');
+        if(pending.status==='send')rpc('record',{execution_id:pending.execution_id,gmail_id:`${tag}Sent`,messageId:pending.envelope.messageId,threadId:pending.envelope.threadId});
         rpc('ingest',input(tag,`${tag}thread`,`Deliver ${tag}.`));const c=rpc('claim');assert.equal(checkpoint(c).work_state,'review');
         const w=sql("SELECT work_unit_id FROM vnext_work_units WHERE state='review'")[0].work_unit_id;
         const context=rpc('acceptance-context',{work_unit_id:w});assert.equal(context.status,'review-ready');
