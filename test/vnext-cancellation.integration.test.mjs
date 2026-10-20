@@ -88,7 +88,7 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       assert.equal((await store().getCancellationIntent(id)).pending, true);
     });
 
-    await t.test('a pending intent refuses effect admission for the observed revision only', { skip: process.platform !== 'linux' }, async () => {
+    await t.test('a pending intent refuses effect admission for the claimed attempt', { skip: process.platform !== 'linux' }, async () => {
       const project = `cancel-effect-${randomUUID()}`;
       const { work_unit_id: id } = await submit(project);
       const before = await store().reconstruct({ work_unit_id: id });
