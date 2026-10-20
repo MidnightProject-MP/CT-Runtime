@@ -1,8 +1,10 @@
 # GAS send admission and uncertain-send recovery — scope proposal
 
-Status: **draft for stack review; scopes work only and implements nothing.** This
-document does not authorize a live database apply, GAS deployment, activation,
-trigger change, or mail send.
+Status: **revised after review; decisions recorded; scopes work only and
+implements nothing.** This document does not authorize a live database apply,
+GAS deployment, activation, trigger change, or mail send. The acceptance-replay
+correction and Increment A may proceed; Increment B is gated on the concrete
+`no_effect` evidence contract in §4.
 
 Inputs:
 
@@ -54,9 +56,9 @@ replay lookup and binding comparison **before** the current-authority check and
 the reconciliation/active-mutation exclusions. New acceptance still requires the
 current authority. Replay remains read-only and returns the recorded decision.
 
-The existing test must be inverted: accept, revoke the authority, exact replay
-succeeds with `replay:true`, and a new decision fails. This is small enough to be
-a separate prerequisite commit/PR on the stack; it should not be bundled
+The existing test must be inverted: accept, revoke or rotate the authority, exact
+replay succeeds with `replay:true`, and a new decision fails. It lands as a
+separate prerequisite PR using a forward migration; it should not be bundled
 silently into the send-admission migration.
 
 ## 3. Increment A — actual send admission
@@ -82,12 +84,21 @@ Smallest sufficient change:
     captured input snapshot.
 - Record an immutable admission receipt (admission identity/digest and
   `admitted_at`) in the same transaction as the block insertion and outbox
-  transition. Exact replay returns the recorded admission; divergent content
-  fails before mutation.
-- A cancellation intent is a fail-closed check, not the full cancellation UX.
-  GAS has no material-revision path; the captured input snapshot is its
-  admission watermark. Recording cancellation intents remains a separate
-  authority/UX surface (review decision 1).
+  transition. **Only the winning first transition returns the `send`
+  instruction.** Receipt replay is historical evidence: it returns the recorded
+  admission and reconciliation information, never another `send`. If the first
+  transition commits but its response is lost, the retry observes `admitted` and
+  returns reconciliation/receipt information, not permission to send. Divergent
+  content fails before mutation.
+- Add a minimal `cancel` operation as the authorized writer plus the admission
+  check in Increment A. A table and a check without a supported writer do not
+  complete the cancellation boundary.
+  - Use a per-instance cancellation authority separate from the execution and
+    acceptance authorities; an opaque decision reference is exact-replayable,
+    divergent content conflicts, and one intent may be pending per Work Unit.
+  - Bind the intent to the Work Unit and captured input snapshot. GAS has no
+    material-revision path, so the input watermark is the admission equivalent.
+  - Broader cancellation interruption/reconsideration UX stays deferred.
 
 **Non-goal:** the admission receipt is still point-in-time eligibility, not a
 lease that can stop a running GAS invocation. The GAS execution limit and script
@@ -108,38 +119,70 @@ The missing operation must establish **both**:
 Absence from a bounded Gmail search is not proof, and an expired claim, absent
 authority, or unrenewable fence does not stop an already-running sender.
 
-Proposed shape:
+### 4.1 Implementation gate (unresolved)
 
-- Add a trusted, per-instance **delivery-recovery authority**, separate from the
+**Increment B must not be implemented until the concrete evidence rule is
+defined and approved.** A trusted credential, a nonempty evidence reference, and
+a digest are not enough; a digest proves binding and integrity, not the truth of
+the asserted outcome. A generic block-clearing operation must not be built first
+and given evidentiary meaning later.
+
+The current refusal conditions are necessary but not sufficient:
+
+- no provider receipt or `gmail_id`;
+- a complete bounded search with no match; and
+- sender-termination evidence.
+
+Those conditions establish "sender stopped and no send found." They do not
+establish "no send occurred": a sender could send, crash before recording its
+receipt, and leave a message that the available search does not establish.
+
+Before implementation, the increment must define:
+
+1. the exact observable facts that establish `no_effect`, not merely absence;
+2. who verifies each fact and what makes the verification trustworthy;
+3. how the decision binds to the exact admitted send; and
+4. the fail-closed result when the available evidence cannot establish no
+   effect — it remains **uncertain**, never an operator override.
+
+### 4.2 Operation shape (conditional on the gate)
+
+Once the evidence rule is approved, the smallest operation shape is:
+
+- A trusted, per-instance **delivery-recovery authority**, separate from the
   execution grant and acceptance authority, using the same bearer-credential
   pattern: `authority_ref` is never returned by an RPC; a non-secret
-  `authority_id` is recorded for audit.
-- Add one guarded `resolve-no-effect` operation. It requires instance/project,
-  Work Unit, execution, fence, outbox/admission identity, a recovery decision
-  reference, an evidence digest/reference, a sender-termination evidence
-  reference, and the current recovery credential.
-- Refuse unless: the outbox is `admitted`; a block exists for that exact
-  execution; no `provider_receipt` and no `gmail_id` exist; the bounded readback
-  is complete (no `nextPageToken`, no exact match); and sender-termination
-  evidence is present and valid.
+  `authority_id` is recorded for audit. Keep this credential out of the ordinary
+  sender's environment; otherwise the sender could authorize clearing its own
+  uncertainty.
+- One guarded `resolve-no-effect` operation requiring instance/project, Work
+  Unit, execution, fence, outbox/admission identity, a recovery decision
+  reference, the approved evidence binding, and the current recovery
+  credential.
 - Record the resolution immutably with exact-replay and divergent-conflict
-  semantics. Mark the outbox closed in a distinct `no_effect` state (final name
-  fixed with the forward migration); do **not** fabricate a `gmail_id`; clear
-  only that execution's block.
+  semantics. Mark the outbox closed in a distinct `no_effect` state; do **not**
+  fabricate a `gmail_id`; clear only that execution's block.
 - Grant exactly one recovery opportunity without new input, consumed atomically
   by the next authorized admission, preserving attempt history and the existing
-  bounded-retry limit. Newer input supersedes the opportunity.
-- The closed outbox is never resent. Whether the successor reuses the frozen
-  settlement turn or re-runs the bounded model turn is review decision 3.
+  bounded-retry limit. Newer input or cancellation invalidates the opportunity.
+- Reuse the frozen envelope and settlement when still current and authorized,
+  with a distinct delivery-attempt identity and the consumed recovery
+  opportunity. Do not add a model turn merely to retry transport.
 
 **Non-goal:** no automatic `no_effect` inference, no operator-free block
 clearing, and no weakening of "absence never grants a resend."
 
 ## 5. Migration and operation boundary
 
-- One forward-only GAS migration (next number after 008) for admission receipt
-  fields, the minimal cancellation-intent shape if approved, the immutable
-  resolution record, and the recovery-authority registration.
+- Migration numbering is **conditional on landing order**: each increment that
+  lands takes the next forward migration after the current stack head. The
+  acceptance-replay correction is a forward migration and lands first; then
+  Increment A; then Increment B only after its evidence gate closes. Do not
+  reserve one "next after 008" migration for all changes.
+- Increment A's migration carries the admission receipt fields, the minimal
+  cancellation authority/intent shape, and the admitted-send binding.
+- Increment B's migration, if approved, carries the recovery-authority
+  registration and the immutable resolution record.
 - Replace only the deepest RPC in the existing chain, preserving the 002
   wrapper's provider-receipt and evidence checks. Do not edit 002-008 or the
   checksum-pinned bootstrap files.
@@ -154,51 +197,71 @@ Focused PGlite suites plus native PostgreSQL through
 `scripts/run-postgres-suite.mjs`:
 
 - admission: settlement/fence/envelope mismatch refuses; newer input supersedes;
-  cancellation/block/authority refuses; exact replay is inert; a second call
-  receives `reconcile`, not `send`;
+  cancellation/block/authority refuses; exact receipt replay is historical and a
+  second call receives `reconcile`, never `send`;
+- lost admission response: the transaction commits, the response is lost, and a
+  retry returns reconciliation/receipt information — not permission to send
+  again;
+- cancellation: the minimal authorized writer records an intent with exact replay
+  and divergent conflict; a pending intent refuses delivery admission; exact
+  replay is inert;
 - races: delivery vs ingest (existing), competing admissions, cancellation vs
-  delivery, `record` vs `resolve-no-effect`, two competing resolutions;
-- no_effect: provider receipt or `gmail_id` refuses; missing block refuses;
-  incomplete search/`nextPageToken` refuses; missing or invalid
-  sender-termination evidence refuses; valid resolution records exactly once,
+  delivery, competing cancellation writers;
+- no_effect (only after the §4.1 gate closes): provider receipt or `gmail_id`
+  refuses; missing block refuses; incomplete search/`nextPageToken` refuses;
+  missing or invalid sender-termination evidence refuses; evidence that cannot
+  establish no effect remains uncertain; valid resolution records exactly once,
   clears one block, and yields one consumed recovery opportunity; replay returns
   the receipt; divergence conflicts; no duplicate effect;
-- acceptance: exact replay after authority revocation succeeds; new acceptance
-  after revocation fails.
+- acceptance: exact replay after authority revocation **and** rotation succeeds;
+  new acceptance after either still fails.
 
 Exact-head CI on the branch push and PR; native races executed, not skipped. No
 live qualification is claimed by green tests.
 
-## 7. Review decisions
+## 7. Recorded review decisions
 
-1. **Cancellation scope.** Include the minimal GAS cancellation-intent table and
-   admission check in this increment, or make it a dependent increment? The
-   check alone is not a usable cancellation surface without a writer.
-2. **Recovery authority.** Separate per-instance delivery-recovery credential
-   (proposed), or owner-only SQL operation with no runtime credential? The
-   separate credential keeps the recovery decision auditable without a new
-   control plane.
-3. **Successor work.** Reuse the frozen settlement turn for the one recovery
-   delivery, or require a new bounded model turn? Reuse avoids unnecessary model
-   work and preserves the reviewed reply, but needs a delivery-only attempt
-   identity.
-4. **Evidence attestation.** Confirm the exact form of complete readback and
-   sender-termination evidence that the trusted caller may attest. SQL cannot
-   query Gmail or prove an invocation stopped.
-5. **Acceptance replay fix.** Separate prerequisite PR (recommended) or a first
-   commit in this increment.
+1. **Cancellation scope — include the minimal authorized writer plus admission
+   check in Increment A.** A table/check without a supported writer does not
+   complete the boundary. The writer uses a separate cancellation authority,
+   exact replay, and divergent-conflict handling; broader UX remains deferred.
+2. **Recovery authority — separate from execution and acceptance.** Keep the
+   recovery credential out of the ordinary sender's environment, otherwise that
+   sender could authorize clearing its own uncertainty.
+3. **Successor work — reuse the frozen envelope/settlement when still current and
+   authorized.** Use a distinct delivery-attempt identity and a consumed recovery
+   opportunity. Newer input or cancellation invalidates reuse. Do not add a
+   model turn merely to retry transport.
+4. **Evidence attestation — unresolved and gated.** Define the observable facts,
+   verifier, and exact-send binding before implementation (see §4.1). A digest
+   proves binding/integrity, not truth. If the available evidence cannot
+   establish no effect, retain uncertainty.
+5. **Acceptance replay fix — separate prerequisite PR.** It lands first with
+   replay-after-revocation and rotation coverage; new decisions still require
+   current authority. Use a forward migration and preserve the existing migration
+   chain.
 
-## 8. Exit condition
+## 8. Sequencing and exit conditions
 
-The increment is complete when:
+Landing order:
 
-- a send can be admitted only from the current settled attempt and exact prepared
-  envelope, with revision-equivalent input, cancellation, authority, and block
-  checks all fail closed;
-- an admitted-but-unsent effect can be resolved as `no_effect` only through a
-  durable, evidenced, exact-replayable trusted decision, clearing the block and
-  granting one bounded recovery opportunity;
-- the acceptance replay-after-revocation defect is closed with a native
-  regression;
-- all evidence above runs through the public RPC on native PostgreSQL, and no
-  live GAS/Neon operation has occurred.
+1. acceptance-replay prerequisite;
+2. Increment A (send admission, cancellation writer/check);
+3. Increment B only after the §4.1 evidence rule is approved.
+
+Exit conditions:
+
+- **Acceptance prerequisite:** exact replay after revocation and rotation returns
+  the recorded decision; new acceptance after either fails; native regression
+  green.
+- **Increment A:** a send can be admitted only from the current settled attempt
+  and exact prepared envelope, with input-watermark, cancellation, authority,
+  and block checks all fail closed; only the winning transition returns `send`;
+  lost-response retry returns reconciliation, never permission; the cancellation
+  writer and check are exercised.
+- **Increment B:** gated on §4.1; once approved, `no_effect` is resolvable only
+  through a durable, evidenced, exact-replayable trusted decision that establishes
+  no effect, clears one block, and grants one bounded, consumed recovery
+  opportunity.
+- All evidence runs through the public RPC on native PostgreSQL; no live
+  GAS/Neon operation has occurred.
