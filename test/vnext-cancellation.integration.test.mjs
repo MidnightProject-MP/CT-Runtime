@@ -88,7 +88,7 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       assert.equal((await store().getCancellationIntent(id)).pending, true);
     });
 
-    await t.test('a pending intent refuses effect admission for the observed revision only', { skip: process.platform !== 'linux' }, async () => {
+    await t.test('a pending intent refuses effect admission for the claimed attempt', { skip: process.platform !== 'linux' }, async () => {
       const project = `cancel-effect-${randomUUID()}`;
       const { work_unit_id: id } = await submit(project);
       const before = await store().reconstruct({ work_unit_id: id });
@@ -103,8 +103,7 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       const decision = { ref: `cancel:${randomUUID()}` };
       const intent = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: before.work_revision, decision });
       assert.equal(intent.state, 'pending');
-      await assert.rejects(store().assertEffectAdmissible({ projectId: project, workUnitId: id, workRevision: before.work_revision }), /E_CANCELLED/);
-      assert.equal(await store().assertEffectAdmissible({ projectId: project, workUnitId: id, workRevision: before.work_revision + 1 }), true);
+      await assert.rejects(store().assertEffectAdmissible({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id }), /E_CANCELLED/);
       await expireClaim(id);
       const summaries = await recoverDispatches({ store: store(), projectId: project, stateDirectory: attemptsDirectory });
       assert.equal(summaries.length, 1);
@@ -124,6 +123,72 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       // Effect uncertainty blocks a conflicting work unit in the same project.
       const second = await submit(project, `other-${randomUUID()}`);
       await assert.rejects(admit(store(), second.work_unit_id), /E_RECONCILIATION_REQUIRED/);
+    });
+
+    await t.test('effect admission guards the current revision and project uncertainty', async () => {
+      const project = `effect-admission-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(project);
+      const before = await store().reconstruct({ work_unit_id: id });
+      const begun = await admit(store(), id);
+      const guard = () => store().assertEffectAdmissible({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id });
+      assert.equal(await guard(), true);
+      assert.equal(await guard(), true);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0].c, 0);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_cancellation_intents WHERE work_unit_id=$1', [id])).rows[0].c, 0);
+
+      await store().reviseWorkRequirements(id, { expectedRevision: before.work_revision, requirements: { finish: 'A newer authorized deliverable.' } });
+      await assert.rejects(guard(), /E_STALE_REVISION/);
+
+      const blockedProject = `effect-blocked-${randomUUID()}`;
+      const blocked = await submit(blockedProject);
+      const blockedBegun = await admit(store(), blocked.work_unit_id);
+      await pool.query("INSERT INTO vnext_project_reconciliation_blocks(project_id,work_unit_id,execution_id,fence,reason) VALUES ($1,$2,$3,$4,'external-effect-uncertain')", [blockedProject, blocked.work_unit_id, blockedBegun.execution.execution_id, blockedBegun.execution.fence]);
+      await assert.rejects(store().assertEffectAdmissible({ projectId: blockedProject, workUnitId: blocked.work_unit_id, executionId: blockedBegun.execution.execution_id }), /E_RECONCILIATION_REQUIRED/);
+    });
+
+    await t.test('effect admission refuses an expired, stop-unconfirmed attempt', async () => {
+      const project = `effect-expired-${randomUUID()}`;
+      const { work_unit_id: id } = await submit(project);
+      const begun = await admit(store(), id);
+      const guard = () => store().assertEffectAdmissible({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id });
+      assert.equal(await guard(), true);
+      await expireClaim(id);
+      await assert.rejects(guard(), /E_AUTHORITY_EXPIRED/);
+      assert.equal((await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [begun.execution.execution_id])).rows[0].state, 'running');
+      assert.equal((await pool.query('SELECT claim_execution_id FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows[0].claim_execution_id, begun.execution.execution_id);
+      assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0].c, 1);
+    });
+
+    await t.test('effect admission refuses a missing or mismatched authority', async () => {
+      const missingProject = `effect-missing-authority-${randomUUID()}`;
+      const missing = await submit(missingProject);
+      const missingBegun = await admit(store(), missing.work_unit_id);
+      await pool.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [missingProject]);
+      await assert.rejects(store().assertEffectAdmissible({ projectId: missingProject, workUnitId: missing.work_unit_id, executionId: missingBegun.execution.execution_id }), /E_AUTHORITY_UNAVAILABLE/);
+
+      const project = `effect-mismatched-authority-${randomUUID()}`;
+      const first = await submit(project);
+      const begun = await admit(store(), first.work_unit_id);
+      const other = await submit(project, `other-${randomUUID()}`);
+      const otherExecution = `exec-${randomUUID()}`;
+      const expires = new Date(Date.now() + 3600000).toISOString();
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("UPDATE vnext_work_units SET state='waiting',fence=1,claim_execution_id=$2,claim_owner='test-owner',claim_fence=1,claim_expires_at=$3 WHERE work_unit_id=$1", [other.work_unit_id, otherExecution, expires]);
+        await client.query("INSERT INTO vnext_executions(execution_id,work_unit_id,project_id,owner,fence,state,started_at,claim_expires_at,authorization_decision_ref,attempt,admission) VALUES ($1,$2,$3,'test-owner',1,'running',clock_timestamp(),$4,$5,1,'{}'::jsonb)", [otherExecution, other.work_unit_id, project, expires, `test:${otherExecution}`]);
+        await client.query('DELETE FROM vnext_project_mutation_authority WHERE project_id=$1', [project]);
+        await client.query("INSERT INTO vnext_project_mutation_authority(project_id,work_unit_id,execution_id,fence,owner,claim_expires_at,authorization_decision_ref) VALUES ($1,$2,$3,1,'test-owner',$4,$5)", [project, other.work_unit_id, otherExecution, expires, `test:${otherExecution}`]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+      await assert.rejects(store().assertEffectAdmissible({ projectId: project, workUnitId: first.work_unit_id, executionId: begun.execution.execution_id }), /E_AUTHORITY_UNAVAILABLE/);
+      assert.equal((await pool.query('SELECT state FROM vnext_executions WHERE execution_id=$1', [begun.execution.execution_id])).rows[0].state, 'running');
+      assert.equal((await pool.query('SELECT execution_id FROM vnext_project_mutation_authority WHERE project_id=$1', [project])).rows[0].execution_id, otherExecution);
     });
 
     await t.test('reconciliation resolves uncertainty without revoking cancellation', async () => {
