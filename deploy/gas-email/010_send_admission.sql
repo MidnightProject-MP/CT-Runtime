@@ -402,10 +402,16 @@ BEGIN
    IF NOT FOUND OR w.project_id IS DISTINCT FROM i.project_id THEN RAISE EXCEPTION 'unknown email work'; END IF;
    IF NOT EXISTS(SELECT 1 FROM public.vnext_pilot_inputs x WHERE x.work_unit_id=w.work_unit_id AND x.input_seq=seq)
    THEN RAISE EXCEPTION 'unknown email snapshot'; END IF;
+   -- Pre-010 admitted/sent outboxes carry historical admission evidence even
+   -- without a receipt. Never infer an admission timestamp or backfill one.
+   SELECT * INTO o FROM public.gas_email_outbox WHERE instance_id=i.instance_id AND work_unit_id=w.work_unit_id
+     AND input_seq=seq AND state IN ('admitted','sent') ORDER BY created_at DESC,execution_id LIMIT 1 FOR UPDATE;
    SELECT * INTO ad FROM public.gas_email_admissions WHERE instance_id=i.instance_id AND work_unit_id=w.work_unit_id
      AND input_seq=seq ORDER BY admitted_at DESC LIMIT 1;
    IF FOUND THEN
      cxl_state:='after_admission'; cxl_admission:=ad.execution_id; cxl_admitted:=ad.admitted_at;
+   ELSIF o.execution_id IS NOT NULL THEN
+     cxl_state:='after_admission'; cxl_admission:=o.execution_id; cxl_admitted:=NULL;
    ELSIF EXISTS(SELECT 1 FROM public.vnext_pilot_inputs x WHERE x.work_unit_id=w.work_unit_id AND x.input_seq>seq) THEN
      cxl_state:='superseded'; cxl_admission:=NULL; cxl_admitted:=NULL;
    ELSE

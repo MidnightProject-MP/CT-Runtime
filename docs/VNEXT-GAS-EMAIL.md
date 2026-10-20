@@ -60,6 +60,9 @@ the pinned schema, bootstrap, and migrations 002–009 remain unchanged. This is
 source/test coverage, not a live deployment or activation attestation. The upgrade
 does **not** backfill admission receipts for legacy admitted outboxes: those remain
 reconciliation-only evidence and must never be sent again.
+Cancellation also recognizes legacy admitted or sent outboxes as
+`after-admission`, with their execution identity and a null admission timestamp
+when no receipt exists. It does not manufacture a receipt or clear the block.
 
 `delivery-peek` is read-only preparation, not permission to send. Only a committed
 `delivery({execution_id})` response with `status: send` authorizes the prepared

@@ -158,6 +158,13 @@ test('009 to 010 preserves legacy admitted uncertainty without manufacturing adm
   assert.deepEqual((await upgradeDelivery(pool)).pending,['010_send_admission']);await upgradeDelivery(pool,{apply:true});
   assert.deepEqual((await pool.query('SELECT * FROM gas_email_upgrade_ledger ORDER BY upgrade_id')).rows.slice(0,8),ledger);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM gas_email_admissions')).rows[0].n,0);
+  await pool.query("INSERT INTO gas_email_cancellation_authorities(instance_id,authority_ref,authority_id) VALUES('gas-vnext-email','legacy:cancel','legacy-cancel')");
+  const decision={decision_ref:'cancel:legacy',work_unit_id:before[0].work_unit_id,input_seq:Number(before[0].input_seq),authority:'legacy:cancel'};
+  const cancelled=await rpc('cancel',decision);
+  assert.equal(cancelled.status,'after-admission');assert.equal(cancelled.state,'after_admission');assert.equal(cancelled.replay,false);
+  assert.equal(cancelled.admission_execution_id,claim.execution_id);assert.equal(cancelled.admitted_at,null);
+  assert.deepEqual(await rpc('cancel',decision),{...cancelled,replay:true});
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM gas_email_admissions')).rows[0].n,0);
   for(const op of ['delivery-peek','delivery']){const replay=await rpc(op,{execution_id:claim.execution_id});assert.equal(replay.status,'reconcile');assert.equal(replay.replay,true);assert.equal(replay.admission_digest,undefined);}
   assert.deepEqual((await pool.query('SELECT * FROM gas_email_outbox')).rows,before);assert.deepEqual((await pool.query('SELECT * FROM vnext_project_reconciliation_blocks')).rows,blocks);
   assert.equal((await upgradeDelivery(pool)).status,'already-applied');
