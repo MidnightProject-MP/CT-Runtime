@@ -121,6 +121,7 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
   const children = new Set();
   let workerPids = [];
   let lifecycleCompleted = false;
+  let acceptedAWorkId = null;
 
   const workerSource = `
     import { access, readFile, writeFile } from 'node:fs/promises';
@@ -177,8 +178,8 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
     executor: { command: process.execPath, args: [workerPath, controlDirectory], stateDirectory, envNames: [] },
   };
   const writeConfig = async overrides => writeFile(configPath, JSON.stringify({ ...baseConfig, ...overrides }, null, 2));
-  const startRun = () => {
-    const running = startCli(cliPath, 'run', configPath, connectionString);
+  const startRun = (pathToConfig = configPath) => {
+    const running = startCli(cliPath, 'run', pathToConfig, connectionString);
     children.add(running.child);
     running.child.once('exit', () => children.delete(running.child));
     return running;
@@ -186,14 +187,15 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
   const inspect = () => invoke(cliPath, 'inspect', configPath, connectionString);
   const countExecutions = async () => Number((await pool.query(`SELECT count(*)::int AS count FROM vnext_executions e
     JOIN vnext_work_units w USING(work_unit_id) WHERE w.project_id=$1`, [projectId])).rows[0].count);
-  const setClaimExpired = async () => {
+  const countWorkExecutions = async workUnitId => Number((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE work_unit_id=$1', [workUnitId])).rows[0].count);
+  const setClaimExpired = async workUnitId => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       const { rows: [{ expiry }] } = await client.query("SELECT clock_timestamp()-interval '1 second' AS expiry");
-      await client.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE project_id=$1', [projectId, expiry]);
-      await client.query("UPDATE vnext_executions SET claim_expires_at=$2 WHERE project_id=$1 AND state IN ('created','running')", [projectId, expiry]);
-      await client.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE project_id=$1', [projectId, expiry]);
+      await client.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [workUnitId, expiry]);
+      await client.query("UPDATE vnext_executions SET claim_expires_at=$2 WHERE work_unit_id=$1 AND state IN ('created','running')", [workUnitId, expiry]);
+      await client.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE work_unit_id=$1', [workUnitId, expiry]);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -230,6 +232,7 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
       await invoke(cliPath, 'migrate', configPath, connectionString);
       const submitted = await invoke(cliPath, 'submit', configPath, connectionString, ['--thread', threadId, '--receipt', receipt, '--message-file', messagePath]);
       assert.equal(submitted.created, true);
+      acceptedAWorkId = submitted.work_unit_id;
       await invoke(cliPath, 'pause', configPath, connectionString, ['--reason', 'startup-test']);
       const firstCoordinator = startRun();
       await delay(300);
@@ -256,7 +259,7 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
 
       await writeFile(gatePath, 'release');
       await waitFor(() => exists(path.join(controlDirectory, 'done-1')), 'first worker completion');
-      await setClaimExpired();
+      await setClaimExpired(submitted.work_unit_id);
       try {
         await waitFor(async () => (await countExecutions()) === 2 && await exists(path.join(controlDirectory, 'done-2')), 'recovered settlement and continuation worker');
       } catch (error) {
@@ -318,7 +321,61 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
     await t.test('real reconcile CLI binds exact attempt identity, replays history, rejects reference reuse, and leaves successor block intact', async t => {
       if (!lifecycleCompleted) return t.skip('the integrated worker/restart/acceptance lifecycle did not complete');
       const store = createPilotStore({ pool });
-      await store.reviseWorkRequirements((await pool.query('SELECT work_unit_id FROM vnext_work_units WHERE project_id=$1', [projectId])).rows[0].work_unit_id,
+      const blockerControl = path.join(directory, 'blocker-control');
+      const blockerState = path.join(directory, 'blocker-attempts');
+      const blockerConfigPath = path.join(directory, 'blocker-pilot.json');
+      await mkdir(blockerControl, { recursive: true });
+      const blockerConfig = {
+        ...baseConfig,
+        coordinatorId: 'native-status-blocker',
+        pauseFile: path.join(directory, 'PAUSED-BLOCKER'),
+        executor: { command: process.execPath, args: [workerPath, blockerControl], stateDirectory: blockerState, envNames: [] },
+      };
+      await writeFile(blockerConfigPath, JSON.stringify(blockerConfig, null, 2));
+      const blockerSubmitted = await invoke(cliPath, 'submit', configPath, connectionString, [
+        '--thread', 'status-blocker', '--receipt', `blocker-${randomUUID()}`, '--message-file', messagePath,
+      ]);
+      const blockerRun = startRun(blockerConfigPath);
+      await waitFor(() => exists(path.join(blockerControl, 'started-1.json')), 'second Work Unit worker launch');
+      const blockerMarker = JSON.parse(await readFile(path.join(blockerControl, 'started-1.json'), 'utf8'));
+      workerPids.push(blockerMarker.pid);
+      const runningView = await inspect();
+      const acceptedA = runningView.objectives.find(objective => objective.work_unit_id === acceptedAWorkId);
+      const runningB = runningView.objectives.find(objective => objective.work_unit_id === blockerSubmitted.work_unit_id);
+      assert.equal(acceptedA.accepted_completion.accepted, true, 'accepted Work Unit A remains current while B runs');
+      assert.equal(runningB.active_attempts.length, 1);
+      assert.equal(runningB.next_eligible_action.reason, 'attempt-running');
+      assert.equal((await invoke(cliPath, 'tick', blockerConfigPath, connectionString)).status, 'quiesced');
+      assert.equal(await countWorkExecutions(blockerSubmitted.work_unit_id), 1, 'another coordinator pass must not duplicate B');
+
+      const blockerStopped = await signalAndWait(blockerRun.child, 'SIGKILL');
+      assert.ok(blockerStopped);
+      assert.equal(process.kill(blockerMarker.pid, 0), true, 'B worker must survive its coordinator interruption');
+      try { process.kill(-blockerMarker.pid, 'SIGKILL'); } catch { /* worker has already exited */ }
+      await setClaimExpired(blockerSubmitted.work_unit_id);
+      const recoveryPass = await invoke(cliPath, 'tick', blockerConfigPath, connectionString);
+      assert.equal(recoveryPass.status, 'blocked', 'recovery records uncertainty instead of retrying B');
+      const blockedView = await inspect();
+      const acceptedAWhileBlocked = blockedView.objectives.find(objective => objective.work_unit_id === acceptedAWorkId);
+      const blockedB = blockedView.objectives.find(objective => objective.work_unit_id === blockerSubmitted.work_unit_id);
+      assert.equal(acceptedAWhileBlocked.accepted_completion.accepted, true, 'project uncertainty must not erase A acceptance');
+      assert.equal(blockedB.uncertain_reason, 'external-effect-uncertain');
+      assert.equal(blockedView.next_action.kind, 'reconcile');
+      assert.equal((await invoke(cliPath, 'tick', blockerConfigPath, connectionString)).status, 'blocked');
+      assert.equal(await countWorkExecutions(blockerSubmitted.work_unit_id), 1, 'blocked coordinator passes must not duplicate B');
+
+      const blockedCoordinator = startRun(blockerConfigPath);
+      await waitFor(() => blockedCoordinator.output().stdout.includes('"status":"blocked"'), 'recurring coordinator pass while project is blocked');
+      assert.equal(blockedCoordinator.child.exitCode, null, 'recurring coordinator remains alive while status reports the block');
+      const stoppedBlockedCoordinator = await signalAndWait(blockedCoordinator.child, 'SIGTERM', 3000);
+      assert.ok(stoppedBlockedCoordinator, 'blocked coordinator remains stoppable');
+
+      const blockerDecision = await decisionForBlock(`operator-reconcile:${randomUUID()}`, 'effect_applied');
+      const blockerDecisionFile = await writeDecision('reconcile-status-blocker', blockerDecision);
+      await invoke(cliPath, 'reconcile', blockerConfigPath, connectionString, ['--decision-file', blockerDecisionFile]);
+      assert.equal((await inspect()).objectives.find(objective => objective.work_unit_id === acceptedAWorkId).accepted_completion.accepted, true);
+
+      await store.reviseWorkRequirements(acceptedAWorkId,
         { expectedRevision: 2, requirements: { finish: 'Resolve each uncertain attempt only with its bound decision.' } });
       const firstFailure = await invoke(cliPath, 'tick', configPath, connectionString, [], 1);
       assert.equal(firstFailure.status, 'failed');

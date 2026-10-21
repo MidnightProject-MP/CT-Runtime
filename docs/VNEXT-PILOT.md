@@ -14,6 +14,12 @@ pass, all 16 required native PostgreSQL suites pass (111 tests, zero skips), and
 the cross-process proof passes. The coordinator and integrated CLI suites are
 both required native suites.
 
+The follow-up status correction reconstructs an accepted snapshot through a
+read-only repeatable-read path, independent of project-wide eligibility to issue
+a new acceptance. Its two-Work-Unit regression keeps accepted A visible while B
+is active and while B holds a reconciliation block, and checks the recurring
+coordinator does not duplicate B or exit.
+
 This is local verification, not GitHub CI or operational qualification. Nothing
 was pushed, merged to remote, deployed, live-applied, activated, or commissioned.
 The existing GAS `no_effect` decision still makes an uncertain send a permanent
@@ -27,7 +33,7 @@ project stop.
 - A new process discovers progress from PostgreSQL without a queued in-memory continuation. `continue` schedules the next opportunity after a minimum interval. `waiting` stays quiet unless new human input arrives or Celestan supplies a UTC `requested_next_wake`. There is no generic external-condition subscription service.
 - `status` reads durable responses and questions. The append-only-by-adapter `vnext_pilot_results` table preserves all accepted turn reports; the last ten are included in cold reconstruction. Original identity files and attempt request/result files remain outside the checkout. The command executor retains hash-checked copies of cited file evidence under each attempt directory (maximum 16 MiB per file), so later working-file changes do not erase those bytes.
 - `inspect` derives the coordinator view from the same durable records: objective revision, active and completed attempts, latest result and evidence, waiting/blocked/uncertain/cancelled reasons, the next eligible action or why none exists, completion claim vs accepted completion, and pending human decisions.
-- `acceptance_history` retains prior receipts across revisions or new input. `accepted_completion` is populated only when the Work Unit is currently terminal and its accepted receipt matches the current last execution and work revision.
+- `acceptance_history` retains prior receipts across revisions or new input. `accepted_completion` is populated only when the Work Unit is currently terminal and its accepted receipt matches the current last execution and work revision. Its digest is reconstructed through a repeatable-read, read-only snapshot that does not apply the project-wide eligibility gate for issuing new acceptance, so status remains readable while a sibling Work Unit is running or reconciliation-blocked.
 - `run` executes the same bounded pass repeatedly with one dispatch per pass, a durable `coordinator.pass` event, sequential passes, and graceful stop after the current pass on SIGINT/SIGTERM. `tick` remains the single-pass form for the systemd timer. A configured pause file makes every pass quiescent without touching a live attempt; `pause` and `resume` manage that marker.
 - `accept`, `cancel`, and `reconcile` are explicit operator commands over the existing guarded boundaries. They do not bypass execution, settlement, or acceptance checks. Acceptance still requires an independent decision; cancellation still requires a durable authorized intent; reconciliation requires an explicit decision document and records its reference with the resolution.
 - The command worker receives explicitly selected environment variables; database credentials are not inherited. Raw stdout/stderr are discarded. A Linux process-group timeout prevents an ordinary child/descendant from outliving its execution; systemd's control-group boundary contains the complete service on the selected host.
