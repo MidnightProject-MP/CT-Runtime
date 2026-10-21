@@ -214,11 +214,12 @@ This order is a proposal. Do not skip a gate because an earlier gate passed.
    configuration; it is not performed by repository code.
 
 7. **Set only the allowlisted Script Properties, disabled.** Use
-   `deploy/gas-email/properties.example.json` as the complete list:
+   `deploy/gas-email/properties.example.json` as the complete property list:
    `CT_VNEXT_EMAIL_ENABLED=false`, instance, Data API URL, approved Data API
    host, approved script ID, approved mailbox, approved sender, explicit model,
    and label. Set `OPENROUTER_API_KEY` separately as the only secret property.
-   Do not use `secret_property_names_only` as a property. Keep the runtime
+   The file's `secret_property_names_only` key is metadata identifying the
+   secret; it is not a Script Property and must not be set. Keep the runtime
    disabled.
 
 8. **Deploy reviewed source through the canonical workflow only.** The manual
@@ -286,10 +287,14 @@ not terminal until the independent acceptance decision is recorded.
 ## Stop, rollback, and recovery
 
 To stop future work, run `pauseVnextEmailRuntime`, which sets and verifies
-`CT_VNEXT_EMAIL_ENABLED=false`. Then remove the trigger through the approved
-owner path and revoke the instance grant and the separate acceptance and
-cancellation authorities as required. Do not delete the database, blocks, or
-evidence.
+`CT_VNEXT_EMAIL_ENABLED=false`. Then delete every `vnextEmailTick` trigger in
+the Apps Script editor's Triggers page, which is the owner-only mechanism; no
+exported helper deletes triggers. Do not call `installVnextEmailTrigger` or
+`activateVnextEmailRuntime` during stop. Verify the Triggers page shows no
+`vnextEmailTick` trigger, then run `diagnoseVnextEmailPreparation()` and confirm
+its `trigger-inventory` stage reports `emailTriggerCount: 0` with no unexpected
+handler. Revoke the instance grant and the separate acceptance and cancellation
+authorities as required. Do not delete the database, blocks, or evidence.
 
 An uncertain send is a permanent project stop:
 
