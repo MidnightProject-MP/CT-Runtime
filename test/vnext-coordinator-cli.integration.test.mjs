@@ -387,7 +387,12 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
       assert.deepEqual(replayA, resolvedA, 'successful reconciliation replay must return its exact historical receipt without a live block');
 
       const secondFailure = await invoke(cliPath, 'tick', configPath, connectionString, [], 1);
-      assert.equal(secondFailure.status, 'failed');
+      const eligibility = await pool.query(`SELECT w.work_unit_id,w.state,w.retry_after,p.next_wake_at,p.consumed_input_seq,
+        (SELECT COALESCE(max(i.input_seq),0) FROM vnext_pilot_inputs i WHERE i.work_unit_id=w.work_unit_id) AS latest_input_seq,
+        EXISTS(SELECT 1 FROM vnext_project_mutation_authority a WHERE a.project_id=w.project_id) AS authority_held,
+        EXISTS(SELECT 1 FROM vnext_project_reconciliation_blocks r WHERE r.project_id=w.project_id) AS reconciliation_pending
+        FROM vnext_work_units w JOIN vnext_pilot_progress p USING(work_unit_id) WHERE w.project_id=$1 ORDER BY w.created_at`, [projectId]);
+      assert.equal(secondFailure.status, 'failed', `expected retryable successor admission after no_effect: ${JSON.stringify({ secondFailure, eligibility: eligibility.rows })}`);
       const decisionB = await decisionForBlock(`operator-reconcile:${randomUUID()}`);
       assert.notEqual(decisionB.execution_id, decisionA.execution_id);
       const fileB = await writeDecision('reconcile-b', decisionB);
