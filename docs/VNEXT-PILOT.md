@@ -1,6 +1,23 @@
 # Minimum durable loop: implementation and operation
 
 This source delivery connects a PostgreSQL-backed human inbox to a bounded command execution and durable future eligibility. It includes current-main foundation code plus PR #63's A8/A9 fixes, a small Linux caller, and a disabled systemd timer. It does not deploy or activate anything. It does not claim the multi-day operational MVP has passed.
+The Milestone 2A candidate adds a recurring coordinator pass, durable pass records, a derived operator view, optional long-running loop, pause/resume, and explicit acceptance/cancellation/reconciliation commands. Its exact local commit passes the WSL core verifier; it has no GitHub CI or operational qualification, so it remains a candidate. The existing timer remains the only supplied deployment unit.
+
+## Milestone 2A candidate evidence
+
+This candidate is based on merged main `8572550`. Targeted native verification
+passed 60/60 across the coordinator, integrated CLI, pilot, operating boundary,
+cancellation, and recoverable-dispatch suites. The full core verifier passed on
+the exact local candidate commit from the existing clean WSL workspace: 601
+local tests total (551 pass, 50 expected platform skips, 0 failures), migrations
+pass, all 16 required native PostgreSQL suites pass (111 tests, zero skips), and
+the cross-process proof passes. The coordinator and integrated CLI suites are
+both required native suites.
+
+This is local verification, not GitHub CI or operational qualification. Nothing
+was pushed, merged to remote, deployed, live-applied, activated, or commissioned.
+The existing GAS `no_effect` decision still makes an uncertain send a permanent
+project stop.
 
 ## What is implemented
 
@@ -9,15 +26,18 @@ This source delivery connects a PostgreSQL-backed human inbox to a bounded comma
 - `persistTurn` atomically records the outcome, optional lesson, exact evidence, input watermark, and next inspection time with the existing execution/work transition. A reply arriving during execution remains unconsumed and eligible, including during completion.
 - A new process discovers progress from PostgreSQL without a queued in-memory continuation. `continue` schedules the next opportunity after a minimum interval. `waiting` stays quiet unless new human input arrives or Celestan supplies a UTC `requested_next_wake`. There is no generic external-condition subscription service.
 - `status` reads durable responses and questions. The append-only-by-adapter `vnext_pilot_results` table preserves all accepted turn reports; the last ten are included in cold reconstruction. Original identity files and attempt request/result files remain outside the checkout. The command executor retains hash-checked copies of cited file evidence under each attempt directory (maximum 16 MiB per file), so later working-file changes do not erase those bytes.
+- `inspect` derives the coordinator view from the same durable records: objective revision, active and completed attempts, latest result and evidence, waiting/blocked/uncertain/cancelled reasons, the next eligible action or why none exists, completion claim vs accepted completion, and pending human decisions.
+- `acceptance_history` retains prior receipts across revisions or new input. `accepted_completion` is populated only when the Work Unit is currently terminal and its accepted receipt matches the current last execution and work revision.
+- `run` executes the same bounded pass repeatedly with one dispatch per pass, a durable `coordinator.pass` event, sequential passes, and graceful stop after the current pass on SIGINT/SIGTERM. `tick` remains the single-pass form for the systemd timer. A configured pause file makes every pass quiescent without touching a live attempt; `pause` and `resume` manage that marker.
+- `accept`, `cancel`, and `reconcile` are explicit operator commands over the existing guarded boundaries. They do not bypass execution, settlement, or acceptance checks. Acceptance still requires an independent decision; cancellation still requires a durable authorized intent; reconciliation requires an explicit decision document and records its reference with the resolution.
 - The command worker receives explicitly selected environment variables; database credentials are not inherited. Raw stdout/stderr are discarded. A Linux process-group timeout prevents an ordinary child/descendant from outliving its execution; systemd's control-group boundary contains the complete service on the selected host.
 - Failure after starting the worker requires review. An ambiguous settlement leaves the claim for durable inspection rather than recording a false failure or rerunning effects. Expired ownership does not permit automatic external-worker takeover in the pilot. A blocked status identifies work requiring reconciliation.
 
 ## Source provenance
 
-- Main observed for this delivery: `b22b605647d21d0143a6b17d377aa7e8016a4f1e`.
-- PR #63 head incorporated: `ac2ab15` (full SHA in `DELIVERY-NOTES.md`). These changes were not represented as merged on remote main.
-- Migration 008 is new. Migrations 001–007 retain their source checksums.
-- No git push, merge to remote, secret change, GAS write, migration against production, or deployment was performed.
+- Candidate base: merged main `8572550c90000f29496ec979ad54286a45b5fb09` (PR #101).
+- The vNext Node migration chain remains unchanged through migration 015; Milestone 2A adds no migration. GAS send admission and minimal cancellation use migration 010 from #101, not applied live by this candidate.
+- No candidate push/PR, secret change, GAS write, production migration, activation, or deployment was performed.
 
 ## Install and prove the mechanics locally
 
@@ -41,8 +61,8 @@ The archive includes the two pinned Foundry Observer source files as a sibling `
 ## Configure the chosen host and project
 
 1. Install the code at `/opt/CT-Runtime`, the approved project checkout at its own path, and the authoritative identity files outside the runtime checkout. Run the worker with only the tool credentials and OS permissions required by the entrusted project. Prompt scope is not a sandbox. Keep runtime database/configuration access outside the worker's permitted tool surface; if stronger isolation is needed, use a qualified sandbox command as the executor.
-2. Copy `examples/vnext-pilot.config.json` to `/etc/celestan/pilot.json`. Replace all paths, the explicit OpenCode model/agent, and the authority module. Keep `enabled` and `legacyExcluded` false during qualification. State belongs in `/var/lib/celestan/pilot`, not in either repository.
-3. Connect the existing authorization authority. The required module exports `authorizeExecution(context)`, `verifyExecution(decision, context)`, and `authorizeTerminal(context)`. These functions must retain project scope and existing quality requirements. The sample `examples/vnext-pilot-authority.mjs` is an implementable file-grant adapter; copy it outside the checkout and supply `CT_PILOT_GRANT_FILE` pointing at an actual existing entrustment. Its decision reference binds grant contents and execution ID, and optional `objectiveIds` restricts objectives. The grant's scope is supplied to cognition. The sample grant is deliberately invalid until configured; it grants nothing by itself.
+2. Copy `examples/vnext-pilot.config.json` to `/etc/celestan/pilot.json`. Replace all paths, the explicit OpenCode model/agent, and the authority module. Keep `enabled` and `legacyExcluded` false during qualification. State belongs in `/var/lib/celestan/pilot`, not in either repository. `coordinatorId` labels durable pass records; `scanIntervalMs` controls the optional `run` loop; `pauseFile` is an absolute operator marker and is never inside the project checkout.
+3. Connect the existing authorization authority. The required module exports `authorizeExecution(context)`, `verifyExecution(decision, context)`, and `authorizeTerminal(context)`. The `cancel` command additionally requires `verifyCancellation(decision, context)`; absent that export, cancellation fails closed. These functions must retain project scope and existing quality requirements. The sample `examples/vnext-pilot-authority.mjs` is an implementable file-grant adapter; copy it outside the checkout and supply `CT_PILOT_GRANT_FILE` pointing at an actual existing entrustment. Its decision reference binds grant contents and execution ID, and optional `objectiveIds` restricts objectives. The grant's scope is supplied to cognition. The sample grant is deliberately invalid until configured; it grants nothing by itself.
 4. For completion, the sample authority loads a project-owned `acceptanceModule` exporting `accept({workUnit, execution, turn, evidence, grant})`. It must evaluate the actual finish condition and required project review/delivery evidence. File hashes prove artifact integrity, not semantic correctness. Without an acceptance policy the completion claim stays in `review`; Runtime does not fabricate one for SuperSimpleGames.
 5. Configure `CT_PILOT_DATABASE_URL` only for the runtime process, in an environment file readable by the runtime account. Never put credentials in source, the grant, turn reports or the ZIP. Prepare the existing schema roles and migrations according to the current database runbook before applying the vNext migrations. Do not point first-time testing at production.
 
@@ -55,6 +75,31 @@ node bin/vnext-pilot.mjs status --config /etc/celestan/pilot.json
 ```
 
 Use the same receipt ID only to retry delivery of exactly the same message. Use the same thread and a new receipt ID for a follow-up. The CLI inbox is the selected human interface in this slice; existing GAS Feedback ingestion/projection remains separate and has not been silently rewired. If Sheets must be the pilot interface, its receipt-to-this-inbox and response projection require a separately verified adapter before activation.
+
+Inspect the durable coordinator view before and after each dispatch:
+
+```sh
+node bin/vnext-pilot.mjs inspect --config /etc/celestan/pilot.json
+```
+
+`run` is optional; the timer's repeated `tick` provides the same pass semantics. A long-running process is useful for local qualification and shorter scan intervals:
+
+```sh
+node bin/vnext-pilot.mjs run --config /etc/celestan/pilot.json
+node bin/vnext-pilot.mjs pause --config /etc/celestan/pilot.json --reason maintenance
+node bin/vnext-pilot.mjs resume --config /etc/celestan/pilot.json
+```
+
+Pause never interrupts the current worker. It prevents the next pass from admitting work; the pass stops after restoring durable state.
+
+`accept` may ask the configured authority for a new acceptance decision or use an explicit decision document. A supplied decision is sent directly to the guarded acceptance operation so an exact historical receipt can replay after the Work Unit advances; the CLI still verifies that the Work Unit belongs to the configured project.
+
+```sh
+node bin/vnext-pilot.mjs accept --config /etc/celestan/pilot.json --work WORK_ID
+node bin/vnext-pilot.mjs accept --config /etc/celestan/pilot.json --work WORK_ID --decision-file /var/lib/celestan/acceptance.json
+```
+
+`cancel` requires an authorized decision document and uses the current durable work revision. `reconcile` requires an exact decision document containing `ref`, `project_id`, `work_unit_id`, `execution_id`, `fence`, and `resolution` (`no_effect` or `effect_applied`). The identity fields are passed unchanged to the store. An exact replay returns its original receipt even after the block is gone; a mismatched identity or reuse of a decision reference for another attempt fails closed. These commands are operator surfaces, not evidence that an effect did or did not happen.
 
 ## Activate after qualification
 
@@ -72,7 +117,7 @@ The periodic scan recovers a missed wake signal because eligibility is in the sa
 
 ## Recovery and limits
 
-Inspect `status`, the exact attempt request/result files, and the external project before resolving an uncertain effect. Review/expired work does not automatically launch a replacement. This delivery intentionally includes no generic force-unlock command: stopping/reconciling the actual worker and deciding whether to resume requires the selected backend's evidence and authority. Automatic backend-specific reconciliation is not claimed.
+Inspect `status` or `inspect`, the exact attempt request/result files, and the external project before resolving an uncertain effect. Review/expired work does not automatically launch a replacement. `reconcile` is an explicit, decision-bound operator command; it is not an unguarded force-unlock. Stopping/reconciling the actual worker and deciding whether to resume still requires the selected backend's evidence and authority. Automatic backend-specific reconciliation is not claimed.
 
 Human input is bounded at 100 messages and 128 KiB per thread; identity context at 16 files/256 KiB; command result at 64 KiB. Exceeding a bound stops rather than silently dropping context. There is no generalized memory compaction yet. Per-wake timeout and cooldown prevent a hot loop; the observation period must still assess whether repeated work is useful.
 
