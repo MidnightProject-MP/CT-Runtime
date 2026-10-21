@@ -549,8 +549,7 @@ test('native CLI subprocess loop separates execution, review, Celestan decision,
     finally { expiryClient.release(); }
     const recoveredPass = await tick();
     assert.equal(recoveredPass.status, 'dispatched', `restart should settle and decide the retained assignment report: ${JSON.stringify(recoveredPass)}`);
-    assert.equal((await tick()).status, 'dispatched', 'Celestan assignment decision survives a cold CLI process');
-    assert.equal((await tick()).status, 'needs-review', 'execution cannot accept its own completion');
+    assert.equal((await tick()).status, 'needs-review', 'the recovered stewardship decision enables execution, which cannot accept its own completion');
     assert.equal((await tick()).status, 'dispatched', 'independent reviewer runs as a real subprocess');
     assert.equal((await tick()).status, 'dispatched', 'review recommendation is recorded separately');
     assert.equal((await tick()).status, 'accepted', 'authorized snapshot-bound acceptance follows review');
