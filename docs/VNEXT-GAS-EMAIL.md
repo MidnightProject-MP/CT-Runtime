@@ -135,6 +135,20 @@ orderings. The upgrade suite covers the 009-to-010 boundary without receipt
 backfill. PGlite skips native concurrency tests; passing it alone does not qualify
 the native concurrency behavior.
 
+A dedicated pilot-lifecycle test drives the actual GAS runner in a cold VM on
+every tick, with mocked Gmail and OpenRouter and the public SQL RPC. It proves the
+ordered path intake → claim → checkpoint → delivery-peek → delivery admission →
+single send → `note-send-receipt` → readback → `record`, then explicit
+acceptance and a cold restart that remains idle with no second send, admission,
+or execution. This is integration evidence, not live qualification.
+
+The `no_effect` evidence decision is recorded in
+`docs/VNEXT-GAS-NO-EFFECT-EVIDENCE.md`. The current Gmail/GAS boundary cannot
+prove that an uncertain send did not occur: Gmail has no idempotent request
+identity or queryable outcome, search absence is not proof, and Apps Script
+provides no sender-termination proof. Increment B is therefore closed; an
+uncertain send remains a project stop and there is no block-clearing override.
+
 ## Durable state and concurrency
 
 All per-message, turn, watermark, result, failure, and outbox state is in Neon.
