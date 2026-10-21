@@ -39,7 +39,7 @@ for (const entry of entries) {
   if (!entry.isFile()) continue;
   const name = entry.name;
   if (!DEPLOYABLE_FILES.has(name)) continue;
-  const source = await readFile(join(root, name), 'utf8');
+  const source = (await readFile(join(root, name), 'utf8')).replace(/\r\n/g, '\n');
   const type = name === 'appsscript.json' ? 'JSON' : extname(name) === '.html' ? 'HTML' : 'SERVER_JS';
   files.push({ name, type, source });
 }
