@@ -639,13 +639,14 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       assert.deepEqual(sql('SELECT * FROM gas_email_continuations')[0],stored);
       rpc('ingest',input('reply','sqlthread','Use the second draft.'));
       const next=rpc('claim');assert.equal(next.status,'claimed');assert.deepEqual(next.inputs.map(x=>x.message),['Use the second draft.']);
-      const superseded=sql('SELECT state,consumed_by FROM gas_email_continuations ORDER BY created_at')[0];
+      const superseded=sql("SELECT state,consumed_by FROM gas_email_continuations WHERE kind='waiting'")[0];
       assert.equal(superseded.state,'superseded');assert.equal(superseded.consumed_by,null);
       checkpoint(next,{disposition:'continue',summary:'Refining the second draft.'});
-      const rows=sql('SELECT execution_id,state,kind,input_seq::int AS input_seq FROM gas_email_continuations ORDER BY created_at');
-      assert.equal(rows.length,2);
-      assert.equal(rows[1].execution_id,next.execution_id);assert.equal(rows[1].state,'pending');assert.equal(rows[1].kind,'continue');
-      assert.equal(rows[1].input_seq,Number(sql('SELECT input_seq AS n FROM vnext_pilot_inputs WHERE message=$1',['Use the second draft.'])[0].n));
+      const rows=sql("SELECT execution_id,state,kind,input_seq::int AS input_seq FROM gas_email_continuations WHERE kind='continue'");
+      assert.equal(rows.length,1);
+      assert.equal(rows[0].execution_id,next.execution_id);assert.equal(rows[0].state,'pending');assert.equal(rows[0].kind,'continue');
+      assert.equal(rows[0].input_seq,Number(sql('SELECT input_seq AS n FROM vnext_pilot_inputs WHERE message=$1',['Use the second draft.'])[0].n));
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),2);
     });
     await t.test('late input supersedes the pending proposal without consuming it',()=>{
       reset();rpc('ingest',input('early','sqlthread','Original requirement'));const c=rpc('claim');
@@ -666,11 +667,13 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       sql("UPDATE gas_email_continuations SET eligible_after=clock_timestamp()-interval '1 second' WHERE state='pending' AND kind='continue'");
       const c2=rpc('claim');assert.equal(c2.status,'claimed');assert.equal(c2.fence,c1.fence+1);
       checkpoint(c2,{disposition:'continue',summary:'Tightening the draft.'});
-      const rows=sql('SELECT execution_id,fence::int AS fence,state,consumed_by FROM gas_email_continuations ORDER BY created_at');
-      assert.equal(rows.length,2);
-      assert.equal(rows[0].execution_id,c1.execution_id);assert.equal(rows[0].state,'consumed');assert.equal(rows[0].consumed_by,c2.execution_id);
-      assert.equal(rows[1].execution_id,c2.execution_id);assert.equal(rows[1].fence,c2.fence);assert.equal(rows[1].state,'pending');
-      assert.equal(rows[1].consumed_by,null);
+      const first=sql('SELECT execution_id,fence::int AS fence,state,consumed_by FROM gas_email_continuations WHERE execution_id=$1',[c1.execution_id]);
+      const second=sql('SELECT execution_id,fence::int AS fence,state,consumed_by FROM gas_email_continuations WHERE execution_id=$1',[c2.execution_id]);
+      assert.equal(first.length,1);assert.equal(second.length,1);
+      assert.equal(first[0].execution_id,c1.execution_id);assert.equal(first[0].state,'consumed');assert.equal(first[0].consumed_by,c2.execution_id);
+      assert.equal(second[0].execution_id,c2.execution_id);assert.equal(second[0].fence,c2.fence);assert.equal(second[0].state,'pending');
+      assert.equal(second[0].consumed_by,null);
+      assert.equal(Number(sql('SELECT count(*) AS n FROM gas_email_continuations')[0].n),2);
     });
     await t.test('a delivery-first rejection leaves the proposal pending for a later admission',()=>{
       reset();rpc('ingest',input('rejected','sqlthread','Original requirement'));const c=rpc('claim');
