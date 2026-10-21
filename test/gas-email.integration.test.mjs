@@ -16,7 +16,19 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
   const fixture=()=>gasEmailFixture(rawRpc);
   const input=(id,thread='sqlthread',body='Please draft.')=>({id,threadId:thread,from:'midnightprojectantigravity@gmail.com',to:'midnight.project.mp@gmail.com',reference:`<${id}@example.com>`,subject:'Task',body});
   const checkpoint=(claim,turn={disposition:'done',summary:'Draft complete.'})=>rpc('checkpoint',{execution_id:claim.execution_id,fence:claim.fence,turn});
-  const reset=()=>sql('TRUNCATE gas_email_instances, vnext_work_units CASCADE; INSERT INTO gas_email_instances VALUES (\'gas-test\',\'gas-owner\',\'gas-client\',\'email-project\',\'midnight.project.mp@gmail.com\',\'midnightprojectantigravity@gmail.com\',true,\'reviewed:text-only:v1\')');
+  const reset=()=>{
+    sql(`TRUNCATE gas_email_instances,vnext_work_units,vnext_events,vnext_project_mutation_authority,
+      vnext_project_reconciliation_blocks,gas_email_outbox,gas_email_admissions CASCADE;
+      INSERT INTO gas_email_instances VALUES ('gas-test','gas-owner','gas-client','email-project','midnight.project.mp@gmail.com','midnightprojectantigravity@gmail.com',true,'reviewed:text-only:v1')`);
+    const state=sql(`SELECT (SELECT count(*)::int FROM vnext_work_units) AS work_units,
+      (SELECT count(*)::int FROM vnext_executions) AS executions,
+      (SELECT count(*)::int FROM vnext_project_mutation_authority) AS authorities,
+      (SELECT count(*)::int FROM vnext_project_reconciliation_blocks) AS blocks,
+      (SELECT count(*)::int FROM gas_email_outbox) AS outboxes,
+      (SELECT count(*)::int FROM gas_email_admissions) AS admissions,
+      (SELECT count(*)::int FROM vnext_events) AS events`)[0];
+    assert.deepEqual(state,{work_units:0,executions:0,authorities:0,blocks:0,outboxes:0,admissions:0,events:0},'GAS fixture reset clears project control, delivery, and event state');
+  };
   const authorize=()=>{sql("INSERT INTO gas_email_acceptance_authorities VALUES ('gas-test','reviewed:owner-acceptance:v1','owner-acceptance:v1')");return 'reviewed:owner-acceptance:v1';};
   try {
     const cancelAuthority=()=>{sql("INSERT INTO gas_email_cancellation_authorities(instance_id,authority_ref,authority_id) VALUES ('gas-test','owner:cancel:v1','cancel:v1')");return 'owner:cancel:v1';};
@@ -185,7 +197,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
     });
     await t.test('marker recovers response lost before receipt; wrong marker, duplicates and truncation never settle',()=>{
       for(const mode of ['recover','wrong-marker','duplicate','truncated','to','reference','body']){
-        reset();const f=fixture();f.add('marker');f.loseNextSend();assert.equal(f.tick().status,'blocked');
+        reset();const f=fixture();f.add('marker');f.loseNextSend();const firstTick=f.tick();assert.equal(firstTick.status,'blocked');assert.equal(f.sends,1,`lost-response fixture must send before recovery (${mode}): ${JSON.stringify(firstTick)}`);
         const m=f.messages.get('sent1'),headers=m.payload.headers;
         headers.find(h=>h.name==='Message-ID').value='<rewritten@gmail.com>';
         const exec=sql('SELECT execution_id FROM gas_email_outbox')[0].execution_id;
@@ -205,7 +217,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       for(const field of ['To','In-Reply-To','body']){
         reset();let lost=true;
         const f=gasEmailFixture((op,data)=>{const r=rawRpc(op,data);if(op==='note-send-receipt'&&lost){lost=false;throw new Error('lost receipt response');}return r;});
-        f.add('saved');assert.equal(f.tick().status,'blocked');const m=f.messages.get('sent1');
+        f.add('saved');const firstTick=f.tick();assert.equal(firstTick.status,'blocked');assert.equal(f.sends,1,`saved-receipt fixture must send before receipt loss (${field}): ${JSON.stringify(firstTick)}`);const m=f.messages.get('sent1');
         if(field==='body')m.payload.body.data=Buffer.from('different').toString('base64url');else m.payload.headers.find(h=>h.name===field).value=field==='To'?'attacker@example.com':'<other@example.com>';
         assert.equal(f.tick().status,'uncertain');assert.equal(f.sends,1);
         const d=rpc('delivery-peek'),data={execution_id:d.execution_id,gmail_id:'sent1',messageId:d.envelope.messageId,threadId:d.envelope.threadId};
@@ -216,7 +228,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       }
     });
     await t.test('provider IDs cannot be reused by another outbox or bypass receipt identity at record',()=>{
-      reset();rpc('ingest',input('first'));checkpoint(rpc('claim'));const first=rpc('delivery');
+      reset();rpc('ingest',input('first'));const firstClaim=rpc('claim');assert.equal(firstClaim.status,'claimed',JSON.stringify(firstClaim));checkpoint(firstClaim);const first=rpc('delivery');
       const proof=d=>({execution_id:d.execution_id,gmail_id:'shared',messageId:d.envelope.messageId,threadId:d.envelope.threadId});
       assert.equal(rpc('note-send-receipt',proof(first)).status,'noted');
       assert.equal(rpc('record',proof(first)).status,'sent');
@@ -229,7 +241,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
     await t.test('receipt write rejected before commit recovers marker without sending again',()=>{
       reset();let fail=true;
       const f=gasEmailFixture((op,data)=>{if(op==='note-send-receipt'&&fail){fail=false;f.messages.get('sent1').payload.headers.find(h=>h.name==='Message-ID').value='<rewritten@gmail.com>';throw new Error('receipt unavailable');}return rawRpc(op,data);});
-      f.add('failedReceipt');assert.equal(f.tick().status,'blocked');
+      f.add('failedReceipt');const firstTick=f.tick();assert.equal(firstTick.status,'blocked');assert.equal(f.sends,1,`receipt-write fixture must send before losing receipt: ${JSON.stringify(firstTick)}`);
       assert.equal(sql('SELECT provider_receipt FROM gas_email_outbox')[0].provider_receipt,null);
       assert.equal(f.tick().status,'idle');assert.equal(f.sends,1);assert.equal(rpc('health').uncertain,0);
     });
