@@ -3,5 +3,12 @@
   "projectId": "CT-SuperSimpleGames",
   "scope": "REPLACE_WITH_ACTUAL_SCOPE_AND_TOOL_LIMITS",
   "expiresAt": "REPLACE_WITH_UTC_EXPIRY",
-  "acceptanceModule": "/etc/celestan/supersimplegames-acceptance.mjs"
+  "acceptanceModule": "/etc/celestan/supersimplegames-acceptance.mjs",
+  "assignmentDecisionModule": "/etc/celestan/supersimplegames-assignment-decisions.mjs",
+  "assignmentProfiles": {
+    "execution": { "model": "REPLACE_WITH_EXECUTION_MODEL", "agent": "REPLACE_WITH_EXECUTION_AGENT", "permissions": ["project:write"] },
+    "review": { "model": "REPLACE_WITH_DISTINCT_REVIEW_MODEL", "agent": "REPLACE_WITH_READ_ONLY_REVIEW_AGENT", "permissions": ["project:read"] },
+    "diagnosis": { "model": "REPLACE_WITH_DIAGNOSIS_MODEL", "agent": "REPLACE_WITH_READ_ONLY_DIAGNOSIS_AGENT", "permissions": ["project:read"] },
+    "stewardship": { "model": "REPLACE_WITH_STEWARDSHIP_MODEL", "agent": "REPLACE_WITH_READ_ONLY_STEWARDSHIP_AGENT", "permissions": ["project:read"] }
+  }
 }

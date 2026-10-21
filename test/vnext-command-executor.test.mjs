@@ -36,3 +36,17 @@ test('timeout kills the process group and never accepts an early result',async()
   if(state) assert.match(state,/\) [ZX] /,`descendant ${pid} still running after timeout`);
  } finally {await rm(dir,{recursive:true,force:true});}
 });
+
+test('purpose-bound read-only assignments use their dedicated command profile', { skip: process.platform !== 'linux' }, async () => {
+ const dir=await mkdtemp(path.join(tmpdir(),'command-purpose-'));
+ try {
+  const execution=path.join(dir,'execution.mjs'),review=path.join(dir,'review.mjs');
+  await writeFile(execution,`import {writeFileSync} from 'node:fs';writeFileSync(process.env.CT_VNEXT_RESULT_FILE,JSON.stringify({profile:'execution'}));`);
+  await writeFile(review,`import {writeFileSync} from 'node:fs';writeFileSync(process.env.CT_VNEXT_RESULT_FILE,JSON.stringify({profile:process.argv[2]}));`);
+  const execute=createCommandExecutor({command:process.execPath,args:[execution],stateDirectory:path.join(dir,'exec'),purposeExecutors:{
+   review:{command:process.execPath,args:[review,'{assignment.purpose}'],stateDirectory:path.join(dir,'review')},
+  }});
+  assert.deepEqual(await execute({execution:{execution_id:'purpose-review'},assignment:{purpose:'review',model:'review-model',agent:'read-only-reviewer',access_class:'read-only'},workspaceRoot:dir,timeoutMs:2000}),{profile:'review'});
+  await assert.rejects(execute({execution:{execution_id:'purpose-diagnosis'},assignment:{purpose:'diagnosis',model:'model',agent:'agent',access_class:'read-only'},workspaceRoot:dir,timeoutMs:2000}),/purpose-specific read-only executor/);
+ } finally {await rm(dir,{recursive:true,force:true});}
+});

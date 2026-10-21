@@ -4,7 +4,10 @@ import { spawn } from 'node:child_process';
 const [model, agent, executable = 'opencode'] = process.argv.slice(2);
 if (!model || !agent) throw new Error('explicit model and agent required');
 const request = JSON.parse(await readFile(process.env.CT_VNEXT_REQUEST_FILE, 'utf8'));
-const prompt = `${request.instruction}\nRead the complete durable request at ${process.env.CT_VNEXT_REQUEST_FILE}.\nWrite ONLY the final objective-turn JSON to ${process.env.CT_VNEXT_RESULT_FILE}. Do not print or persist credentials. The result file is a report, not evidence by itself. The current objective_id is ${request.workUnit.objective_ref}.`;
+const outputContract = request.assignment?.purpose && request.assignment.purpose !== 'execution'
+  ? 'Write ONLY the purpose-specific assignment report JSON requested in the instruction.'
+  : `Write ONLY the final objective-turn JSON to ${process.env.CT_VNEXT_RESULT_FILE}. The current objective_id is ${request.workUnit.objective_ref}.`;
+const prompt = `${request.instruction}\nRead the complete durable request at ${process.env.CT_VNEXT_REQUEST_FILE}.\n${outputContract} Do not print or persist credentials. The result file is a report, not evidence by itself. Write the final JSON to ${process.env.CT_VNEXT_RESULT_FILE}.`;
 const child = spawn(executable, ['run','--model',model,'--agent',agent,prompt], { stdio: 'ignore', env: process.env });
 child.once('error', () => { process.exitCode = 1; });
 child.once('exit', code => { process.exitCode = code ?? 1; });

@@ -433,3 +433,132 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('native CLI subprocess loop separates execution, review, Celestan decision, and acceptance', {
+  skip: !enabled,
+  timeout: 120000,
+}, async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'vnext-assignment-cli-'));
+  const workspace = path.join(directory, 'project');
+  const stateDirectory = path.join(directory, 'attempts');
+  const controlDirectory = path.join(directory, 'control');
+  await mkdir(workspace, { recursive: true });
+  await mkdir(controlDirectory, { recursive: true });
+  const identityPath = path.join(directory, 'identity.md');
+  const workerPath = path.join(directory, 'worker.mjs');
+  const authorityPath = path.join(directory, 'authority.mjs');
+  const configPath = path.join(directory, 'pilot.json');
+  const messagePath = path.join(directory, 'message.txt');
+  const proof = 'native CLI assignment proof';
+  const proofHash = createHash('sha256').update(proof).digest('hex');
+  const projectId = `assignment-cli-${randomUUID()}`;
+  const threadId = 'separate-purpose-lifecycle';
+  const cliPath = path.resolve(import.meta.dirname, '../bin/vnext-pilot.mjs');
+  const connectionString = process.env.TEST_DATABASE_URL;
+  const pool = new Pool({ connectionString, max: 3 });
+  const gatePath = path.join(controlDirectory, 'release-stewardship');
+  const launchPath = path.join(controlDirectory, 'stewardship-started');
+  const donePath = path.join(controlDirectory, 'stewardship-done');
+  let firstCoordinator = null;
+  let workerPid = null;
+  const digestModule = pathToFileURL(path.resolve(import.meta.dirname, '../lib/vnext/operating-boundary.mjs')).href;
+  await writeFile(identityPath, 'Purpose-bound native subprocess test.');
+  await writeFile(path.join(workspace, 'proof.txt'), proof);
+  await writeFile(messagePath, 'Complete the bound objective.');
+  await writeFile(workerPath, `
+    import { readFile, writeFile } from 'node:fs/promises';
+    import { createHash } from 'node:crypto';
+    const request = JSON.parse(await readFile(process.env.CT_VNEXT_REQUEST_FILE, 'utf8'));
+    const purpose = request.assignment.purpose;
+    const result = purpose === 'stewardship'
+      ? { proposal: 'Complete the objective and verify its evidence.' }
+      : purpose === 'review'
+        ? { outcome: 'recommend_accept', summary: 'The completion and exact file evidence satisfy this review.' }
+        : { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Outcome checked.',
+            outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(${JSON.stringify(proof)}).digest('hex') }] };
+    await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result));
+    if (purpose === 'stewardship' && process.argv[4]) {
+      await writeFile(${JSON.stringify(launchPath)}, String(process.pid));
+      for (;;) { try { await readFile(${JSON.stringify(gatePath)}); break; } catch { await new Promise(resolve => setTimeout(resolve, 10)); } }
+      await writeFile(${JSON.stringify(donePath)}, request.execution.execution_id);
+    }
+  `);
+  await writeFile(authorityPath, `
+    import { digest } from ${JSON.stringify(digestModule)};
+    export async function authorizeExecution({ execution }) { return { ref: 'execution:' + execution.execution_id }; }
+    export async function verifyExecution(decision, { execution }) { return decision?.ref === 'execution:' + execution.execution_id; }
+    export async function authorizeAssignmentDecision({ assignment, report }) {
+      const report_digest = digest(report);
+      return { ref: 'celestan:' + assignment.assignment_id + ':' + report_digest.slice(0,12),
+        outcome: assignment.purpose === 'stewardship' ? 'propose' : 'recommend_accept',
+        assignment_id: assignment.assignment_id, assignment_digest: assignment.assignment_digest,
+        report_digest, subject_digest: assignment.subject_digest };
+    }
+    export async function verifyAssignmentDecision(decision, { assignment, report }) {
+      return decision?.assignment_id === assignment.assignment_id && decision.assignment_digest === assignment.assignment_digest
+        && decision.report_digest === digest(report) && decision.subject_digest === assignment.subject_digest;
+    }
+    export async function authorizeTerminal(context) {
+      return { ref: 'acceptance:' + context.snapshotDigest, snapshotDigest: context.snapshotDigest };
+    }
+    export async function verifyAcceptance(decision, context) {
+      return decision?.snapshotDigest === context.snapshotDigest && decision.ref === 'acceptance:' + context.snapshotDigest;
+    }
+  `);
+  const profiles = {
+    execution: { model: 'execution-model', agent: 'builder', access_class: 'bounded-mutation', permissions: ['project:write'] },
+    review: { model: 'review-model', agent: 'readonly-reviewer', access_class: 'read-only', permissions: ['project:read'] },
+    diagnosis: { model: 'diagnosis-model', agent: 'readonly-diagnostician', access_class: 'read-only', permissions: ['project:read'] },
+    stewardship: { model: 'stewardship-model', agent: 'readonly-steward', access_class: 'read-only', permissions: ['project:read'] },
+  };
+  const executor = (profileDirectory) => ({ command: process.execPath,
+    args: [workerPath, '{assignment.model}', '{assignment.agent}', controlDirectory], stateDirectory: profileDirectory, envNames: [] });
+  const config = {
+    enabled: true, legacyExcluded: true, projectId, workspaceRoot: workspace, identityFiles: [identityPath], authorityModule: authorityPath,
+    coordinatorId: 'assignment-subprocess-test', intervalMs: 1000, timeoutMs: 15000, assignmentProfiles: profiles,
+    executor: { ...executor(stateDirectory), purposeExecutors: {
+      review: executor(path.join(directory, 'review-attempts')),
+      diagnosis: executor(path.join(directory, 'diagnosis-attempts')),
+      stewardship: executor(path.join(directory, 'stewardship-attempts')),
+    } },
+  };
+  await writeFile(configPath, JSON.stringify(config));
+  const tick = () => invoke(cliPath, 'tick', configPath, connectionString);
+  try {
+    await invoke(cliPath, 'migrate', configPath, connectionString);
+    const submitted = await invoke(cliPath, 'submit', configPath, connectionString, ['--thread', threadId, '--receipt', `receipt-${randomUUID()}`, '--message-file', messagePath]);
+    firstCoordinator = startCli(cliPath, 'tick', configPath, connectionString);
+    await waitFor(() => exists(launchPath), 'stewardship subprocess launch');
+    workerPid = Number(await readFile(launchPath, 'utf8'));
+    const interrupted = await signalAndWait(firstCoordinator.child, 'SIGKILL');
+    assert.ok(interrupted, 'coordinator process interruption should complete');
+    assert.equal(process.kill(workerPid, 0), true, 'purpose-bound worker survives coordinator interruption');
+    await writeFile(gatePath, 'release');
+    await waitFor(() => exists(donePath), 'retained stewardship report completion');
+    const assignmentTask = (await pool.query(`SELECT a.assignment_work_unit_id FROM vnext_assignments a
+      WHERE a.project_id=$1 AND a.purpose='stewardship' AND a.status='queued'`, [projectId])).rows[0].assignment_work_unit_id;
+    const { rows: [{ expiry }] } = await pool.query("SELECT clock_timestamp()-interval '1 second' AS expiry");
+    await pool.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [assignmentTask, expiry]);
+    await pool.query("UPDATE vnext_executions SET claim_expires_at=$2 WHERE work_unit_id=$1 AND state IN ('created','running')", [assignmentTask, expiry]);
+    await pool.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE work_unit_id=$1', [assignmentTask, expiry]);
+    assert.equal((await tick()).status, 'dispatched', 'restart recovers and settles the retained assignment report before deciding it');
+    assert.equal((await tick()).status, 'dispatched', 'Celestan assignment decision survives a cold CLI process');
+    assert.equal((await tick()).status, 'needs-review', 'execution cannot accept its own completion');
+    assert.equal((await tick()).status, 'dispatched', 'independent reviewer runs as a real subprocess');
+    assert.equal((await tick()).status, 'dispatched', 'review recommendation is recorded separately');
+    assert.equal((await tick()).status, 'accepted', 'authorized snapshot-bound acceptance follows review');
+    const status = await invoke(cliPath, 'inspect', configPath, connectionString);
+    assert.equal(status.objectives.length, 1);
+    const objective = status.objectives[0];
+    assert.equal(objective.state, 'terminal');
+    assert.equal(objective.accepted_completion?.accepted, true);
+    assert.equal(objective.assignments.filter(row => row.purpose === 'review').length, 1);
+    assert.equal(objective.assignments.find(row => row.purpose === 'review').decision?.outcome, 'recommend_accept');
+  } finally {
+    await writeFile(gatePath, 'release').catch(() => {});
+    if (workerPid) { try { process.kill(workerPid, 'SIGKILL'); } catch { /* worker already exited */ } }
+    if (firstCoordinator?.child.exitCode === null) await signalAndWait(firstCoordinator.child, 'SIGKILL');
+    await pool.end();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
