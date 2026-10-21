@@ -4,6 +4,8 @@ export const requiredSuites = [
   'test/vnext-neon.integration.test.mjs',
   'test/vnext-a9-postgres.integration.test.mjs',
   'test/vnext-pilot.integration.test.mjs',
+  'test/vnext-coordinator.integration.test.mjs',
+  'test/vnext-coordinator-cli.integration.test.mjs',
   'test/phase1-operating-boundary.test.mjs',
   'test/vnext-recoverable-dispatch.integration.test.mjs',
   'test/vnext-cancellation.integration.test.mjs',

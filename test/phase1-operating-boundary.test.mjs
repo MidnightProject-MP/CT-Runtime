@@ -157,7 +157,10 @@ test('real pilot cold continuation, admission cursor, separate acceptance and st
         await assert.rejects(checking.acceptWork(id, decision));
         assert.deepEqual((await pool.query('SELECT state,work_revision,last_turn FROM vnext_work_units WHERE work_unit_id=$1', [id])).rows, before.rows);
         assert.equal((await pool.query('SELECT 1 FROM vnext_events WHERE event_id=$1', [`acceptance:${decision.ref}`])).rowCount, 0);
-        if (change === 'revision') assert.equal(await store().nextEligible(project), id, 'trusted material revision is a fresh coordinator opportunity');
+        if (change === 'revision') {
+          await advanceUntilRunnable(s, id);
+          assert.equal(await store().nextEligible(project), id, 'trusted material revision is a fresh coordinator opportunity');
+        }
       }
     });
     await t.test('competing admissions consume one proposal; canonical settlement replay and divergent rejection', async () => {
@@ -515,11 +518,21 @@ test('memory reconciliation records its outcome and grants one coordinator-owned
   const active = await admit(store, 'memory-recover');
   await store.persistFailure(failExecution(active.workUnit, active.execution, { maxAttempts: 1, reconciliationRequired: true }));
   assert.equal((await store.reconstruct({ work_unit_id: 'memory-recover' })).state, 'review');
-  const reconciled = await store.reconcileFailure({ projectId: 'memory-recover-project', workUnitId: 'memory-recover', executionId: active.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  const decisionRef = 'operator:memory-reconcile-once';
+  const reconciled = await store.reconcileFailure({ projectId: 'memory-recover-project', workUnitId: 'memory-recover', executionId: active.execution.execution_id, fence: 1, resolution: 'no_effect', decisionRef });
   assert.equal(reconciled.state, 'actionable');
   assert.ok(store.snapshot().work[0].pilot.next_wake_at, 'recovery is durably discoverable');
   assert.equal(store.snapshot().events.filter(e => e.event_id === `reconciliation:${active.execution.execution_id}`).length, 1);
-  const replay = await store.reconcileFailure({ projectId: 'memory-recover-project', workUnitId: 'memory-recover', executionId: active.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  const replay = await store.reconcileFailure({ projectId: 'memory-recover-project', workUnitId: 'memory-recover', executionId: active.execution.execution_id, fence: 1, resolution: 'no_effect', decisionRef });
   assert.deepEqual(replay, reconciled);
   assert.equal(store.snapshot().events.filter(e => e.event_id === `reconciliation:${active.execution.execution_id}`).length, 1);
+  const successorWork = await store.reconstruct({ work_unit_id: 'memory-recover' });
+  const successor = await admit(store, 'memory-recover', successorWork);
+  await store.persistFailure(failExecution(successor.workUnit, successor.execution, { maxAttempts: 1, reconciliationRequired: true }));
+  const successorBlock = store.snapshot().reconciliationBlocks[0];
+  await assert.rejects(store.reconcileFailure({
+    projectId: 'memory-recover-project', workUnitId: 'memory-recover', executionId: successor.execution.execution_id,
+    fence: successor.execution.fence, resolution: 'no_effect', decisionRef,
+  }), /decision reference already used/);
+  assert.equal(store.snapshot().reconciliationBlocks[0].execution_id, successorBlock.execution_id, 'reused reference cannot clear the successor block');
 });

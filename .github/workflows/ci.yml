@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16.9-bookworm
+        image: docker.io/library/postgres:16.9-bookworm
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: ctruntime
@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16.9-bookworm
+        image: docker.io/library/postgres:16.9-bookworm
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: gas_role_handoff
