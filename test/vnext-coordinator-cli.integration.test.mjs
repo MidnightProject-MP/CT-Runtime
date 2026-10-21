@@ -547,7 +547,8 @@ test('native CLI subprocess loop separates execution, review, Celestan decision,
       await expiryClient.query('COMMIT');
     } catch (error) { await expiryClient.query('ROLLBACK').catch(() => {}); throw error; }
     finally { expiryClient.release(); }
-    assert.equal((await tick()).status, 'dispatched', 'restart recovers and settles the retained assignment report before deciding it');
+    const recoveredPass = await tick();
+    assert.equal(recoveredPass.status, 'dispatched', `restart should settle and decide the retained assignment report: ${JSON.stringify(recoveredPass)}`);
     assert.equal((await tick()).status, 'dispatched', 'Celestan assignment decision survives a cold CLI process');
     assert.equal((await tick()).status, 'needs-review', 'execution cannot accept its own completion');
     assert.equal((await tick()).status, 'dispatched', 'independent reviewer runs as a real subprocess');
