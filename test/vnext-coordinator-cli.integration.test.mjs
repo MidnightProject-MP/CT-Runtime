@@ -538,9 +538,15 @@ test('native CLI subprocess loop separates execution, review, Celestan decision,
     const assignmentTask = (await pool.query(`SELECT a.assignment_work_unit_id FROM vnext_assignments a
       WHERE a.project_id=$1 AND a.purpose='stewardship' AND a.status='queued'`, [projectId])).rows[0].assignment_work_unit_id;
     const { rows: [{ expiry }] } = await pool.query("SELECT clock_timestamp()-interval '1 second' AS expiry");
-    await pool.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [assignmentTask, expiry]);
-    await pool.query("UPDATE vnext_executions SET claim_expires_at=$2 WHERE work_unit_id=$1 AND state IN ('created','running')", [assignmentTask, expiry]);
-    await pool.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE work_unit_id=$1', [assignmentTask, expiry]);
+    const expiryClient = await pool.connect();
+    try {
+      await expiryClient.query('BEGIN');
+      await expiryClient.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1', [assignmentTask, expiry]);
+      await expiryClient.query("UPDATE vnext_executions SET claim_expires_at=$2 WHERE work_unit_id=$1 AND state IN ('created','running')", [assignmentTask, expiry]);
+      await expiryClient.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE work_unit_id=$1', [assignmentTask, expiry]);
+      await expiryClient.query('COMMIT');
+    } catch (error) { await expiryClient.query('ROLLBACK').catch(() => {}); throw error; }
+    finally { expiryClient.release(); }
     assert.equal((await tick()).status, 'dispatched', 'restart recovers and settles the retained assignment report before deciding it');
     assert.equal((await tick()).status, 'dispatched', 'Celestan assignment decision survives a cold CLI process');
     assert.equal((await tick()).status, 'needs-review', 'execution cannot accept its own completion');
