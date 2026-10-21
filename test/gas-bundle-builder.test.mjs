@@ -72,3 +72,31 @@ test('builds exactly the qualified production GAS deployment file set', async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('normalizes CRLF and LF sources to the same bundle hash', async () => {
+  const lfRoot = await mkdtemp(join(tmpdir(), 'ct-runtime-gas-bundle-lf-'));
+  const crlfRoot = await mkdtemp(join(tmpdir(), 'ct-runtime-gas-bundle-crlf-'));
+  const lfOutput = join(lfRoot, 'bundle.json');
+  const crlfOutput = join(crlfRoot, 'bundle.json');
+  const files = {
+    'appsscript.json': '{"runtimeVersion":"V8"}\n',
+    'gas_core.js': 'function core() {\n  return 1;\n}\n'
+  };
+  try {
+    for (const [name, source] of Object.entries(files)) {
+      await writeFile(join(lfRoot, name), source, 'utf8');
+      await writeFile(join(crlfRoot, name), source.replace(/\n/g, '\r\n'), 'utf8');
+    }
+    const [lfResult, crlfResult] = await Promise.all([
+      execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', lfRoot, lfOutput], { cwd: process.cwd() }),
+      execFileAsync(process.execPath, ['scripts/build-gas-bundle.mjs', crlfRoot, crlfOutput], { cwd: process.cwd() })
+    ]);
+    const lfBundle = JSON.parse(await readFile(lfOutput, 'utf8'));
+    const crlfBundle = JSON.parse(await readFile(crlfOutput, 'utf8'));
+    assert.deepEqual(crlfBundle.files, lfBundle.files);
+    assert.equal(JSON.parse(crlfResult.stdout).bundleHash, JSON.parse(lfResult.stdout).bundleHash);
+  } finally {
+    await rm(lfRoot, { recursive: true, force: true });
+    await rm(crlfRoot, { recursive: true, force: true });
+  }
+});

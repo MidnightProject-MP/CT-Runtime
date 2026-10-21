@@ -25,6 +25,8 @@ const DEPLOYABLE_FILES = new Set([
   'gas_trigger.js',
   'gas_v8.js',
   'gas_vnext_events.js',
+  'gas_vnext_email.js',
+  'gas_vnext_email_owner.js',
   'gas_zz_a_dispatch.js',
   'gas_zz_auth_trace.js'
 ]);
@@ -37,7 +39,7 @@ for (const entry of entries) {
   if (!entry.isFile()) continue;
   const name = entry.name;
   if (!DEPLOYABLE_FILES.has(name)) continue;
-  const source = await readFile(join(root, name), 'utf8');
+  const source = (await readFile(join(root, name), 'utf8')).replace(/\r\n/g, '\n');
   const type = name === 'appsscript.json' ? 'JSON' : extname(name) === '.html' ? 'HTML' : 'SERVER_JS';
   files.push({ name, type, source });
 }

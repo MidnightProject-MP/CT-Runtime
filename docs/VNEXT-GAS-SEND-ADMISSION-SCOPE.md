@@ -125,7 +125,11 @@ authority, or unrenewable fence does not stop an already-running sender.
 defined and approved.** A trusted credential, a nonempty evidence reference, and
 a digest are not enough; a digest proves binding and integrity, not the truth of
 the asserted outcome. A generic block-clearing operation must not be built first
-and given evidentiary meaning later.
+and given evidentiary meaning later. The evidence decision is recorded in
+`docs/VNEXT-GAS-NO-EFFECT-EVIDENCE.md`: the current Gmail/GAS boundary cannot
+establish retrospective `no_effect`, so Increment B remains closed and an
+uncertain send remains a permanent project stop unless the transport changes to
+one with an idempotent, durably queryable provider outcome.
 
 The current refusal conditions are necessary but not sufficient:
 

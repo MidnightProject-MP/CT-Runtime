@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:16.9-bookworm
+        image: public.ecr.aws/docker/library/postgres:16.9-bookworm
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: ctruntime
@@ -79,4 +79,39 @@ jobs:
           SQL
       - name: Verify core (local tests, migrations, PostgreSQL suites, cross-process proof)
         run: npm run verify:core
+      - name: Verify GAS stack in isolated native PostgreSQL databases
+        run: |
+          node scripts/run-postgres-suite.mjs test/gas-email.integration.test.mjs
+          node scripts/run-postgres-suite.mjs test/gas-email-bootstrap.test.mjs
+          node scripts/run-postgres-suite.mjs test/gas-email-delivery-upgrade.test.mjs
+          node scripts/run-postgres-suite.mjs test/gas-email-model-retry.test.mjs
+          node scripts/run-postgres-suite.mjs test/gas-email-failure-watermark.test.mjs
       - run: npm audit --audit-level=high
+
+  gas-data-api-role-handoff:
+    # Roles are cluster-global: never rename them in the core suites' cluster.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: public.ecr.aws/docker/library/postgres:16.9-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: gas_role_handoff
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d gas_role_handoff"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Verify isolated native role handoff and inactive registration
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/gas_role_handoff
+        run: node --test test/gas-email-data-api.test.mjs
