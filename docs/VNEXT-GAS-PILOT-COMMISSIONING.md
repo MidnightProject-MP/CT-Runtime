@@ -15,11 +15,16 @@ approval.
 | GAS stack / Increment A tip | `80d15e177d73c7b068b79d4296d98ef4d3e7165f` |
 | Integration merge | `10fb00c1a0892212430de27a92a52a2036508000` (parents `80d15e1`, `d0725ab`) |
 | Lifecycle and `no_effect` commit | `bce25b0c2f0404cf501a2f390d8a8ba984e306fb` |
-| Verified code/test head | `1b829ebaae36c44bd4eed59ebceb088a52bbf3e4` |
-| GAS bundle at verified head | 25 files, `973ec1d48f6fed792b4948163cb9a5f89cea7253336e93cb682e686f2fdd4363` |
+| Verified code/test head | `6132c52224782c23fc6e878da40debb28e99272b` |
+| GAS bundle at verified head | 25 files, `06fbbc227bbf623cb19c4990e2937264dbd3b6850d58f109f15b1e0c54e34278` |
+| Bundle build environment | WSL Ubuntu 24.04, Node 22.14.0, LF checkout |
 
 This commissioning document is added in a docs-only commit after the verified
 head. It changes no code, test, migration, or deployment input.
+
+The release bundle identity is the canonical Linux build above. The builder
+normalizes CRLF to LF, and `test/gas-bundle-builder.test.mjs` proves LF and CRLF
+sources yield the same hash. A Windows checkout is not a release identity.
 
 The candidate incorporates current main through #100 and the GAS email stack
 represented by draft PR #75, including the merged #84 acceptance separation, the
@@ -39,15 +44,15 @@ resolved as a union: main's core verifier and role-handoff job remain alongside
 the GAS native suite step. Every other file is single-side; no concern is
 reimplemented on both sides.
 
-The verified code/test commit `1b829eb` changes only test assertions. Production
-SQL, runner code, migrations, and deployment paths are unchanged from
-`bce25b0`.
+The verified code/test commit `6132c52` normalizes CRLF to LF in the bundle
+builder and adds the regression test. Production SQL, runner code, migrations,
+and deployment workflows are unchanged from `1b829eb`.
 
 ## Evidence at the verified candidate
 
 | Gate | Result |
 |---|---|
-| Core local tests | 590 tests, 541 pass, 49 platform skips |
+| Core local tests | 591 tests, 542 pass, 49 platform skips |
 | Legacy migrations | 1-17 applied |
 | Required native PostgreSQL suites | 14/14 pass |
 | Cross-process cold-continuation proof | pass |
@@ -57,6 +62,9 @@ SQL, runner code, migrations, and deployment paths are unchanged from
 | GAS model retry | 2/2 pass |
 | GAS failure watermark | 8/8 pass |
 | GAS bundle | 25 files, hash above |
+
+The affected bundle/deploy-contract suites were rerun separately at this head:
+30/30 pass, including the LF/CRLF hash regression.
 
 The GAS integration suite includes the pilot-lifecycle test: the actual GAS
 runner executes in a cold VM on every tick with mocked Gmail and OpenRouter and
