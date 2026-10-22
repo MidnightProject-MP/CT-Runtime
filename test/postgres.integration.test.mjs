@@ -10,7 +10,7 @@ import { createSemanticEvidenceEnvelope } from '../lib/semantic-evidence.mjs';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const fixture = path.join(import.meta.dirname, 'fixture-runner.mjs');
-const dueWake = (project = 'pg-demo') => ({ time: new Date(Date.now() - 1000).toISOString(), reason: 'scheduled', priority: 'normal', project });
+const dueWake = (project = 'pg-demo') => ({ time: new Date(0).toISOString(), reason: 'scheduled', priority: 'normal', project });
 const futureWake = (project = 'pg-demo', year = 2030) => ({ time: `${year}-01-01T00:00:00.000Z`, reason: 'self_scheduled', priority: 'low', project });
 const launch = { command: process.execPath, commandArgs: [fixture], model: 'provider/model', agent: 'build', task: 'fixture task' };
 const semanticEnvelope = (executionId, statement = 'persisted claim') => createSemanticEvidenceEnvelope({ lineage: { physicalExecutionId: executionId, workOrderId: `${executionId}-work` }, sources: [{ sourceId: 'source-1', sourceClass: 'execution-reported', reference: `ct-runtime-result:${executionId}`, sha256: null, sourceExecutionId: executionId }], claims: [{ claimId: 'claim-1', claimType: 'execution-summary', statement, supportSourceIds: ['source-1'] }] });

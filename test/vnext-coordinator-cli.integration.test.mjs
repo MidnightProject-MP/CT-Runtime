@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
@@ -18,8 +19,8 @@ async function exists(file) {
 }
 
 async function waitFor(predicate, label, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (await predicate()) return;
     await delay(20);
   }
