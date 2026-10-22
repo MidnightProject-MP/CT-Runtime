@@ -130,7 +130,7 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
         observed.push({ project_id: workUnit.project_id, project_count: Number(projectCount.rows[0].count), total: Number(total.rows[0].count) });
         return next(workUnit.objective_ref);
       };
-      const first = await runMultiProjectPass({ store, projects: entries, executor, authority, assignmentProfiles: profiles });
+      const first = await runMultiProjectPass({ store, projects: entries, executor, authority });
       assert.equal(first.dispatches.length, 2);
       assert.equal(first.capacity.deferred.length, 1);
       assert.equal(first.capacity.max_concurrency, 2);
@@ -140,12 +140,12 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       const deferredProject = first.capacity.deferred[0];
       assert.equal(entries.some(entry => entry.projectId === deferredProject), true);
       clock += 2000;
-      const second = await runMultiProjectPass({ store, projects: entries, executor, authority, assignmentProfiles: profiles });
+      const second = await runMultiProjectPass({ store, projects: entries, executor, authority });
       assert.ok(second.dispatches.some(row => row.project_id === deferredProject), 'a capacity-deferred project is served next');
       assert.equal(second.dispatches.length, 2);
       assert.notDeepEqual(second.dispatches.map(row => row.project_id).sort(), firstServed);
       clock += 5000;
-      const third = await runMultiProjectPass({ store, projects: entries, executor, authority, assignmentProfiles: profiles });
+      const third = await runMultiProjectPass({ store, projects: entries, executor, authority });
       assert.ok(third.dispatches.length <= 2);
       const served = new Set([...first.dispatches, ...second.dispatches, ...third.dispatches].map(row => row.project_id));
       for (const entry of entries) assert.ok(served.has(entry.projectId), `project ${entry.projectId} is not starved`);
