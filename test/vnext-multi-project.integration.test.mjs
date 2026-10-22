@@ -254,62 +254,66 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
 
     await t.test('real local workers complete both projects through stewardship, execution, review, and acceptance', async () => {
       await pool.query("DELETE FROM vnext_pool_policy");
-      const leftId = `trial-a-${randomUUID()}`;
-      const rightId = `trial-b-${randomUUID()}`;
-      const left = project(leftId, await workspace(leftId));
-      const right = project(rightId, await workspace(rightId));
-      const store = makeStore({ maxConcurrency: 2 });
-      await submit(store, leftId);
-      await submit(store, rightId);
       const trialAuthority = makeAuthority();
       const trialStore = createPilotStore({
         pool, authorizationVerifier: trialAuthority.verifyExecution, acceptanceVerifier: trialAuthority.verifyAcceptance,
         assignmentDecisionVerifier: async () => true, intervalMs: 1000, maxConcurrency: 2,
       });
       const trialExecutor = createCommandExecutor(executorConfig);
+      const allIds = [];
+      const allLedgers = [];
       const passes = [];
-      for (let index = 0; index < 10; index += 1) {
-        const pass = await runMultiProjectPass({ store: trialStore, projects: [left, right], executor: trialExecutor,
+      let quietRedispatches = 0;
+      for (let round = 0; round < 3; round += 1) {
+        const leftId = `trial-${round}-a-${randomUUID()}`;
+        const rightId = `trial-${round}-b-${randomUUID()}`;
+        const left = project(leftId, await workspace(leftId));
+        const right = project(rightId, await workspace(rightId));
+        allIds.push(leftId, rightId);
+        await submit(trialStore, leftId);
+        await submit(trialStore, rightId);
+        for (let index = 0; index < 10; index += 1) {
+          const pass = await runMultiProjectPass({ store: trialStore, projects: [left, right], executor: trialExecutor,
+            authority: trialAuthority, assignmentProfiles: profiles, timeoutMs: 30000 });
+          passes.push(pass);
+          const states = await Promise.all([leftId, rightId].map(async projectId => (await trialStore.coordinatorLedger(projectId)).works.map(work => work.state)));
+          if (states.every(projectStates => projectStates.every(state => state === 'terminal'))) break;
+        }
+        const ledgers = await Promise.all([leftId, rightId].map(projectId => trialStore.coordinatorLedger(projectId)));
+        allLedgers.push(...ledgers);
+        for (const ledger of ledgers) {
+          assert.equal(ledger.works.length, 1);
+          assert.equal(ledger.works[0].state, 'terminal');
+          assert.equal(ledger.block, null);
+          assert.equal(ledger.authority, null);
+        }
+        const quiet = await runMultiProjectPass({ store: trialStore, projects: [left, right], executor: trialExecutor,
           authority: trialAuthority, assignmentProfiles: profiles, timeoutMs: 30000 });
-        passes.push(pass);
-        const states = await Promise.all([leftId, rightId].map(async projectId => (await trialStore.coordinatorLedger(projectId)).works.map(work => work.state)));
-        if (states.every(projectStates => projectStates.every(state => state === 'terminal'))) break;
+        quietRedispatches += quiet.dispatches.length;
+        assert.ok(quiet.passes.every(pass => pass.status === 'quiesced'));
       }
-      const ledgers = await Promise.all([leftId, rightId].map(projectId => trialStore.coordinatorLedger(projectId)));
-      for (const ledger of ledgers) {
-        assert.equal(ledger.works.length, 1);
-        assert.equal(ledger.works[0].state, 'terminal');
-        assert.equal(ledger.block, null);
-        assert.equal(ledger.authority, null);
-      }
-      const executionsBefore = Number((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE project_id=ANY($1::text[])', [[leftId, rightId]])).rows[0].count);
       const duplicates = await pool.query(`SELECT work_unit_id,count(*)::int AS count FROM vnext_executions
-        WHERE project_id=ANY($1::text[]) GROUP BY work_unit_id HAVING count(*)>1`, [[leftId, rightId]]);
+        WHERE project_id=ANY($1::text[]) GROUP BY work_unit_id HAVING count(*)>1`, [allIds]);
       assert.equal(duplicates.rowCount, 0, 'no Work Unit was dispatched twice');
-      const authorityCount = Number((await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=ANY($1::text[])', [[leftId, rightId]])).rows[0].count);
+      const authorityCount = Number((await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=ANY($1::text[])', [allIds])).rows[0].count);
       assert.equal(authorityCount, 0);
-      const quiet = await runMultiProjectPass({ store: trialStore, projects: [left, right], executor: trialExecutor,
-        authority: trialAuthority, assignmentProfiles: profiles, timeoutMs: 30000 });
-      assert.equal(quiet.dispatches.length, 0);
-      assert.ok(quiet.passes.every(pass => pass.status === 'quiesced'));
-      const executionsAfter = Number((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE project_id=ANY($1::text[])', [[leftId, rightId]])).rows[0].count);
-      assert.equal(executionsAfter, executionsBefore, 'quiet operation must not redispatch accepted work');
       const metrics = {
-        projects: 2,
+        projects: allIds.length,
         passes: passes.length,
-        accepted: ledgers.filter(ledger => ledger.works[0].state === 'terminal').length,
+        accepted: allLedgers.filter(ledger => ledger.works[0].state === 'terminal').length,
         duplicate_dispatches: duplicates.rowCount,
         stranded_authorities: authorityCount,
         resource_limit_violations: 0,
-        blocked_projects: 0,
-        quiet_redispatches: quiet.dispatches.length,
+        blocked_projects: allLedgers.filter(ledger => ledger.block).length,
+        quiet_redispatches: quietRedispatches,
         execution_decisions: trialAuthority.decisions.execution,
         assignment_decisions: trialAuthority.decisions.assignment,
         acceptance_decisions: trialAuthority.decisions.acceptance,
       };
-      t.diagnostic(`offline multi-project trial ${JSON.stringify(metrics)}`);
-      assert.equal(metrics.accepted, 2);
+      t.diagnostic(`offline multi-project trials ${JSON.stringify(metrics)}`);
+      assert.equal(metrics.accepted, 6);
       assert.equal(metrics.quiet_redispatches, 0);
+      assert.equal(metrics.blocked_projects, 0);
     });
 
     await t.test('multi-project CLI routes both projects and reports aggregate status', async () => {
