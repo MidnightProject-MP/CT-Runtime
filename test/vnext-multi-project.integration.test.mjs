@@ -373,7 +373,8 @@ export async function verifyAcceptance() { return false; }
       assert.deepEqual(status.projects.map(row => row.project_id).sort(), [leftId, rightId].sort());
       const inspect = await invokeCli('inspect', configPath);
       assert.equal(inspect.projects.length, 2);
-      assert.equal(inspect.capacity.configured, 2);
+      assert.equal(inspect.capacity.configured, true);
+      assert.equal(inspect.capacity.max_concurrency, 2);
     });
   } finally {
     await pool.end();
