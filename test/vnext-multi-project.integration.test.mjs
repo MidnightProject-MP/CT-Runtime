@@ -277,8 +277,8 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
         clock += 2000;
       }
       assert.deepEqual([...served].sort(), [leftId, rightId].sort(), 'forward correction resumes both projects');
-      const duplicates = await pool.query(`SELECT work_unit_id,work_revision,count(*)::int AS count FROM vnext_executions
-        WHERE project_id=ANY($1::text[]) GROUP BY work_unit_id,work_revision HAVING count(*)>1`, [[leftId, rightId]]);
+      const duplicates = await pool.query(`SELECT work_unit_id,admission->>'work_revision' AS work_revision,count(*)::int AS count FROM vnext_executions
+        WHERE project_id=ANY($1::text[]) GROUP BY work_unit_id,admission->>'work_revision' HAVING count(*)>1`, [[leftId, rightId]]);
       assert.equal(duplicates.rowCount, 0, 'a clock correction must not duplicate an execution');
       const authorities = await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=ANY($1::text[])', [[leftId, rightId]]);
       assert.equal(Number(authorities.rows[0].count), 0);
