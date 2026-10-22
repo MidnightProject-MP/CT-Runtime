@@ -252,6 +252,39 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       assert.equal(status.projects.find(project => project.project_id === healthyId).blocked, 0);
     });
 
+    await t.test('backward clock correction suspends then resumes without duplicate dispatch', async () => {
+      await pool.query("DELETE FROM vnext_pool_policy");
+      const leftId = `clock-a-${randomUUID()}`;
+      const rightId = `clock-b-${randomUUID()}`;
+      const left = project(leftId, await workspace(leftId));
+      const right = project(rightId, await workspace(rightId));
+      let clock = Date.now();
+      const store = makeStore({ maxConcurrency: 1, now: () => clock });
+      await submit(store, leftId);
+      await submit(store, rightId);
+      const executor = async ({ workUnit }) => next(workUnit.objective_ref);
+      const first = await runMultiProjectPass({ store, projects: [left, right], executor, authority });
+      assert.equal(first.dispatches.length, 1);
+      assert.equal(first.capacity.deferred.length, 1);
+      clock -= 3_600_000;
+      const rolledBack = await runMultiProjectPass({ store, projects: [left, right], executor, authority });
+      assert.equal(rolledBack.status, 'quiesced');
+      assert.equal(rolledBack.dispatches.length, 0);
+      const served = new Set(first.dispatches.map(row => row.project_id));
+      clock += 3_610_000;
+      for (let index = 0; index < 2; index += 1) {
+        const pass = await runMultiProjectPass({ store, projects: [left, right], executor, authority });
+        for (const row of pass.dispatches) served.add(row.project_id);
+        clock += 2000;
+      }
+      assert.deepEqual([...served].sort(), [leftId, rightId].sort(), 'forward correction resumes both projects');
+      const duplicates = await pool.query(`SELECT work_unit_id,work_revision,count(*)::int AS count FROM vnext_executions
+        WHERE project_id=ANY($1::text[]) GROUP BY work_unit_id,work_revision HAVING count(*)>1`, [[leftId, rightId]]);
+      assert.equal(duplicates.rowCount, 0, 'a clock correction must not duplicate an execution');
+      const authorities = await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=ANY($1::text[])', [[leftId, rightId]]);
+      assert.equal(Number(authorities.rows[0].count), 0);
+    });
+
     await t.test('real local workers complete both projects through stewardship, execution, review, and acceptance', async () => {
       await pool.query("DELETE FROM vnext_pool_policy");
       const trialAuthority = makeAuthority();
