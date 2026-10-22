@@ -540,6 +540,11 @@ test('native CLI subprocess loop separates execution, review, Celestan decision,
     firstCoordinator = startCli(cliPath, 'tick', configPath, connectionString);
     await waitFor(() => exists(launchPath), 'stewardship subprocess launch');
     workerPid = Number(await readFile(launchPath, 'utf8'));
+    await waitFor(async () => {
+      const { rows } = await pool.query(`SELECT e.launch FROM vnext_executions e JOIN vnext_work_units w ON w.work_unit_id=e.work_unit_id
+        WHERE e.project_id=$1 AND e.state IN ('created','running')`, [projectId]);
+      return rows.some(row => Number(row.launch?.pid) === workerPid);
+    }, 'durable stewardship launch identity');
     const interrupted = await signalAndWait(firstCoordinator.child, 'SIGKILL');
     assert.ok(interrupted, 'coordinator process interruption should complete');
     assert.equal(process.kill(workerPid, 0), true, 'purpose-bound worker survives coordinator interruption');

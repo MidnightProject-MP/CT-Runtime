@@ -80,6 +80,16 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       const revisedWake = (await pool.query('SELECT next_wake_at FROM vnext_pilot_progress WHERE work_unit_id=$1', [id])).rows[0].next_wake_at;
       assert.equal(revisedWake.getTime(), 0, 'revision uses a durable immediate wake rather than wall-clock time');
       assert.equal(await store().nextEligible(project), id);
+      await pool.query(`UPDATE vnext_pilot_progress SET consumed_input_seq=(SELECT COALESCE(max(input_seq),0) FROM vnext_pilot_inputs WHERE work_unit_id=$1),
+        next_wake_at=clock_timestamp()+interval '10 minutes' WHERE work_unit_id=$1`, [id]);
+      assert.equal(await store({ now: () => Date.now() - 20 * 60 * 1000 }).nextEligible(project), null,
+        'a genuine future wake remains ineligible under a backward coordinator clock');
+      const immediate = await store().reviseWorkRequirements(id, { expectedRevision: 2, requirements: { finish: 'A new authorized deliverable after the future wake.' } });
+      assert.equal(immediate.work_revision, 3);
+      const immediateWake = (await pool.query('SELECT next_wake_at FROM vnext_pilot_progress WHERE work_unit_id=$1', [id])).rows[0].next_wake_at;
+      assert.equal(immediateWake.getTime(), 0, 'a second revision also uses a durable immediate wake');
+      assert.equal(await store({ now: () => Date.now() - 20 * 60 * 1000 }).nextEligible(project), id,
+        'an immediate opportunity remains eligible under a backward coordinator clock');
     });
 
     await t.test('dispatch refuses a pending cancellation intent', async () => {

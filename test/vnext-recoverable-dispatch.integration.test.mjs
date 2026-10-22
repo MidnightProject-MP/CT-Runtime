@@ -80,7 +80,8 @@ test('memory store: a never-launched attempt recovers exactly once and replays e
   const after = await store.reconstruct({ work_unit_id: 'rec-memory' });
   assert.equal(after.claim, null);
   assert.equal(after.failure.reason, 'not-launched');
-  assert.ok(after.pilot.next_wake_at, 'the retry is a coordinator-owned opportunity');
+  assert.equal(new Date(after.retry_after).getTime(), 0, 'retry cooldown is a logical immediate deadline');
+  assert.equal(new Date(after.pilot.next_wake_at).getTime(), 0, 'the retry is an immediate coordinator opportunity');
   assert.equal(store.snapshot().authorities.length, 0, 'recovery releases the expired authority');
   assert.equal(store.snapshot().reconciliationBlocks.length, 0);
 });

@@ -139,10 +139,16 @@ test('purpose-bound stewardship, independent review, requested changes, and auth
     const stewardship = await run(async ({ assignment }) => {
       assert.equal(assignment.purpose, 'stewardship');
       assert.equal(assignment.access_class, 'read-only');
+      const queuedWake = (await pool.query(`SELECT p.next_wake_at FROM vnext_pilot_progress p
+        JOIN vnext_assignments a ON a.assignment_work_unit_id=p.work_unit_id
+        WHERE a.project_id=$1 AND a.purpose='stewardship'`, [projectId])).rows[0].next_wake_at;
+      assert.equal(queuedWake.getTime(), 0, 'assignment creation uses an immediate wake');
       return { proposal: proposalOne };
     });
     assert.equal(stewardship.disposition, 'assignment-reported');
     assert.equal((await run(async () => { throw new Error('decision-only pass must not dispatch'); })).disposition, 'assignment-decided');
+    const decidedWake = (await pool.query('SELECT next_wake_at FROM vnext_pilot_progress WHERE work_unit_id=$1', [submitted.work_unit_id])).rows[0].next_wake_at;
+    assert.equal(decidedWake.getTime(), 0, 'approved follow-up work uses an immediate wake');
     assert.equal((await run(async ({ assignment, assignment_context }) => {
       assert.equal(assignment.purpose, 'execution');
       assert.equal(assignment.instruction.proposal, proposalOne);
