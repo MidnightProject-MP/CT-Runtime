@@ -146,7 +146,7 @@ test('Neon rejects stale settlement and preserves a newer claim', { skip: !conne
     const execution = startExecution(createExecution(claimed, { executionId: claimed.claim.execution_id, owner: 'owner-a' }));
     const begun = await store.beginExecution(claimed, execution);
 
-    const expired = new Date(Date.now() - 1000).toISOString();
+    const expired = new Date(0).toISOString();
     await pool.query('BEGIN');
     try {
       await pool.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE project_id=$1', [original.project_id, expired]);
