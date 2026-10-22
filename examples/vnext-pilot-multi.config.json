@@ -1,0 +1,41 @@
+{
+  "enabled": false,
+  "legacyExcluded": false,
+  "projects": [
+    {
+      "projectId": "CT-SuperSimpleGames",
+      "workspaceRoot": "/srv/celestan/CT-SuperSimpleGames",
+      "identityFiles": ["/srv/celestan/identity/CELESTAN.md", "/srv/celestan/identity/AUTHORITY.md", "/srv/celestan/CT-SuperSimpleGames/AGENTS.md"]
+    },
+    {
+      "projectId": "CT-Runtime",
+      "workspaceRoot": "/srv/celestan/CT-Runtime",
+      "identityFiles": ["/srv/celestan/identity/CELESTAN.md", "/srv/celestan/identity/AUTHORITY.md", "/srv/celestan/CT-Runtime/AGENTS.md"]
+    }
+  ],
+  "authorityModule": "/etc/celestan/pilot-authority.mjs",
+  "coordinatorId": "celestan-pilot",
+  "intervalMs": 60000,
+  "scanIntervalMs": 60000,
+  "maxConcurrency": 2,
+  "maxNonProgress": 2,
+  "assignmentProfiles": {
+    "execution": { "model": "REPLACE_WITH_EXECUTION_MODEL", "agent": "REPLACE_WITH_EXECUTION_AGENT", "access_class": "bounded-mutation", "permissions": ["project:write"] },
+    "review": { "model": "REPLACE_WITH_DISTINCT_REVIEW_MODEL", "agent": "REPLACE_WITH_REVIEW_AGENT", "access_class": "read-only", "permissions": ["project:read"] },
+    "diagnosis": { "model": "REPLACE_WITH_DIAGNOSIS_MODEL", "agent": "REPLACE_WITH_DIAGNOSIS_AGENT", "access_class": "read-only", "permissions": ["project:read"] },
+    "stewardship": { "model": "REPLACE_WITH_STEWARDSHIP_MODEL", "agent": "REPLACE_WITH_STEWARDSHIP_AGENT", "access_class": "read-only", "permissions": ["project:read"] }
+  },
+  "pauseFile": "/var/lib/celestan/pilot/PAUSED",
+  "timeoutMs": 120000,
+  "executor": {
+    "command": "/usr/bin/node",
+    "args": ["/opt/CT-Runtime/scripts/vnext-opencode-worker.mjs", "{assignment.model}", "{assignment.agent}"],
+    "stateDirectory": "/var/lib/celestan/pilot",
+    "envNames": [],
+    "purposeExecutors": {
+      "review": { "command": "/usr/bin/node", "args": ["/opt/CT-Runtime/scripts/vnext-opencode-worker.mjs", "{assignment.model}", "{assignment.agent}"], "stateDirectory": "/var/lib/celestan/pilot/review", "envNames": [] },
+      "diagnosis": { "command": "/usr/bin/node", "args": ["/opt/CT-Runtime/scripts/vnext-opencode-worker.mjs", "{assignment.model}", "{assignment.agent}"], "stateDirectory": "/var/lib/celestan/pilot/diagnosis", "envNames": [] },
+      "stewardship": { "command": "/usr/bin/node", "args": ["/opt/CT-Runtime/scripts/vnext-opencode-worker.mjs", "{assignment.model}", "{assignment.agent}"], "stateDirectory": "/var/lib/celestan/pilot/stewardship", "envNames": [] }
+    }
+  }
+}

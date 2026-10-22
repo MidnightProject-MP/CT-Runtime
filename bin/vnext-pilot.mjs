@@ -5,8 +5,9 @@ import path from 'node:path';
 import { Pool } from 'pg';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
 import { createCommandExecutor } from '../lib/vnext/command-executor.mjs';
-import { runCoordinatorLoop, runCoordinatorPass, writePauseFile, removePauseFile } from '../lib/vnext/coordinator.mjs';
+import { runCoordinatorLoop, runCoordinatorPass, runMultiProjectPass, writePauseFile, removePauseFile } from '../lib/vnext/coordinator.mjs';
 import { deriveCoordinatorStatus } from '../lib/vnext/coordinator-status.mjs';
+import { deriveMultiProjectStatus } from '../lib/vnext/multi-project-status.mjs';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 
 const ACTIONS = new Set(['migrate','submit','tick','status','inspect','accept','decide-assignment','cancel','reconcile','run','pause','resume']);
@@ -22,10 +23,86 @@ const compact = result => ({
   next_action: result.next_action,
   pending_decisions: result.pending_decisions,
 });
+const compactMany = result => ({
+  status: result.status,
+  reason: result.reason,
+  started_at: result.started_at,
+  finished_at: result.finished_at,
+  capacity: result.capacity,
+  recovered: result.recovered,
+  dispatches: result.dispatches,
+  passes: (result.passes ?? []).map(compact),
+});
+
+function configuredProjects(config) {
+  const source = Array.isArray(config.projects)
+    ? config.projects
+    : [{ projectId: config.projectId, workspaceRoot: config.workspaceRoot, identityFiles: config.identityFiles }];
+  if (source.length === 0) throw new Error('at least one project is required');
+  if (source.length > 64) throw new Error('at most 64 projects are supported');
+  const seen = new Set();
+  return source.map(project => {
+    if (!project || typeof project !== 'object') throw new Error('each project must be an object');
+    if (typeof project.projectId !== 'string' || !project.projectId) throw new Error('each project requires projectId');
+    if (seen.has(project.projectId)) throw new Error(`duplicate project ${project.projectId}`);
+    seen.add(project.projectId);
+    if (typeof project.workspaceRoot !== 'string' || !path.isAbsolute(project.workspaceRoot)) throw new Error(`project ${project.projectId} requires an absolute workspaceRoot`);
+    if (!Array.isArray(project.identityFiles) || project.identityFiles.length === 0) throw new Error(`project ${project.projectId} requires identityFiles`);
+    return {
+      projectId: project.projectId,
+      workspaceRoot: project.workspaceRoot,
+      identityFiles: project.identityFiles,
+      executorConfig: project.executor ?? config.executor,
+      timeoutMs: project.timeoutMs ?? config.timeoutMs ?? 120000,
+      maxNonProgress: project.maxNonProgress ?? config.maxNonProgress ?? 2,
+    };
+  });
+}
+
+function selectedProjects(projects, projectId, { allowAll = false } = {}) {
+  if (projectId) {
+    const selected = projects.filter(project => project.projectId === projectId);
+    if (selected.length !== 1) throw new Error(`project ${projectId} is not configured`);
+    return selected;
+  }
+  if (allowAll) return projects;
+  if (projects.length !== 1) throw new Error('--project is required when more than one project is configured');
+  return projects;
+}
+
+function recoveryFor(executorConfig) {
+  if (typeof executorConfig?.stateDirectory !== 'string' || !path.isAbsolute(executorConfig.stateDirectory)) return null;
+  return { stateDirectory: {
+    execution: executorConfig.stateDirectory,
+    review: executorConfig.purposeExecutors?.review?.stateDirectory ?? executorConfig.stateDirectory,
+    diagnosis: executorConfig.purposeExecutors?.diagnosis?.stateDirectory ?? executorConfig.stateDirectory,
+    stewardship: executorConfig.purposeExecutors?.stewardship?.stateDirectory ?? executorConfig.stateDirectory,
+  } };
+}
+
+function executorFor(executorConfig) {
+  if (!executorConfig || typeof executorConfig !== 'object') throw new Error('executor configuration is required');
+  return createCommandExecutor(executorConfig);
+}
+
+function assertPilotEnabled(config) {
+  if (config.enabled !== true || config.legacyExcluded !== true) throw new Error('pilot is disabled; qualify legacy exclusion before enabling');
+  if (config.assignmentProfiles !== undefined) {
+    if (!config.assignmentProfiles?.execution || !config.assignmentProfiles?.review || !config.assignmentProfiles?.diagnosis || !config.assignmentProfiles?.stewardship) throw new Error('explicit assignmentProfiles for execution, review, diagnosis and stewardship are required');
+  }
+}
+
+function assertExecutorProfiles(config) {
+  if (config.assignmentProfiles !== undefined) {
+    if (!config.executor?.purposeExecutors?.review || !config.executor?.purposeExecutors?.diagnosis || !config.executor?.purposeExecutors?.stewardship) throw new Error('purpose-specific isolated executor profiles are required for review, diagnosis and stewardship');
+  }
+  if (typeof config.executor?.stateDirectory !== 'string' || !path.isAbsolute(config.executor.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
+}
+
 let pool;
 let loopController = null;
 try {
-  if (!ACTIONS.has(action)) throw new Error('usage: vnext-pilot migrate|submit|tick|status|inspect|accept|cancel|reconcile|run|pause|resume --config /absolute/config.json');
+  if (!ACTIONS.has(action)) throw new Error('usage: vnext-pilot migrate|submit|tick|status|inspect|accept|decide-assignment|cancel|reconcile|run|pause|resume --config /absolute/config.json');
   const configPath = option('--config');
   if (!configPath || !path.isAbsolute(configPath)) throw new Error('--config must be an absolute path outside the repository');
   const config = JSON.parse(await readFile(configPath,'utf8'));
@@ -40,6 +117,7 @@ try {
       console.log(JSON.stringify({ status: removed ? 'resumed' : 'already-running', pause_file: pauseFile }));
     }
   } else {
+    const projects = action === 'migrate' ? [] : configuredProjects(config);
     const connectionString = process.env.CT_PILOT_DATABASE_URL;
     if (!connectionString) throw new Error('CT_PILOT_DATABASE_URL is required');
     pool = new Pool({ connectionString, max: 3, connectionTimeoutMillis: 10000, statement_timeout: 15000, application_name: 'ct-runtime-vnext-pilot' });
@@ -64,16 +142,36 @@ try {
         maxConcurrency: config.maxConcurrency ?? null
       });
       if (action === 'submit') {
+        const [project] = selectedProjects(projects, option('--project'));
         const file = required('--message-file');
-        console.log(JSON.stringify(await store.submit({ projectId: config.projectId, threadId: required('--thread'), receiptId: required('--receipt'), message: await readFile(file,'utf8') })));
+        console.log(JSON.stringify(await store.submit({ projectId: project.projectId, threadId: required('--thread'), receiptId: required('--receipt'), message: await readFile(file,'utf8') })));
       } else if (action === 'status') {
-        console.log(JSON.stringify(await store.status(config.projectId),null,2));
+        const selected = selectedProjects(projects, option('--project'), { allowAll: true });
+        if (selected.length === 1) {
+          console.log(JSON.stringify(await store.status(selected[0].projectId),null,2));
+        } else {
+          const status = deriveMultiProjectStatus(await Promise.all(selected.map(async project => ({
+            project_id: project.projectId,
+            ledger: await store.coordinatorLedger(project.projectId),
+          }))), { maxNonProgress: config.maxNonProgress ?? 2, capacity: await store.poolStatus() });
+          console.log(JSON.stringify(status,null,2));
+        }
       } else if (action === 'inspect') {
-        console.log(JSON.stringify(deriveCoordinatorStatus(await store.coordinatorLedger(config.projectId), { maxNonProgress: config.maxNonProgress ?? 2 }),null,2));
+        const selected = selectedProjects(projects, option('--project'), { allowAll: true });
+        if (selected.length === 1) {
+          console.log(JSON.stringify(deriveCoordinatorStatus(await store.coordinatorLedger(selected[0].projectId), { maxNonProgress: config.maxNonProgress ?? 2 }),null,2));
+        } else {
+          const status = deriveMultiProjectStatus(await Promise.all(selected.map(async project => ({
+            project_id: project.projectId,
+            ledger: await store.coordinatorLedger(project.projectId),
+          }))), { maxNonProgress: config.maxNonProgress ?? 2, capacity: await store.poolStatus() });
+          console.log(JSON.stringify(status,null,2));
+        }
       } else if (action === 'accept') {
+        const [project] = selectedProjects(projects, option('--project'));
         const workUnitId = required('--work');
         const work = await store.reconstruct({ work_unit_id: workUnitId });
-        if (!work || work.project_id !== config.projectId) throw new Error('Work Unit does not belong to configured project');
+        if (!work || work.project_id !== project.projectId) throw new Error('Work Unit does not belong to configured project');
         let decision;
         if (option('--decision-file')) {
           decision = await jsonFile(required('--decision-file'));
@@ -84,21 +182,23 @@ try {
         if (!decision) throw new Error('acceptance authority did not issue a decision');
         console.log(JSON.stringify(await store.acceptWork(workUnitId, decision)));
       } else if (action === 'decide-assignment') {
-        const target = await store.assignmentDecisionTarget(config.projectId, required('--assignment'));
+        const [project] = selectedProjects(projects, option('--project'));
+        const target = await store.assignmentDecisionTarget(project.projectId, required('--assignment'));
         if (!target) throw new Error('assignment report is not recorded for this project');
         const decision = await jsonFile(required('--decision-file'));
         console.log(JSON.stringify(await store.recordAssignmentDecision({ ...target, decision })));
       } else if (action === 'cancel') {
+        const [project] = selectedProjects(projects, option('--project'));
         const workUnitId = required('--work');
         const decision = await jsonFile(required('--decision-file'));
         if (!decision?.ref) throw new Error('cancellation decision requires a ref');
         const work = await store.reconstruct({ work_unit_id: workUnitId });
         if (!work) throw new Error('Work Unit does not exist');
-        console.log(JSON.stringify(await store.recordCancellation({ projectId: config.projectId, workUnitId, expectedRevision: Number(work.work_revision), decision })));
+        console.log(JSON.stringify(await store.recordCancellation({ projectId: project.projectId, workUnitId, expectedRevision: Number(work.work_revision), decision })));
       } else if (action === 'reconcile') {
         const decision = await jsonFile(required('--decision-file'));
         if (!decision?.ref) throw new Error('reconciliation decision requires a ref');
-        if (decision.project_id !== config.projectId) throw new Error('reconciliation decision project does not match configured project');
+        if (!projects.some(project => project.projectId === decision.project_id)) throw new Error('reconciliation decision project is not configured');
         if (typeof decision.work_unit_id !== 'string' || !decision.work_unit_id
           || typeof decision.execution_id !== 'string' || !decision.execution_id
           || !Number.isInteger(decision.fence) || decision.fence < 1) {
@@ -114,58 +214,125 @@ try {
           decisionRef: decision.ref,
         })));
       } else if (action === 'run') {
-        if (config.enabled !== true || config.legacyExcluded !== true) throw new Error('pilot is disabled; qualify legacy exclusion before enabling');
-        if (config.assignmentProfiles !== undefined) {
-          if (!config.assignmentProfiles?.execution || !config.assignmentProfiles?.review || !config.assignmentProfiles?.diagnosis || !config.assignmentProfiles?.stewardship) throw new Error('explicit assignmentProfiles for execution, review, diagnosis and stewardship are required');
-          if (!config.executor?.purposeExecutors?.review || !config.executor?.purposeExecutors?.diagnosis || !config.executor?.purposeExecutors?.stewardship) throw new Error('purpose-specific isolated executor profiles are required for review, diagnosis and stewardship');
-        }
-        if (typeof config.executor?.stateDirectory !== 'string' || !path.isAbsolute(config.executor.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
+        assertPilotEnabled(config);
+        assertExecutorProfiles(config);
         loopController = new AbortController();
         const stop = () => loopController.abort();
         process.once('SIGINT', stop);
         process.once('SIGTERM', stop);
         const maxPasses = option('--max-passes') ? Number(option('--max-passes')) : Number.POSITIVE_INFINITY;
         const pauseFile = config.pauseFile ?? option('--pause-file') ?? null;
-        const recoveryDirectories = { execution: config.executor.stateDirectory,
-          review: config.executor.purposeExecutors?.review?.stateDirectory ?? config.executor.stateDirectory,
-          diagnosis: config.executor.purposeExecutors?.diagnosis?.stateDirectory ?? config.executor.stateDirectory,
-          stewardship: config.executor.purposeExecutors?.stewardship?.stateDirectory ?? config.executor.stateDirectory };
-        const runPass = async ({ signal }) => runCoordinatorPass({
-          store, projectId: config.projectId, workspaceRoot: await realpath(config.workspaceRoot), identityFiles: config.identityFiles, authority,
-          assignmentProfiles: config.assignmentProfiles, maxNonProgress: config.maxNonProgress ?? 2,
-          timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor),
-          recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: recoveryDirectories } : null,
-          coordinatorId: config.coordinatorId ?? 'pilot-coordinator', pauseFile, signal,
-        });
-        const result = await runCoordinatorLoop({
-          intervalMs: config.scanIntervalMs ?? config.intervalMs ?? 60000,
-          maxPasses,
-          signal: loopController.signal,
-          pauseFile,
-          runPass,
-          onPass: pass => console.log(JSON.stringify(compact(pass))),
-        });
-        console.log(JSON.stringify({ status: result.stopped ? 'stopped' : result.paused ? 'paused' : 'completed', passes: result.passes }));
-      } else {
-        if (config.enabled !== true || config.legacyExcluded !== true) throw new Error('pilot is disabled; qualify legacy exclusion before enabling');
-        if (config.assignmentProfiles !== undefined) {
-          if (!config.assignmentProfiles?.execution || !config.assignmentProfiles?.review || !config.assignmentProfiles?.diagnosis || !config.assignmentProfiles?.stewardship) throw new Error('explicit assignmentProfiles for execution, review, diagnosis and stewardship are required');
-          if (!config.executor?.purposeExecutors?.review || !config.executor?.purposeExecutors?.diagnosis || !config.executor?.purposeExecutors?.stewardship) throw new Error('purpose-specific isolated executor profiles are required for review, diagnosis and stewardship');
+        const selected = selectedProjects(projects, option('--project'), { allowAll: true });
+        const intervalMs = config.scanIntervalMs ?? config.intervalMs ?? 60000;
+        if (selected.length === 1) {
+          const [project] = selected;
+          const executorConfig = project.executorConfig;
+          if (typeof executorConfig?.stateDirectory !== 'string' || !path.isAbsolute(executorConfig.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
+          const runPass = async ({ signal }) => runCoordinatorPass({
+            store, projectId: project.projectId, workspaceRoot: await realpath(project.workspaceRoot), identityFiles: project.identityFiles, authority,
+            assignmentProfiles: config.assignmentProfiles, maxNonProgress: project.maxNonProgress,
+            timeoutMs: project.timeoutMs, executor: executorFor(executorConfig),
+            recovery: recoveryFor(executorConfig),
+            coordinatorId: config.coordinatorId ?? 'pilot-coordinator', pauseFile, signal,
+          });
+          const result = await runCoordinatorLoop({
+            intervalMs,
+            maxPasses,
+            signal: loopController.signal,
+            pauseFile,
+            runPass,
+            onPass: pass => console.log(JSON.stringify(compact(pass))),
+          });
+          console.log(JSON.stringify({ status: result.stopped ? 'stopped' : result.paused ? 'paused' : 'completed', passes: result.passes }));
+        } else {
+          const executors = new Map();
+          for (const project of selected) {
+            const executorConfig = project.executorConfig;
+            if (typeof executorConfig?.stateDirectory !== 'string' || !path.isAbsolute(executorConfig.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
+            executors.set(project.projectId, executorFor(executorConfig));
+          }
+          const executor = (request, hooks) => {
+            const projectExecutor = executors.get(request.workUnit.project_id);
+            if (!projectExecutor) throw new Error(`no executor for project ${request.workUnit.project_id}`);
+            return projectExecutor(request, hooks);
+          };
+          const runPass = async ({ signal }) => runMultiProjectPass({
+            store,
+            projects: await Promise.all(selected.map(async project => ({
+              projectId: project.projectId,
+              workspaceRoot: await realpath(project.workspaceRoot),
+              identityFiles: project.identityFiles,
+              timeoutMs: project.timeoutMs,
+              maxNonProgress: project.maxNonProgress,
+              recovery: recoveryFor(project.executorConfig),
+            }))),
+            executor,
+            authority,
+            assignmentProfiles: config.assignmentProfiles,
+            maxNonProgress: config.maxNonProgress ?? 2,
+            timeoutMs: config.timeoutMs ?? 120000,
+            coordinatorId: config.coordinatorId ?? 'pilot-coordinator',
+            pauseFile,
+            signal,
+          });
+          const result = await runCoordinatorLoop({
+            intervalMs,
+            maxPasses,
+            signal: loopController.signal,
+            pauseFile,
+            runPass,
+            onPass: pass => console.log(JSON.stringify(compactMany(pass))),
+          });
+          console.log(JSON.stringify({ status: result.stopped ? 'stopped' : result.paused ? 'paused' : 'completed', passes: result.passes }));
         }
-        if (typeof config.executor?.stateDirectory !== 'string' || !path.isAbsolute(config.executor.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
-        // This is an operator assertion, not proof of deployment/exclusion.
-        const recoveryDirectories = { execution: config.executor.stateDirectory,
-          review: config.executor.purposeExecutors?.review?.stateDirectory ?? config.executor.stateDirectory,
-          diagnosis: config.executor.purposeExecutors?.diagnosis?.stateDirectory ?? config.executor.stateDirectory,
-          stewardship: config.executor.purposeExecutors?.stewardship?.stateDirectory ?? config.executor.stateDirectory };
-        const result = await runCoordinatorPass({
-          store, projectId: config.projectId, workspaceRoot: await realpath(config.workspaceRoot), identityFiles: config.identityFiles, authority,
-          assignmentProfiles: config.assignmentProfiles, maxNonProgress: config.maxNonProgress ?? 2,
-          timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor),
-          recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: recoveryDirectories } : null,
-          coordinatorId: config.coordinatorId ?? 'pilot-coordinator', pauseFile: config.pauseFile ?? null,
-        });
-        console.log(JSON.stringify(compact(result)));
+      } else {
+        assertPilotEnabled(config);
+        assertExecutorProfiles(config);
+        const selected = selectedProjects(projects, option('--project'), { allowAll: true });
+        if (selected.length === 1) {
+          const [project] = selected;
+          const executorConfig = project.executorConfig;
+          if (typeof executorConfig?.stateDirectory !== 'string' || !path.isAbsolute(executorConfig.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
+          const result = await runCoordinatorPass({
+            store, projectId: project.projectId, workspaceRoot: await realpath(project.workspaceRoot), identityFiles: project.identityFiles, authority,
+            assignmentProfiles: config.assignmentProfiles, maxNonProgress: project.maxNonProgress,
+            timeoutMs: project.timeoutMs, executor: executorFor(executorConfig),
+            recovery: recoveryFor(executorConfig),
+            coordinatorId: config.coordinatorId ?? 'pilot-coordinator', pauseFile: config.pauseFile ?? null,
+          });
+          console.log(JSON.stringify(compact(result)));
+        } else {
+          const executors = new Map();
+          for (const project of selected) {
+            const executorConfig = project.executorConfig;
+            if (typeof executorConfig?.stateDirectory !== 'string' || !path.isAbsolute(executorConfig.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
+            executors.set(project.projectId, executorFor(executorConfig));
+          }
+          const executor = (request, hooks) => {
+            const projectExecutor = executors.get(request.workUnit.project_id);
+            if (!projectExecutor) throw new Error(`no executor for project ${request.workUnit.project_id}`);
+            return projectExecutor(request, hooks);
+          };
+          const result = await runMultiProjectPass({
+            store,
+            projects: await Promise.all(selected.map(async project => ({
+              projectId: project.projectId,
+              workspaceRoot: await realpath(project.workspaceRoot),
+              identityFiles: project.identityFiles,
+              timeoutMs: project.timeoutMs,
+              maxNonProgress: project.maxNonProgress,
+              recovery: recoveryFor(project.executorConfig),
+            }))),
+            executor,
+            authority,
+            assignmentProfiles: config.assignmentProfiles,
+            maxNonProgress: config.maxNonProgress ?? 2,
+            timeoutMs: config.timeoutMs ?? 120000,
+            coordinatorId: config.coordinatorId ?? 'pilot-coordinator',
+            pauseFile: config.pauseFile ?? null,
+          });
+          console.log(JSON.stringify(compactMany(result)));
+        }
       }
     }
   }
