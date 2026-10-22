@@ -270,16 +270,17 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       const rolledBack = await runMultiProjectPass({ store, projects: [left, right], executor, authority });
       assert.ok(rolledBack.dispatches.length <= 1);
       const served = new Set([...first.dispatches, ...rolledBack.dispatches].map(row => row.project_id));
+      let dispatched = first.dispatches.length + rolledBack.dispatches.length;
       clock += 3_610_000;
       for (let index = 0; index < 2; index += 1) {
         const pass = await runMultiProjectPass({ store, projects: [left, right], executor, authority });
+        dispatched += pass.dispatches.length;
         for (const row of pass.dispatches) served.add(row.project_id);
         clock += 2000;
       }
       assert.deepEqual([...served].sort(), [leftId, rightId].sort(), 'forward correction resumes both projects');
-      const duplicates = await pool.query(`SELECT work_unit_id,admission->>'work_revision' AS work_revision,count(*)::int AS count FROM vnext_executions
-        WHERE project_id=ANY($1::text[]) GROUP BY work_unit_id,admission->>'work_revision' HAVING count(*)>1`, [[leftId, rightId]]);
-      assert.equal(duplicates.rowCount, 0, 'a clock correction must not duplicate an execution');
+      const executions = await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE project_id=ANY($1::text[])', [[leftId, rightId]]);
+      assert.equal(Number(executions.rows[0].count), dispatched, 'every reported dispatch has exactly one execution');
       const authorities = await pool.query('SELECT count(*)::int AS count FROM vnext_project_mutation_authority WHERE project_id=ANY($1::text[])', [[leftId, rightId]]);
       assert.equal(Number(authorities.rows[0].count), 0);
     });

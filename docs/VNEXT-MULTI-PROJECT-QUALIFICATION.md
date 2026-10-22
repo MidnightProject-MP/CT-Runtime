@@ -54,7 +54,7 @@ Result at the tested runtime commit: `PASS`, 7 tests passed, 0 failed,
 | Project mutation exclusion | The executor observed exactly one authority for each project and no more than two authorities globally |
 | Overlapping coordinators with capacity one | Exactly one dispatched; the other returned `E_CONCURRENCY_LIMIT`; the deferred coordinator dispatched after release |
 | Project fault isolation | The failing project became `failed` with a reconciliation block; the healthy project stayed `waiting` with no block; aggregate phase was `blocked`; healthy blocked count was zero |
-| Backward clock correction | A one-hour rollback did not duplicate an execution revision and left no stranded authority; forward correction served both projects |
+| Backward clock correction | A one-hour rollback left no stranded authority and reported every dispatch with exactly one execution; forward correction served both projects |
 | Real command workers | Three rounds of two projects completed stewardship, execution, review, and authorized acceptance |
 | CLI boundary | `tick` routed two projects to two executors; aggregate `status` and `inspect` reported both projects and capacity two |
 
@@ -86,8 +86,9 @@ Three bounded two-project rounds (six projects total):
 - Per-project caps are not implemented. The pool is global; fairness orders
   projects but does not reserve a per-project share.
 - A backward clock correction can delay time-based eligibility. The test
-  establishes that it does not duplicate an admitted revision or strand an
-  authority; it does not prove arbitrary clock-change liveness.
+  establishes that it does not strand an authority or create an execution that
+  was not reported as a dispatch; it does not prove arbitrary clock-change
+  liveness.
 - The prior six-way stress result at `d0569ee` (4/6 runs, lifecycle/reconcile
   green all six) and the load-sensitive abort-registration timeout remain
   historical findings. They were not rerun as part of this report.
