@@ -494,7 +494,7 @@ test('memory continuation cursor survives full snapshot reconstruction and is co
 });
 
 test('memory revision during unresolved uncertainty preserves reconciliation and recovers against the new revision', async () => {
-  const work = { ...createWorkUnit({ workUnitId: 'memory-revise', objectiveRef: 'objective', projectId: 'memory-revise-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date().toISOString() } };
+  const work = { ...createWorkUnit({ workUnitId: 'memory-revise', objectiveRef: 'objective', projectId: 'memory-revise-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date(0).toISOString() } };
   const store = createMemoryStore({ workUnits: [work], authorizationVerifier: authorization.verifyExecution });
   const active = await admit(store, 'memory-revise');
   await store.persistFailure(failExecution(active.workUnit, active.execution, { maxAttempts: 1, reconciliationRequired: true }));
@@ -513,7 +513,7 @@ test('memory revision during unresolved uncertainty preserves reconciliation and
 });
 
 test('memory reconciliation records its outcome and grants one coordinator-owned recovery opportunity', async () => {
-  const work = { ...createWorkUnit({ workUnitId: 'memory-recover', objectiveRef: 'objective', projectId: 'memory-recover-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date().toISOString() } };
+  const work = { ...createWorkUnit({ workUnitId: 'memory-recover', objectiveRef: 'objective', projectId: 'memory-recover-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date(0).toISOString() } };
   const store = createMemoryStore({ workUnits: [work], authorizationVerifier: authorization.verifyExecution });
   const active = await admit(store, 'memory-recover');
   await store.persistFailure(failExecution(active.workUnit, active.execution, { maxAttempts: 1, reconciliationRequired: true }));

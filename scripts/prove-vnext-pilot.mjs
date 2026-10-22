@@ -32,7 +32,13 @@ try {
   const store=createPilotStore({pool,authorizationVerifier:authority.verifyExecution,acceptanceVerifier:authority.verifyAcceptance,intervalMs:1000});
  await store.submit({projectId:'proof-project',threadId:'proof-thread',receiptId:'proof-receipt',message:'Produce two checked increments across separate wakes.'});
  const executor=createCommandExecutor({command:process.execPath,args:[path.join(import.meta.dirname,'../test/fixtures/vnext-proof-worker.mjs')],stateDirectory:path.join(directory,'attempts')});
-  const result=await runPilotOnce({store,projectId:'proof-project',workspaceRoot:directory,identityFiles:[identity],authority,executor});
+  const attempt=()=>runPilotOnce({store,projectId:'proof-project',workspaceRoot:directory,identityFiles:[identity],authority,executor});
+  let result=await attempt();
+  // The proof's scheduling window is wall-clock based. A clock correction can
+  // make an already durable continuation temporarily ineligible; retry the
+  // coordinator tick until that bounded window passes instead of treating the
+  // transient ineligibility as lost work.
+  for(let tries=0;tries<10&&result.disposition==='quiesced';tries++){await new Promise(resolve=>setTimeout(resolve,1000));result=await attempt();}
   if(!['continue','terminal'].includes(result.disposition)) throw new Error('proof did not advance or accept work');
   console.log(JSON.stringify(result,null,2));
 } finally {await pool.end();}
