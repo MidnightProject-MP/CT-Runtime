@@ -352,6 +352,9 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
       assert.ok(blockerStopped);
       assert.equal(process.kill(blockerMarker.pid, 0), true, 'B worker must survive its coordinator interruption');
       try { process.kill(-blockerMarker.pid, 'SIGKILL'); } catch { /* worker has already exited */ }
+      await waitFor(() => {
+        try { process.kill(blockerMarker.pid, 0); return false; } catch { return true; }
+      }, 'blocked worker exit before recovery');
       await setClaimExpired(blockerSubmitted.work_unit_id);
       const recoveryPass = await invoke(cliPath, 'tick', blockerConfigPath, connectionString);
       assert.equal(recoveryPass.status, 'blocked', 'recovery records uncertainty instead of retrying B');
@@ -540,6 +543,9 @@ test('native CLI subprocess loop separates execution, review, Celestan decision,
     assert.equal(process.kill(workerPid, 0), true, 'purpose-bound worker survives coordinator interruption');
     await writeFile(gatePath, 'release');
     await waitFor(() => exists(donePath), 'retained stewardship report completion');
+    await waitFor(() => {
+      try { process.kill(workerPid, 0); return false; } catch { return true; }
+    }, 'stewardship worker exit before recovery');
     const assignmentTask = (await pool.query(`SELECT a.assignment_work_unit_id FROM vnext_assignments a
       WHERE a.project_id=$1 AND a.purpose='stewardship' AND a.status='queued'`, [projectId])).rows[0].assignment_work_unit_id;
     const { rows: [{ expiry }] } = await pool.query("SELECT clock_timestamp()-interval '1 second' AS expiry");
