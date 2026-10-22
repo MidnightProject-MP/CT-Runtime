@@ -176,12 +176,13 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
         identityFiles: left.identityFiles, executor, authority, timeoutMs: 30000 });
       const rightRun = runCoordinatorPass({ store: rightStore, projectId: rightId, workspaceRoot: right.workspaceRoot,
         identityFiles: right.identityFiles, executor, authority, timeoutMs: 30000 });
+      const settledRuns = Promise.allSettled([leftRun, rightRun]);
       await gate;
       const attempts = await pool.query('SELECT project_id FROM vnext_project_mutation_authority');
       assert.equal(attempts.rowCount, 1, 'only one coordinator may hold the single global slot');
       await new Promise(resolve => setTimeout(resolve, 100));
       release();
-      const settled = await Promise.allSettled([leftRun, rightRun]);
+      const settled = await settledRuns;
       assert.ok(settled.every(result => result.status === 'fulfilled'));
       const results = settled.map(result => result.value);
       assert.equal(results.filter(result => result.dispatch).length, 1);
