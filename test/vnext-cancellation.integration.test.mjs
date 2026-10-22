@@ -77,6 +77,8 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
       const revised = await store().reviseWorkRequirements(id, { expectedRevision: 1, requirements: { finish: 'A new authorized deliverable.' } });
       assert.equal(revised.work_revision, 2);
       assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'actionable');
+      const revisedWake = (await pool.query('SELECT next_wake_at FROM vnext_pilot_progress WHERE work_unit_id=$1', [id])).rows[0].next_wake_at;
+      assert.equal(revisedWake.getTime(), 0, 'revision uses a durable immediate wake rather than wall-clock time');
       assert.equal(await store().nextEligible(project), id);
     });
 
