@@ -19,6 +19,15 @@ export async function authorizeExecution({workUnit,execution}) {
   const g=await grant();
   if (workUnit.project_id!==g.value.projectId || execution.project_id!==g.value.projectId) throw new Error('project outside grant');
   if (g.value.objectiveIds && !g.value.objectiveIds.includes(workUnit.objective_ref)) throw new Error('objective outside grant');
+  const assignment=execution.assignment??execution.admission?.assignment;
+  if (assignment) {
+    if (assignment.project_id!==g.value.projectId || !['execution','review','diagnosis','stewardship'].includes(assignment.purpose)) throw new Error('assignment outside grant');
+    if (assignment.purpose!=='execution' && assignment.access_class!=='read-only') throw new Error('non-execution assignment must be read-only');
+    if (assignment.purpose==='execution' && assignment.access_class!=='bounded-mutation') throw new Error('execution assignment requires the bounded-mutation profile');
+    const profile=g.value.assignmentProfiles?.[assignment.purpose];
+    if (!profile || assignment.model!==profile.model || assignment.agent!==profile.agent
+      || JSON.stringify(assignment.permissions)!==JSON.stringify([...profile.permissions].sort())) throw new Error('assignment profile is not authorized by the grant');
+  }
   return {ref:reference(g,execution), scope:g.value.scope};
 }
 export async function verifyExecution(decision,context) {
@@ -51,6 +60,18 @@ export async function verifyAcceptance(decision, context) {
   const issued = decisions.get(decision.ref);
   return Boolean(issued && issued.snapshotDigest === decision.snapshotDigest && issued.snapshotDigest === context.snapshotDigest
     && issued.grantDigest === await acceptanceAllowed(context));
+}
+// Assignment outcomes belong to Celestan, not the reviewer or Runtime. Connect
+// this verifier to the existing decision authority; the example deliberately
+// issues no autonomous assignment decisions.
+export async function authorizeAssignmentDecision() { return null; }
+export async function verifyAssignmentDecision(decision, context) {
+  const g=await grant();
+  const modulePath=g.value.assignmentDecisionModule;
+  if (!modulePath || !path.isAbsolute(modulePath)) return false;
+  const authority=await import(pathToFileURL(modulePath).href);
+  if (typeof authority.verifyAssignmentDecision!=='function') return false;
+  return await authority.verifyAssignmentDecision(decision,context,g.value)===true;
 }
 // This sample's opaque decisions live only in this authority process. A durable
 // independent authority may implement its own decision registry for later use.

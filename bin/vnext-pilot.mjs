@@ -9,7 +9,7 @@ import { runCoordinatorLoop, runCoordinatorPass, writePauseFile, removePauseFile
 import { deriveCoordinatorStatus } from '../lib/vnext/coordinator-status.mjs';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 
-const ACTIONS = new Set(['migrate','submit','tick','status','inspect','accept','cancel','reconcile','run','pause','resume']);
+const ACTIONS = new Set(['migrate','submit','tick','status','inspect','accept','decide-assignment','cancel','reconcile','run','pause','resume']);
 const [action, ...args] = process.argv.slice(2);
 const option = (name) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
 const required = (name) => { const value = option(name); if (!value) throw new Error(`${name} is required`); return value; };
@@ -46,7 +46,7 @@ try {
     if (action === 'migrate') {
       console.log(JSON.stringify(await migrateVNext({ pool, directory: path.join(import.meta.dirname,'../vnext-migrations') })));
     } else {
-      const needsAuthority = ['tick','run','accept','cancel'].includes(action);
+      const needsAuthority = ['tick','run','accept','decide-assignment','cancel'].includes(action);
       const authority = needsAuthority ? await import(pathToFileURL(await realpath(config.authorityModule)).href) : {};
       const store = createPilotStore({
         pool,
@@ -57,6 +57,7 @@ try {
         // here cannot settle work as terminal.
         acceptanceVerifier: authority.verifyAcceptance,
         cancellationVerifier: authority.verifyCancellation,
+        assignmentDecisionVerifier: authority.verifyAssignmentDecision,
         intervalMs: config.intervalMs ?? 60000,
         // Coordinator-configured global pool capacity; null keeps accounting
         // on with no cap.
@@ -68,7 +69,7 @@ try {
       } else if (action === 'status') {
         console.log(JSON.stringify(await store.status(config.projectId),null,2));
       } else if (action === 'inspect') {
-        console.log(JSON.stringify(deriveCoordinatorStatus(await store.coordinatorLedger(config.projectId)),null,2));
+        console.log(JSON.stringify(deriveCoordinatorStatus(await store.coordinatorLedger(config.projectId), { maxNonProgress: config.maxNonProgress ?? 2 }),null,2));
       } else if (action === 'accept') {
         const workUnitId = required('--work');
         const work = await store.reconstruct({ work_unit_id: workUnitId });
@@ -82,6 +83,11 @@ try {
         }
         if (!decision) throw new Error('acceptance authority did not issue a decision');
         console.log(JSON.stringify(await store.acceptWork(workUnitId, decision)));
+      } else if (action === 'decide-assignment') {
+        const target = await store.assignmentDecisionTarget(config.projectId, required('--assignment'));
+        if (!target) throw new Error('assignment report is not recorded for this project');
+        const decision = await jsonFile(required('--decision-file'));
+        console.log(JSON.stringify(await store.recordAssignmentDecision({ ...target, decision })));
       } else if (action === 'cancel') {
         const workUnitId = required('--work');
         const decision = await jsonFile(required('--decision-file'));
@@ -109,6 +115,10 @@ try {
         })));
       } else if (action === 'run') {
         if (config.enabled !== true || config.legacyExcluded !== true) throw new Error('pilot is disabled; qualify legacy exclusion before enabling');
+        if (config.assignmentProfiles !== undefined) {
+          if (!config.assignmentProfiles?.execution || !config.assignmentProfiles?.review || !config.assignmentProfiles?.diagnosis || !config.assignmentProfiles?.stewardship) throw new Error('explicit assignmentProfiles for execution, review, diagnosis and stewardship are required');
+          if (!config.executor?.purposeExecutors?.review || !config.executor?.purposeExecutors?.diagnosis || !config.executor?.purposeExecutors?.stewardship) throw new Error('purpose-specific isolated executor profiles are required for review, diagnosis and stewardship');
+        }
         if (typeof config.executor?.stateDirectory !== 'string' || !path.isAbsolute(config.executor.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
         loopController = new AbortController();
         const stop = () => loopController.abort();
@@ -116,10 +126,15 @@ try {
         process.once('SIGTERM', stop);
         const maxPasses = option('--max-passes') ? Number(option('--max-passes')) : Number.POSITIVE_INFINITY;
         const pauseFile = config.pauseFile ?? option('--pause-file') ?? null;
+        const recoveryDirectories = { execution: config.executor.stateDirectory,
+          review: config.executor.purposeExecutors?.review?.stateDirectory ?? config.executor.stateDirectory,
+          diagnosis: config.executor.purposeExecutors?.diagnosis?.stateDirectory ?? config.executor.stateDirectory,
+          stewardship: config.executor.purposeExecutors?.stewardship?.stateDirectory ?? config.executor.stateDirectory };
         const runPass = async ({ signal }) => runCoordinatorPass({
           store, projectId: config.projectId, workspaceRoot: await realpath(config.workspaceRoot), identityFiles: config.identityFiles, authority,
+          assignmentProfiles: config.assignmentProfiles, maxNonProgress: config.maxNonProgress ?? 2,
           timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor),
-          recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: config.executor.stateDirectory } : null,
+          recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: recoveryDirectories } : null,
           coordinatorId: config.coordinatorId ?? 'pilot-coordinator', pauseFile, signal,
         });
         const result = await runCoordinatorLoop({
@@ -133,12 +148,21 @@ try {
         console.log(JSON.stringify({ status: result.stopped ? 'stopped' : result.paused ? 'paused' : 'completed', passes: result.passes }));
       } else {
         if (config.enabled !== true || config.legacyExcluded !== true) throw new Error('pilot is disabled; qualify legacy exclusion before enabling');
+        if (config.assignmentProfiles !== undefined) {
+          if (!config.assignmentProfiles?.execution || !config.assignmentProfiles?.review || !config.assignmentProfiles?.diagnosis || !config.assignmentProfiles?.stewardship) throw new Error('explicit assignmentProfiles for execution, review, diagnosis and stewardship are required');
+          if (!config.executor?.purposeExecutors?.review || !config.executor?.purposeExecutors?.diagnosis || !config.executor?.purposeExecutors?.stewardship) throw new Error('purpose-specific isolated executor profiles are required for review, diagnosis and stewardship');
+        }
         if (typeof config.executor?.stateDirectory !== 'string' || !path.isAbsolute(config.executor.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
         // This is an operator assertion, not proof of deployment/exclusion.
+        const recoveryDirectories = { execution: config.executor.stateDirectory,
+          review: config.executor.purposeExecutors?.review?.stateDirectory ?? config.executor.stateDirectory,
+          diagnosis: config.executor.purposeExecutors?.diagnosis?.stateDirectory ?? config.executor.stateDirectory,
+          stewardship: config.executor.purposeExecutors?.stewardship?.stateDirectory ?? config.executor.stateDirectory };
         const result = await runCoordinatorPass({
           store, projectId: config.projectId, workspaceRoot: await realpath(config.workspaceRoot), identityFiles: config.identityFiles, authority,
+          assignmentProfiles: config.assignmentProfiles, maxNonProgress: config.maxNonProgress ?? 2,
           timeoutMs: config.timeoutMs ?? 120000, executor: createCommandExecutor(config.executor),
-          recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: config.executor.stateDirectory } : null,
+          recovery: typeof config.executor?.stateDirectory === 'string' ? { stateDirectory: recoveryDirectories } : null,
           coordinatorId: config.coordinatorId ?? 'pilot-coordinator', pauseFile: config.pauseFile ?? null,
         });
         console.log(JSON.stringify(compact(result)));
