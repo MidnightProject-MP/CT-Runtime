@@ -6,14 +6,13 @@ deployment approval, or a production database trial.
 ## Candidate and environment
 
 - Branch: `work/vnext-multi-project-reliability`
-- Tested runtime commit: `16c14f2` (the documentation commit that follows this
-  report has no runtime changes)
+- Tested runtime commit: `48e0a60` (this report update is documentation-only)
 - Verification workspace: `/home/philippecave/CT-Runtime-local-tests`, detached
   at the tested commit with a clean worktree
 - Node: `22.14.0` on Linux x64
 - PostgreSQL: `16.15` (Ubuntu 16.15-0ubuntu0.24.04.1)
 - Database: the existing disposable local test database supplied through
-  `TEST_DATABASE_URL`; no production credentials were used
+  `POSTGRES_URL`; no production credentials were used
 - Suite:
   `test/vnext-multi-project.integration.test.mjs`
 
@@ -27,6 +26,22 @@ env POSTGRES_URL=postgresql://ctruntime_test:local-test-only@127.0.0.1:5432/ctru
 
 Result at the tested runtime commit: `PASS`, 7 tests passed, 0 failed,
 0 skipped.
+
+Full core verification at the same commit also passed:
+
+```sh
+env POSTGRES_URL=postgresql://ctruntime_test:local-test-only@127.0.0.1:5432/ctruntime \
+  /home/philippecave/.nvm/versions/node/v22.14.0/bin/node \
+  scripts/verify.mjs core
+```
+
+- Worktree: clean; tested commit: `48e0a60`
+- Local tests: 609 total, 557 passed, 52 expected skips, 0 failed
+- Migrations: passed; migrations 001–017 applied in the verifier database
+- Required native PostgreSQL coverage: 17 suites, 122 tests passed, 0 failed,
+  0 skipped
+- Cross-process proof: first process returned `continue`; second process
+  returned `terminal`; durable outcome was `2`
 
 ## Contract under test
 
@@ -90,8 +105,6 @@ Three bounded two-project rounds (six projects total):
   was not reported as a dispatch; it does not prove arbitrary clock-change
   liveness.
 - The prior six-way stress result at `d0569ee` (4/6 runs, lifecycle/reconcile
-  green all six) and the load-sensitive abort-registration timeout remain
-  historical findings. They were not rerun as part of this report.
-- The full core verifier evidence at `cd2707a` remains prior evidence, not
-  evidence for this multi-project candidate. This report does not claim a
-  full-core pass at the tested runtime commit.
+  green all six) remains a historical finding; the stress run was not repeated.
+- The abort-registration race test now uses a monotonic deadline and passed in
+  the full-core verification above.
