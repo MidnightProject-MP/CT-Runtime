@@ -9,8 +9,11 @@ contract; the stores enforce it. The stop-confirmation boundary
 
 §5 of the milestone scope ordered "per-project bound first, store for later
 global cap". By explicit decision during D2 the pool is enforced as an
-aggregate **global capacity now**; per-project caps, fairness, and
-cross-project scheduling remain 2D. This paragraph is the explicit record.
+aggregate **global capacity now**. Per-project caps remain out of scope. A
+multi-project coordinator pass now uses the same durable capacity for fair
+cross-project admission and capacity-deferred ordering
+(`docs/VNEXT-MULTI-PROJECT-QUALIFICATION.md`); this document remains the
+authority for the pool itself.
 
 ## The rule
 
@@ -65,6 +68,25 @@ success.
 The memory store is single-writer in-process; it enforces the same cap by
 construction and has no durable policy row.
 
+## Cross-project admission
+
+`runMultiProjectPass` prepares every configured project, but prepares at most
+one plan per project and admits only plans that fit the available capacity
+reported by `poolStatus()`. The store remains the atomic enforcement point: two
+overlapping coordinators can both attempt admission, and the loser receives
+`E_CONCURRENCY_LIMIT` before any Execution, claim, or authority is written.
+
+Ordering uses durable `coordinator.pass` events. The project served least
+recently goes first. A pass recorded with reason `capacity-deferred` is not
+counted as service, so the deferred project leads the next pass instead of
+being starved by a project that keeps winning the slot. The scheduler never
+admits two plans for one project in a pass, preserving the project mutation
+exclusion rule independently of the global pool.
+
+`E_CONCURRENCY_LIMIT` is a control refusal, not a coordinator failure. The
+overlapping pass returns a blocked result carrying that reason; the Work Unit
+remains eligible and the next pass retries when the slot is released.
+
 ## Locking
 
 - Policy initialization (`ensurePoolPolicy`) takes only the pool lock, in its
@@ -83,7 +105,10 @@ and test surface, not a control plane, and it cannot disagree with enforcement.
 
 ## Scope boundaries
 
-- The cap is global; per-project caps and fairness are 2D.
+- The cap is global. Per-project caps remain out of scope.
+- Fair ordering is cooperative across coordinator passes that share this
+  database; it is not a distributed lock or a guarantee against an operator
+  running an unconfigured writer.
 - Budget exhaustion (`E_BUDGET_EXHAUSTED`) is D3 and stays out of this pool.
 
 ## Enforcement map
@@ -94,7 +119,11 @@ and test surface, not a control plane, and it cannot disagree with enforcement.
 - `lib/vnext/memory-store.mjs` — in-process enforcement, derived
   `listReservations`.
 - `lib/vnext/pilot-store.mjs`, `bin/vnext-pilot.mjs` — `maxConcurrency`
-  passthrough from pilot config.
+  passthrough from pilot config; aggregate `poolStatus`.
+- `lib/vnext/coordinator.mjs` — fair multi-project ordering, per-project plan
+  preparation, capacity deferral, and control-refusal classification.
+- `lib/vnext/multi-project-status.mjs` — aggregate capacity and project view.
+- `vnext-migrations/017_multi_project_scheduling.sql` — durable pass index.
 
 ## Evidence
 
@@ -109,3 +138,6 @@ and test surface, not a control plane, and it cannot disagree with enforcement.
   `test/vnext-concurrency.integration.test.mjs`.
 - Same rules against the reference store, including reconstruction deriving
   occupancy from recovered authorities: `test/vnext-concurrency.test.mjs`.
+- Fair ordering, capacity deferral, overlapping coordinators, and project
+  isolation under the shared pool:
+  `test/vnext-multi-project.integration.test.mjs`.
