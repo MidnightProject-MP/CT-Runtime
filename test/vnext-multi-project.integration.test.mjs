@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { testPool } from './pilot-test-pool.mjs';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
@@ -53,6 +54,29 @@ function makeAuthority() {
 function next(objectiveId) {
   return { objective_id: objectiveId, disposition: 'continue', summary: 'Checked one bounded consequence.',
     continuation: { mode: 'immediate', next_action: 'Check the next bounded consequence.' } };
+}
+
+function invokeCli(action, configPath, extraArgs = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(import.meta.dirname, '../bin/vnext-pilot.mjs'), action,
+      '--config', configPath, ...extraArgs], {
+      env: { ...process.env, CT_PILOT_DATABASE_URL: process.env.TEST_DATABASE_URL },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', value => { stdout += value; });
+    child.stderr.setEncoding('utf8').on('data', value => { stderr += value; });
+    child.once('error', reject);
+    child.once('exit', code => {
+      if (code !== 0) {
+        reject(new Error(`${action} exited ${code}; stdout=${stdout}; stderr=${stderr}`));
+        return;
+      }
+      try { resolve(JSON.parse(stdout.trim())); }
+      catch { resolve(JSON.parse(stdout.trim().split(/\r?\n/).at(-1))); }
+    });
+  });
 }
 
 test('multi-project coordinator schedules fairly, isolates projects, and qualifies offline operation', {
@@ -286,6 +310,70 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       t.diagnostic(`offline multi-project trial ${JSON.stringify(metrics)}`);
       assert.equal(metrics.accepted, 2);
       assert.equal(metrics.quiet_redispatches, 0);
+    });
+
+    await t.test('multi-project CLI routes both projects and reports aggregate status', async () => {
+      await pool.query("DELETE FROM vnext_pool_policy");
+      const leftId = `cli-a-${randomUUID()}`;
+      const rightId = `cli-b-${randomUUID()}`;
+      const left = project(leftId, await workspace(leftId));
+      const right = project(rightId, await workspace(rightId));
+      const authorityPath = path.join(root, 'cli-authority.mjs');
+      await writeFile(authorityPath, `export async function authorizeExecution({ execution }) {
+  return { ref: 'cli-exec:' + execution.execution_id };
+}
+export async function verifyExecution(decision, { execution }) {
+  return decision?.ref === 'cli-exec:' + execution.execution_id;
+}
+export async function verifyAssignmentDecision() { return true; }
+export async function authorizeTerminal() { return false; }
+export async function verifyAcceptance() { return false; }
+`);
+      const executorFor = index => {
+        const purpose = purposeName => ({
+          ...executorConfig.purposeExecutors[purposeName],
+          stateDirectory: path.join(root, `cli-${index}-${purposeName}`),
+        });
+        return {
+          ...executorConfig,
+          stateDirectory: path.join(root, `cli-${index}-execution`),
+          purposeExecutors: {
+            review: purpose('review'),
+            diagnosis: purpose('diagnosis'),
+            stewardship: purpose('stewardship'),
+          },
+        };
+      };
+      const configPath = path.join(root, 'cli-multi.config.json');
+      await writeFile(configPath, JSON.stringify({
+        enabled: true,
+        legacyExcluded: true,
+        authorityModule: authorityPath,
+        maxConcurrency: 2,
+        intervalMs: 1000,
+        assignmentProfiles: profiles,
+        executor: executorFor(0),
+        projects: [
+          { ...left, executor: executorFor(0), timeoutMs: 30000 },
+          { ...right, executor: executorFor(1), timeoutMs: 30000 },
+        ],
+      }));
+      const messageFile = path.join(root, 'cli-message.txt');
+      await writeFile(messageFile, 'Improve one concrete thing and retain evidence.');
+      await invokeCli('submit', configPath, ['--project', leftId, '--thread', 'cli-objective',
+        '--receipt', `cli-receipt-${randomUUID()}`, '--message-file', messageFile]);
+      await invokeCli('submit', configPath, ['--project', rightId, '--thread', 'cli-objective',
+        '--receipt', `cli-receipt-${randomUUID()}`, '--message-file', messageFile]);
+      const tick = await invokeCli('tick', configPath);
+      assert.equal(tick.dispatches.length, 2);
+      assert.deepEqual(tick.dispatches.map(row => row.project_id).sort(), [leftId, rightId].sort());
+      assert.equal(tick.capacity.max_concurrency, 2);
+      const status = await invokeCli('status', configPath);
+      assert.equal(status.projects.length, 2);
+      assert.deepEqual(status.projects.map(row => row.project_id).sort(), [leftId, rightId].sort());
+      const inspect = await invokeCli('inspect', configPath);
+      assert.equal(inspect.projects.length, 2);
+      assert.equal(inspect.capacity.configured, 2);
     });
   } finally {
     await pool.end();
