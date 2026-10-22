@@ -93,10 +93,17 @@ function assertPilotEnabled(config) {
 }
 
 function assertExecutorProfiles(config) {
-  if (config.assignmentProfiles !== undefined) {
-    if (!config.executor?.purposeExecutors?.review || !config.executor?.purposeExecutors?.diagnosis || !config.executor?.purposeExecutors?.stewardship) throw new Error('purpose-specific isolated executor profiles are required for review, diagnosis and stewardship');
+  const executors = [
+    ...(config.executor ? [config.executor] : []),
+    ...(Array.isArray(config.projects) ? config.projects.map(project => project?.executor).filter(Boolean) : []),
+  ];
+  if (executors.length === 0) throw new Error('an executor configuration is required');
+  for (const executor of executors) {
+    if (config.assignmentProfiles !== undefined) {
+      if (!executor?.purposeExecutors?.review || !executor?.purposeExecutors?.diagnosis || !executor?.purposeExecutors?.stewardship) throw new Error('purpose-specific isolated executor profiles are required for review, diagnosis and stewardship');
+    }
+    if (typeof executor?.stateDirectory !== 'string' || !path.isAbsolute(executor.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
   }
-  if (typeof config.executor?.stateDirectory !== 'string' || !path.isAbsolute(config.executor.stateDirectory)) throw new Error('an absolute executor.stateDirectory is required for dispatch recovery');
 }
 
 let pool;
