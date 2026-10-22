@@ -124,7 +124,7 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
   let acceptedAWorkId = null;
 
   const workerSource = `
-    import { access, readFile, writeFile } from 'node:fs/promises';
+    import { access, readFile, rename, writeFile } from 'node:fs/promises';
     import { createHash } from 'node:crypto';
     import path from 'node:path';
     const request = JSON.parse(await readFile(process.env.CT_VNEXT_REQUEST_FILE, 'utf8'));
@@ -132,7 +132,9 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
     const attempt = Number(request.execution.attempt);
     const executionId = request.execution.execution_id;
     const marker = path.join(control, 'started-' + attempt + '.json');
-    await writeFile(marker, JSON.stringify({ pid: process.pid, execution_id: executionId }), { flag: 'wx' });
+    const markerTemp = marker + '.tmp';
+    await writeFile(markerTemp, JSON.stringify({ pid: process.pid, execution_id: executionId }), { flag: 'wx' });
+    await rename(markerTemp, marker);
     if (process.env.CT_PILOT_DATABASE_URL || process.env.POSTGRES_URL || process.env.TEST_DATABASE_URL) process.exit(91);
     if (attempt === 1) {
       const gate = path.join(control, 'release-first-worker');
