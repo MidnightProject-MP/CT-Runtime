@@ -84,10 +84,10 @@ try {
         if (!decision) throw new Error('acceptance authority did not issue a decision');
         console.log(JSON.stringify(await store.acceptWork(workUnitId, decision)));
       } else if (action === 'decide-assignment') {
-        const pending = await store.pendingAssignment(config.projectId, required('--assignment'));
-        if (!pending) throw new Error('assignment report is not pending for this project');
+        const target = await store.assignmentDecisionTarget(config.projectId, required('--assignment'));
+        if (!target) throw new Error('assignment report is not recorded for this project');
         const decision = await jsonFile(required('--decision-file'));
-        console.log(JSON.stringify(await store.recordAssignmentDecision({ ...pending, decision })));
+        console.log(JSON.stringify(await store.recordAssignmentDecision({ ...target, decision })));
       } else if (action === 'cancel') {
         const workUnitId = required('--work');
         const decision = await jsonFile(required('--decision-file'));

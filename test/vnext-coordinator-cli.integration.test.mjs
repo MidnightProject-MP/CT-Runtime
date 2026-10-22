@@ -565,6 +565,20 @@ test('native CLI subprocess loop separates execution, review, Celestan decision,
     assert.equal(objective.accepted_completion?.accepted, true);
     assert.equal(objective.assignments.filter(row => row.purpose === 'review').length, 1);
     assert.equal(objective.assignments.find(row => row.purpose === 'review').decision?.outcome, 'recommend_accept');
+
+    const replayedAcceptance = await invoke(cliPath, 'accept', configPath, connectionString, ['--work', submitted.work_unit_id]);
+    assert.equal(replayedAcceptance.acceptance_ref, objective.accepted_completion.acceptance_ref,
+      'a repeated acceptance command resolves its historical receipt');
+    const firstDecided = (await pool.query(`SELECT assignment_id,decision FROM vnext_assignments
+      WHERE project_id=$1 AND status IN ('decided','superseded') AND decision IS NOT NULL ORDER BY created_at LIMIT 1`, [projectId])).rows[0];
+    assert.ok(firstDecided);
+    const replayDecisionPath = path.join(directory, 'decided-assignment.json');
+    await writeFile(replayDecisionPath, JSON.stringify(firstDecided.decision));
+    const replayedDecision = await invoke(cliPath, 'decide-assignment', configPath, connectionString,
+      ['--assignment', firstDecided.assignment_id, '--decision-file', replayDecisionPath]);
+    assert.equal(replayedDecision.assignment_id, firstDecided.assignment_id);
+    assert.equal(replayedDecision.decision_ref, firstDecided.decision.ref,
+      'a repeated decide-assignment command resolves its historical receipt');
   } finally {
     await writeFile(gatePath, 'release').catch(() => {});
     if (workerPid) { try { process.kill(workerPid, 'SIGKILL'); } catch { /* worker already exited */ } }
