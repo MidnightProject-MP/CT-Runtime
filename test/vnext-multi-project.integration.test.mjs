@@ -382,7 +382,7 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       const stale = await concurrent;
       assert.equal(stale.passes.find(pass => pass.project_id === revisedId).status, 'blocked');
       assert.equal((await revisionStore.coordinatorLedger(revisionPeerId)).works[0].state, 'terminal');
-      assert.equal((await revisionStore.coordinatorLedger(revisedId)).works[0].work_revision, 2);
+      assert.equal(Number((await revisionStore.coordinatorLedger(revisedId)).works[0].work_revision), 2);
 
       clock += 2000;
       const successor = await runMultiProjectPass({ store: revisionStore, projects: [revised, revisionPeer], authority,
