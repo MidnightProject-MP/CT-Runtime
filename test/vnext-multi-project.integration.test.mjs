@@ -236,6 +236,17 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
         executor: async () => { calls += 1; return {}; }, authority }), /E_WORKSPACE_CONFLICT/);
       assert.equal(calls, 0, 'canonical aliases are rejected before project preparation or execution');
 
+      const racedRoot = await workspace(`workspace-race-${randomUUID()}`);
+      const racedAlias = path.join(root, `workspace-race-alias-${randomUUID()}`);
+      await symlink(racedRoot, racedAlias, 'dir');
+      const simultaneous = await Promise.allSettled([
+        store.bindProjectWorkspaces([{ projectId: `workspace-race-a-${randomUUID()}`, workspaceRoot: racedRoot }]),
+        store.bindProjectWorkspaces([{ projectId: `workspace-race-b-${randomUUID()}`, workspaceRoot: racedAlias }]),
+      ]);
+      assert.equal(simultaneous.filter(result => result.status === 'fulfilled').length, 1);
+      assert.equal(simultaneous.filter(result => result.status === 'rejected' && /E_WORKSPACE_CONFLICT/.test(result.reason.message)).length, 1,
+        'the advisory-locked binding is shared across concurrent coordinators');
+
       const parentId = `workspace-persisted-parent-${randomUUID()}`;
       await store.bindProjectWorkspaces([{ projectId: parentId, workspaceRoot: parent }]);
       const nested = path.join(parent, 'nested-project');
@@ -532,6 +543,11 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       clock += 2000;
       const third = await runMultiProjectPass({ store, projects: [a, b], executor, authority, now: () => clock });
       assert.equal(third.dispatches[0].project_id, aId, 'wall-clock order cannot keep the older-served project deferred');
+      await pool.query(`UPDATE vnext_events SET created_at='2000-01-01T00:00:00Z'
+        WHERE event_type='coordinator.pass' AND payload->>'project_id'=ANY($1::text[])`, [[aId, bId]]);
+      clock += 2000;
+      const fourth = await runMultiProjectPass({ store, projects: [a, b], executor, authority, now: () => clock });
+      assert.equal(fourth.dispatches[0].project_id, bId, 'tied timestamps still give bounded service to both projects');
     });
 
     await t.test('project failure and uncertainty remain isolated', async () => {
