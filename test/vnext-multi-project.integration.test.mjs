@@ -308,6 +308,94 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       assert.equal(recoveryResult.passes.find(pass => pass.project_id === recoveryBId).status, 'dispatched');
     });
 
+    await t.test('lost settlement responses and concurrent revision stay isolated from the peer project', async () => {
+      await pool.query('DELETE FROM vnext_pool_policy');
+      const lostId = `lost-response-a-${randomUUID()}`;
+      const peerId = `lost-response-b-${randomUUID()}`;
+      const lost = project(lostId, await workspace(lostId));
+      const peer = project(peerId, await workspace(peerId));
+      const baseStore = makeStore({ maxConcurrency: 2 });
+      await submit(baseStore, lostId);
+      await submit(baseStore, peerId);
+      let loseOnce = true;
+      const lostStore = { ...baseStore, async persistTurn(result, options) {
+        const persisted = await baseStore.persistTurn(result, options);
+        if (loseOnce && result.workUnit.project_id === lostId) {
+          loseOnce = false;
+          throw new Error('simulated response loss after durable commit');
+        }
+        return persisted;
+      } };
+      const lostExecutor = async request => {
+        if (request.workUnit.project_id === lostId) return { objective_id: request.workUnit.objective_ref,
+          disposition: 'waiting', summary: 'Waiting for an external test fixture.',
+          continuation: { mode: 'condition', condition: { kind: 'external', condition: 'Fixture arrives.' } } };
+        const bytes = Buffer.from('peer-complete');
+        await writeFile(path.join(request.workspaceRoot, 'proof.txt'), bytes);
+        return { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Peer result checked.',
+          outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(bytes).digest('hex') }] };
+      };
+      const first = await runMultiProjectPass({ store: lostStore, projects: [lost, peer], executor: lostExecutor, authority });
+      assert.equal(first.passes.find(pass => pass.project_id === lostId).status, 'failed');
+      assert.equal((await baseStore.coordinatorLedger(peerId)).works[0].state, 'terminal');
+      assert.equal((await baseStore.coordinatorLedger(lostId)).works[0].state, 'waiting', 'the lost response followed a committed settlement');
+      const replay = await runMultiProjectPass({ store: baseStore, projects: [lost, peer], executor: lostExecutor, authority });
+      assert.equal(replay.dispatches.length, 0, 'the committed waiting result is not dispatched again');
+      const lostCounts = await pool.query(`SELECT count(DISTINCT e.execution_id)::int AS executions,
+        count(DISTINCT r.execution_id)::int AS results FROM vnext_executions e
+        LEFT JOIN vnext_pilot_results r USING (execution_id) WHERE e.project_id=$1`, [lostId]);
+      assert.deepEqual(lostCounts.rows[0], { executions: 1, results: 1 });
+
+      const revisedId = `revision-a-${randomUUID()}`;
+      const revisionPeerId = `revision-b-${randomUUID()}`;
+      const revised = project(revisedId, await workspace(revisedId));
+      const revisionPeer = project(revisionPeerId, await workspace(revisionPeerId));
+      let clock = Date.now();
+      const revisionStore = makeStore({ maxConcurrency: 2, now: () => clock });
+      const revisedWork = await submit(revisionStore, revisedId);
+      await submit(revisionStore, revisionPeerId);
+      let release;
+      let enter;
+      const gate = new Promise(resolve => { release = resolve; });
+      const entered = new Promise(resolve => { enter = resolve; });
+      const evidenceTurn = async request => {
+        const bytes = Buffer.from(`${request.workUnit.project_id}:${request.workUnit.work_revision}`);
+        await writeFile(path.join(request.workspaceRoot, 'proof.txt'), bytes);
+        return { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Revision-bound result checked.',
+          outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(bytes).digest('hex') }] };
+      };
+      const concurrent = runMultiProjectPass({ store: revisionStore, projects: [revised, revisionPeer], authority,
+        now: () => clock, executor: async request => {
+          if (request.workUnit.project_id === revisedId) {
+            const result = await evidenceTurn(request);
+            enter();
+            await gate;
+            return result;
+          }
+          return evidenceTurn(request);
+        } });
+      await entered;
+      await revisionStore.reviseWorkRequirements(revisedWork.work_unit_id, {
+        expectedRevision: 1, requirements: { finish: 'Complete the newly revised deliverable.' },
+      });
+      release();
+      const stale = await concurrent;
+      assert.equal(stale.passes.find(pass => pass.project_id === revisedId).status, 'blocked');
+      assert.equal((await revisionStore.coordinatorLedger(revisionPeerId)).works[0].state, 'terminal');
+      assert.equal((await revisionStore.coordinatorLedger(revisedId)).works[0].work_revision, 2);
+
+      clock += 2000;
+      const successor = await runMultiProjectPass({ store: revisionStore, projects: [revised, revisionPeer], authority,
+        now: () => clock, executor: evidenceTurn });
+      assert.equal(successor.passes.find(pass => pass.project_id === revisedId).status, 'accepted');
+      const [revisedLedger, peerLedger] = await Promise.all([revisedId, revisionPeerId].map(id => revisionStore.coordinatorLedger(id)));
+      assert.equal(revisedLedger.works[0].state, 'terminal');
+      assert.equal(peerLedger.works[0].state, 'terminal');
+      assert.equal(revisedLedger.block, null);
+      const revisionExecutions = await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE project_id=$1', [revisedId]);
+      assert.equal(Number(revisionExecutions.rows[0].count), 2, 'one stale revision is superseded and one current revision completes');
+    });
+
     await t.test('aggregate inspection reports active stewardship, review, and diagnosis assignments', async () => {
       await pool.query('DELETE FROM vnext_pool_policy');
       let clock = Date.now();
