@@ -360,7 +360,7 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
       }, 'blocked worker exit before recovery');
       await setClaimExpired(blockerSubmitted.work_unit_id);
       const recoveryPass = await invoke(cliPath, 'tick', blockerConfigPath, connectionString);
-      assert.equal(recoveryPass.status, 'blocked', 'recovery records uncertainty instead of retrying B');
+      assert.equal(recoveryPass.status, 'blocked', `recovery records uncertainty instead of retrying B: ${JSON.stringify(recoveryPass)}`);
       const blockedView = await inspect();
       const acceptedAWhileBlocked = blockedView.objectives.find(objective => objective.work_unit_id === acceptedAWorkId);
       const blockedB = blockedView.objectives.find(objective => objective.work_unit_id === blockerSubmitted.work_unit_id);
