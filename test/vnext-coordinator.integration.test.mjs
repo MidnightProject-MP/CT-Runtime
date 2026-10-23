@@ -21,6 +21,12 @@ const authorization = {
 
 test('coordinator pass, status, restart recovery, overlap, pause, and cancellation', { timeout: 120000 }, async t => {
   const dir = await mkdtemp(path.join(tmpdir(), 'coordinator-'));
+  const additionalWorkspaces = [];
+  const makeWorkspace = async prefix => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), `${prefix}-`));
+    additionalWorkspaces.push(workspaceRoot);
+    return workspaceRoot;
+  };
   const pool = await testPool({ dataDir: path.join(dir, 'db') });
   const identityFile = path.join(dir, 'identity.md');
   await writeFile(identityFile, 'Coordinator test identity.');
@@ -111,12 +117,13 @@ test('coordinator pass, status, restart recovery, overlap, pause, and cancellati
 
     await t.test('overlapping passes dispatch one attempt and expose the active claim', async () => {
       const overlap = `overlap-${randomUUID()}`;
+      const overlapWorkspace = await makeWorkspace('coordinator-overlap-workspace');
       await store().submit({ projectId: overlap, threadId: 'overlap', receiptId: `receipt-${randomUUID()}`, message: 'Overlap.' });
       let entered;
       const started = new Promise(resolve => { entered = resolve; });
       let release;
       const blocked = new Promise(resolve => { release = resolve; });
-      const pass = (executor, extra = {}) => runCoordinatorPass({ store: store(), projectId: overlap, workspaceRoot: dir, identityFiles: [identityFile], executor, authority, timeoutMs: 5000, coordinatorId: 'overlap-coordinator', ...extra });
+      const pass = (executor, extra = {}) => runCoordinatorPass({ store: store(), projectId: overlap, workspaceRoot: overlapWorkspace, identityFiles: [identityFile], executor, authority, timeoutMs: 5000, coordinatorId: 'overlap-coordinator', ...extra });
       const firstPromise = pass(async ({ workUnit }) => { entered(); await blocked; return next(workUnit.objective_ref); });
       await started;
       const active = await store().coordinatorLedger(overlap).then(ledger => deriveCoordinatorStatus(ledger));
@@ -134,6 +141,7 @@ test('coordinator pass, status, restart recovery, overlap, pause, and cancellati
 
     await t.test('restart recovery surfaces uncertainty, blocks dispatch, and reconciliation reopens the ledger', async () => {
       const recoveryProject = `recovery-${randomUUID()}`;
+      const recoveryWorkspace = await makeWorkspace('coordinator-recovery-workspace');
       const { work_unit_id: id } = await store().submit({ projectId: recoveryProject, threadId: 'recovery', receiptId: `receipt-${randomUUID()}`, message: 'Recovery.' });
       const work = await store().reconstruct({ work_unit_id: id });
       const executionId = `exec-${randomUUID()}`;
@@ -144,7 +152,7 @@ test('coordinator pass, status, restart recovery, overlap, pause, and cancellati
       await expireClaim(id);
       let denied = false;
       const pass = await runCoordinatorPass({
-        store: store(), projectId: recoveryProject, workspaceRoot: dir, identityFiles: [identityFile],
+        store: store(), projectId: recoveryProject, workspaceRoot: recoveryWorkspace, identityFiles: [identityFile],
         executor: async () => { denied = true; return next(work.objective_ref); }, authority, timeoutMs: 5000, coordinatorId: 'recovery-coordinator',
         recovery: { stateDirectory: path.join(dir, 'attempts'), probe: async () => 'gone', groupProbe: async () => 'gone', kill: async () => { throw new Error('kill was not expected'); } },
       });
@@ -204,11 +212,12 @@ test('coordinator pass, status, restart recovery, overlap, pause, and cancellati
 
     await t.test('cancelled work is removable from the coordinator next action', async () => {
       const cancelProject = `cancel-${randomUUID()}`;
+      const cancelWorkspace = await makeWorkspace('coordinator-cancel-workspace');
       const { work_unit_id: id } = await store().submit({ projectId: cancelProject, threadId: 'cancel', receiptId: `receipt-${randomUUID()}`, message: 'Cancel.' });
       const cancellation = await store().recordCancellation({ projectId: cancelProject, workUnitId: id, expectedRevision: 1, decision: { ref: `cancel:${randomUUID()}` } });
       assert.equal(cancellation.state, 'cancelled');
       let ran = false;
-      const pass = await runCoordinatorPass({ store: store(), projectId: cancelProject, workspaceRoot: dir, identityFiles: [identityFile], executor: async () => { ran = true; }, authority, timeoutMs: 5000 });
+      const pass = await runCoordinatorPass({ store: store(), projectId: cancelProject, workspaceRoot: cancelWorkspace, identityFiles: [identityFile], executor: async () => { ran = true; }, authority, timeoutMs: 5000 });
       assert.equal(ran, false);
       assert.equal(pass.status, 'quiesced');
       assert.equal(pass.status_view.next_action.kind, 'none');
@@ -216,6 +225,7 @@ test('coordinator pass, status, restart recovery, overlap, pause, and cancellati
     });
   } finally {
     await pool.end();
+    await Promise.all(additionalWorkspaces.map(workspaceRoot => rm(workspaceRoot, { recursive: true, force: true })));
     await rm(dir, { recursive: true, force: true });
   }
 });

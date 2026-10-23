@@ -422,7 +422,7 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
 
     await t.test('CLI run exits promptly from real idle sleep after SIGTERM', async t => {
       if (!lifecycleCompleted) return t.skip('the integrated worker/restart/acceptance lifecycle did not complete');
-      await writeConfig({ projectId: `coordinator-cli-idle-${randomUUID()}`, scanIntervalMs: 5000, pauseFile: path.join(directory, 'IDLE-PAUSED') });
+      await writeConfig({ projectId, scanIntervalMs: 5000, pauseFile: path.join(directory, 'IDLE-PAUSED') });
       const idleRun = startRun();
       await waitFor(() => idleRun.output().stdout.includes('"status":"quiesced"') || idleRun.child.exitCode !== null, 'idle coordinator pass');
       assert.equal(idleRun.child.exitCode, null, `idle coordinator exited early: ${idleRun.output().stderr}`);
