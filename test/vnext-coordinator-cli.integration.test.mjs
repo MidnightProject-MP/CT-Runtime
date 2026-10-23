@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { createPilotStore } from '../lib/vnext/pilot-store.mjs';
@@ -18,8 +19,8 @@ async function exists(file) {
 }
 
 async function waitFor(predicate, label, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (await predicate()) return;
     await delay(20);
   }
@@ -359,7 +360,7 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
       }, 'blocked worker exit before recovery');
       await setClaimExpired(blockerSubmitted.work_unit_id);
       const recoveryPass = await invoke(cliPath, 'tick', blockerConfigPath, connectionString);
-      assert.equal(recoveryPass.status, 'blocked', 'recovery records uncertainty instead of retrying B');
+      assert.equal(recoveryPass.status, 'blocked', `recovery records uncertainty instead of retrying B: ${JSON.stringify(recoveryPass)}`);
       const blockedView = await inspect();
       const acceptedAWhileBlocked = blockedView.objectives.find(objective => objective.work_unit_id === acceptedAWorkId);
       const blockedB = blockedView.objectives.find(objective => objective.work_unit_id === blockerSubmitted.work_unit_id);
@@ -421,7 +422,13 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
 
     await t.test('CLI run exits promptly from real idle sleep after SIGTERM', async t => {
       if (!lifecycleCompleted) return t.skip('the integrated worker/restart/acceptance lifecycle did not complete');
-      await writeConfig({ projectId: `coordinator-cli-idle-${randomUUID()}`, scanIntervalMs: 5000, pauseFile: path.join(directory, 'IDLE-PAUSED') });
+      const idleWorkspace = path.join(directory, 'idle-project');
+      const idleIdentity = path.join(directory, 'idle-identity.md');
+      await mkdir(idleWorkspace, { recursive: true });
+      await writeFile(idleIdentity, 'Isolated idle project identity.');
+      await writeConfig({ projectId: `coordinator-cli-idle-${randomUUID()}`, workspaceRoot: idleWorkspace,
+        identityFiles: [idleIdentity], scanIntervalMs: 5000, pauseFile: path.join(directory, 'IDLE-PAUSED'),
+        executor: { ...baseConfig.executor, stateDirectory: path.join(directory, 'idle-attempts') } });
       const idleRun = startRun();
       await waitFor(() => idleRun.output().stdout.includes('"status":"quiesced"') || idleRun.child.exitCode !== null, 'idle coordinator pass');
       assert.equal(idleRun.child.exitCode, null, `idle coordinator exited early: ${idleRun.output().stderr}`);

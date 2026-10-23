@@ -228,13 +228,13 @@ test('general compute telemetry requires an exact capability reason', async () =
   h.context.CT_GAS_STATE.telemetry({ general_compute_requested: true, capability_reason: 'missing-shell-executor' });
 });
 
-test('latest continuation ordering is deterministic beyond timestamps', async () => {
+test('latest continuation follows append order across clock corrections', async () => {
   const h = await boot();
   const base = { goal: 'g', completed: [], decisions: [], evidence: [], provenance: [], outstanding: ['A'], next_operation: 'model', reason: 'test', resumed_from: 'exec', physical_execution_count: 1, work_order_id: 'order-order', execution_id: 'exec', wake_id: 'wake', launch_context: { model: 'openrouter/a:free' }, resume_context: {} };
   h.context.CT_GAS_STATE.continuation({ ...base, continuation_id: 'cont-z' });
   h.context.CT_GAS_STATE.continuation({ ...base, continuation_id: 'cont-a' });
-  const rows = h.rows.get('continuations'); rows[rows.length - 1][9] = rows[rows.length - 2][9];
-  assert.equal(h.context.CT_GAS_STATE.latestContinuation('order-order').continuation_id, 'cont-z');
+  const rows = h.rows.get('continuations'); rows[rows.length - 1][9] = new Date(0).toISOString();
+  assert.equal(h.context.CT_GAS_STATE.latestContinuation('order-order').continuation_id, 'cont-a');
 });
 
 test('Observer refuses a fresh bypass clock and adapters accept an active clock', async () => {

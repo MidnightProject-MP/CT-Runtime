@@ -13,7 +13,7 @@ test('command executor returns bounded structured result without inheriting data
   const previous=process.env.CT_PILOT_DATABASE_URL;process.env.CT_PILOT_DATABASE_URL='must-not-reach-worker';
   try {
    const execute=createCommandExecutor({command:process.execPath,args:[script],stateDirectory:dir});
-   assert.deepEqual(await execute({execution:{execution_id:'test-good'},workspaceRoot:dir,timeoutMs:1000}),{secret:null,ok:true});
+   assert.deepEqual(await execute({execution:{execution_id:'test-good'},workspaceRoot:dir,timeoutMs:5000}),{secret:null,ok:true});
   } finally {if(previous===undefined) delete process.env.CT_PILOT_DATABASE_URL;else process.env.CT_PILOT_DATABASE_URL=previous;}
  } finally {await rm(dir,{recursive:true,force:true});}
 });

@@ -28,7 +28,7 @@ test('pilot durable input, fresh wakes, evidence, waits, rollback, and uncertain
   await migrateVNext({pool,directory:path.join(import.meta.dirname,'../vnext-migrations')});
    const acceptance = testAcceptanceAuthority(async c => { await verifyTurnEvidenceIntegrity(c.turn, { workspaceRoot: dir }); return c.turn.summary === 'Outcome checked.'; });
    const operatingAuthority = { ...authority, ...acceptance };
-   const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,acceptanceVerifier:acceptance.verifyAcceptance,intervalMs:1000});
+   const store = () => createPilotStore({pool,authorizationVerifier:authority.verifyExecution,acceptanceVerifier:acceptance.verifyAcceptance,intervalMs:60000});
   const projectId = `pilot-test-${randomUUID()}`;
   let n=0;
   const input = (s,thread,message='Improve one concrete thing.') => s.submit({projectId,threadId:thread,receiptId:`receipt-${++n}`,message});

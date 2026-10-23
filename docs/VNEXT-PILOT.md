@@ -2,6 +2,7 @@
 
 This source delivery connects a PostgreSQL-backed human inbox to a bounded command execution and durable future eligibility. It includes current-main foundation code plus PR #63's A8/A9 fixes, a small Linux caller, and a disabled systemd timer. It does not deploy or activate anything. It does not claim the multi-day operational MVP has passed.
 The Milestone 2A candidate adds a recurring coordinator pass, durable pass records, a derived operator view, optional long-running loop, pause/resume, and explicit acceptance/cancellation/reconciliation commands. The next offline candidate adds purpose-bound execution, independent review, stewardship, diagnosis, and authorized assignment decisions on the same Execution/Work Unit lifecycle. It is not operationally qualified. The existing timer remains the only supplied deployment unit.
+The multi-project candidate adds explicit project configuration, fair cross-project ordering, capacity-aware deferral, aggregate status, and isolated per-project failures without weakening the existing project mutation exclusion.
 
 ## Milestone 2A candidate evidence
 
@@ -25,6 +26,22 @@ was pushed, merged to remote, deployed, live-applied, activated, or commissioned
 The existing GAS `no_effect` decision still makes an uncertain send a permanent
 project stop.
 
+## Multi-project offline candidate evidence
+
+The multi-project candidate is verified against native PostgreSQL from the
+existing clean WSL workspace. The required suite
+`test/vnext-multi-project.integration.test.mjs` covers fair capacity-aware
+dispatch, one mutation authority per project, overlapping coordinators sharing
+one durable global capacity, project fault isolation, backward clock correction,
+real command workers through stewardship/execution/review/acceptance, and the
+CLI boundary. Three repeated two-project trials completed 18 passes and accepted
+six Work Units with zero duplicate dispatches, zero stranded authorities, zero
+blocked projects, and zero quiet redispatches. The precise command, environment,
+and limitations are recorded in `docs/VNEXT-MULTI-PROJECT-QUALIFICATION.md`.
+
+This evidence is local and bounded. It is not a multi-day soak, a production
+database trial, live authority exercise, or deployment approval.
+
 ## What is implemented
 
 - `submit` transactionally records an immutable receipt identity and message, creates/reuses one project/thread objective, and makes input discoverable. Same receipt/content is idempotent; changed content under the same receipt ID is rejected. A new human reply can reopen a completed thread, but cannot automatically clear an uncertain/review state.
@@ -34,7 +51,9 @@ project stop.
 - `status` reads durable responses and questions. The append-only-by-adapter `vnext_pilot_results` table preserves all accepted turn reports; the last ten are included in cold reconstruction. Original identity files and attempt request/result files remain outside the checkout. The command executor retains hash-checked copies of cited file evidence under each attempt directory (maximum 16 MiB per file), so later working-file changes do not erase those bytes.
 - `inspect` derives the coordinator view from the same durable records: objective revision, active and completed attempts, latest result and evidence, waiting/blocked/uncertain/cancelled reasons, the next eligible action or why none exists, completion claim vs accepted completion, and pending human decisions.
 - `acceptance_history` retains prior receipts across revisions or new input. `accepted_completion` is populated only when the Work Unit is currently terminal and its accepted receipt matches the current last execution and work revision. Its digest is reconstructed through a repeatable-read, read-only snapshot that does not apply the project-wide eligibility gate for issuing new acceptance, so status remains readable while a sibling Work Unit is running or reconciliation-blocked.
-- `run` executes the same bounded pass repeatedly with one dispatch per pass, a durable `coordinator.pass` event, sequential passes, and graceful stop after the current pass on SIGINT/SIGTERM. `tick` remains the single-pass form for the systemd timer. A configured pause file makes every pass quiescent without touching a live attempt; `pause` and `resume` manage that marker.
+- `run` executes the same bounded pass repeatedly, with a durable `coordinator.pass` event, sequential passes, and graceful stop after the current pass on SIGINT/SIGTERM. A single-project pass admits one dispatch; a multi-project pass admits at most the available global pool capacity and defers the rest. `tick` remains the single-pass form for the systemd timer. A configured pause file makes every pass quiescent without touching a live attempt; `pause` and `resume` manage that marker.
+- Each project is durably bound to one canonical `workspaceRoot`. Symlink aliases and nested workspace trees across different project IDs are rejected under a database advisory lock, so concurrent coordinators cannot assign separate mutation authorities to overlapping workspace paths. The binding is persistent; changing a project's canonical root requires a deliberate database binding migration. Fair service ordering uses the monotonic identity sequence of `coordinator.pass` events, not wall-clock timestamps.
+- Multi-project preparation and recovery failures are isolated by project unless the failure indicates shared database availability/schema trouble. Aggregate status includes active internal stewardship, review, and diagnosis executions, their assignment identities, and a wait action rather than a duplicate dispatch. Multi-project CLI pass summaries retain each project ID.
 - `accept`, `cancel`, and `reconcile` are explicit operator commands over the existing guarded boundaries. They do not bypass execution, settlement, or acceptance checks. Acceptance still requires an independent decision; cancellation still requires a durable authorized intent; reconciliation requires an explicit decision document and records its reference with the resolution.
 - Purpose-bound assignments bind objective, revision, input watermark, predecessor, subject digest, explicit model/agent, access class, and permissions. Review, diagnosis, and stewardship use read-only profiles and dedicated executor command profiles. Execution completion remains in `review` until a distinct reviewer report and Celestan decision; a review recommendation never accepts work. Requested changes route through stewardship and a bounded follow-up execution without manufacturing a new objective revision; review cycles are bounded by `maxNonProgress`, after which status reports reconsideration instead of admitting another follow-up. An execution follow-up receives only the decision-authorized proposal, requested changes, or approach, bound to its governing decision, revision, and predecessor execution; unapproved or superseded reports remain context. New input, a requirements revision, or cancellation supersedes stale queued/reported assignments.
 - `decide-assignment` records an authorized decision against the exact durable assignment/report/subject digests. The authority module must export `verifyAssignmentDecision`; automatic decisions may be supplied through `authorizeAssignmentDecision`, otherwise the report remains pending. Exact assignment-report and decision receipts are resolved before post-settlement conditions, so a lost response or repeated CLI command returns its original receipt and divergent content fails closed. Review decisions and the existing snapshot-bound `accept` transition are separate decisions.
@@ -44,7 +63,7 @@ project stop.
 ## Source provenance
 
 - Candidate base: merged main `3ce806e9d579a7c04950d3dc2cf772ecc757429b` (PR #102).
-- The vNext Node migration chain adds `016_purpose_assignments.sql` for durable, target-linked internal assignment Work Units and immutable purpose-bound reports/decisions. GAS send admission and minimal cancellation use migration 010 from #101, not applied live by this candidate.
+- The vNext Node migration chain adds `016_purpose_assignments.sql` for durable, target-linked internal assignment Work Units and immutable purpose-bound reports/decisions; `017_multi_project_scheduling.sql` for the coordinator-pass query; `018_project_workspace_bindings.sql` for persistent canonical workspace exclusion; and `019_event_sequence_fairness.sql` for event-sequence fairness independent of wall-clock changes. GAS send admission and minimal cancellation use migration 010 from #101, not applied live by this candidate.
 - No candidate push/PR, secret change, GAS write, production migration, activation, or deployment was performed.
 
 ## Install and prove the mechanics locally
@@ -69,7 +88,7 @@ The archive includes the two pinned Foundry Observer source files as a sibling `
 ## Configure the chosen host and project
 
 1. Install the code at `/opt/CT-Runtime`, the approved project checkout at its own path, and the authoritative identity files outside the runtime checkout. Run the worker with only the tool credentials and OS permissions required by the entrusted project. Prompt scope is not a sandbox. Keep runtime database/configuration access outside the worker's permitted tool surface; if stronger isolation is needed, use a qualified sandbox command as the executor.
-2. Copy `examples/vnext-pilot.config.json` to `/etc/celestan/pilot.json`. Replace all paths, every explicit assignment model/agent/permission profile, the three dedicated read-only executor profiles, and the authority module. Reviewer model or agent must differ from execution. The configured read-only agents/executor environment must actually prohibit writes; a prompt or `access_class` label alone is not a sandbox. Keep `enabled` and `legacyExcluded` false during qualification. State belongs in `/var/lib/celestan/pilot`, not in either repository. `coordinatorId` labels durable pass records; `scanIntervalMs` controls the optional `run` loop; `pauseFile` is an absolute operator marker and is never inside the project checkout.
+2. Copy `examples/vnext-pilot.config.json` for one project or `examples/vnext-pilot-multi.config.json` for several projects to `/etc/celestan/pilot.json`. Replace all paths, every explicit assignment model/agent/permission profile, the three dedicated read-only executor profiles, and the authority module. Each project may use its own executor command and isolated state directory. Reviewer model or agent must differ from execution. The configured read-only agents/executor environment must actually prohibit writes; a prompt or `access_class` label alone is not a sandbox. Keep `enabled` and `legacyExcluded` false during qualification. State belongs in `/var/lib/celestan/pilot`, not in either repository. `coordinatorId` labels durable pass records; `scanIntervalMs` controls the optional `run` loop; `pauseFile` is an absolute operator marker and is never inside the project checkout.
 3. Connect the existing authorization authority. The required module exports `authorizeExecution(context)`, `verifyExecution(decision, context)`, and `authorizeTerminal(context)`. The `cancel` command additionally requires `verifyCancellation(decision, context)`; absent that export, cancellation fails closed. These functions must retain project scope and existing quality requirements. The sample `examples/vnext-pilot-authority.mjs` is an implementable file-grant adapter; copy it outside the checkout and supply `CT_PILOT_GRANT_FILE` pointing at an actual existing entrustment. Its decision reference binds grant contents and execution ID, and optional `objectiveIds` restricts objectives. The grant's scope is supplied to cognition. The sample grant is deliberately invalid until configured; it grants nothing by itself.
 4. For completion, the sample authority loads a project-owned `acceptanceModule` exporting `accept({workUnit, execution, turn, evidence, grant})`. It must evaluate the actual finish condition and required project review/delivery evidence. File hashes prove artifact integrity, not semantic correctness. Without an acceptance policy the completion claim stays in `review`; Runtime does not fabricate one for SuperSimpleGames.
 5. Configure `CT_PILOT_DATABASE_URL` only for the runtime process, in an environment file readable by the runtime account. Never put credentials in source, the grant, turn reports or the ZIP. Prepare the existing schema roles and migrations according to the current database runbook before applying the vNext migrations. Do not point first-time testing at production.
@@ -100,6 +119,44 @@ node bin/vnext-pilot.mjs resume --config /etc/celestan/pilot.json
 
 Pause never interrupts the current worker. It prevents the next pass from admitting work; the pass stops after restoring durable state.
 
+### Multiple projects
+
+Use a `projects` array instead of the single top-level `projectId`,
+`workspaceRoot`, and `identityFiles` fields. Each entry requires an absolute
+workspace root and at least one identity file. Up to 64 projects are accepted.
+An entry may override `executor`, `timeoutMs`, and `maxNonProgress`; otherwise it
+inherits the top-level values. See `examples/vnext-pilot-multi.config.json`.
+
+```json
+{
+  "enabled": true,
+  "legacyExcluded": true,
+  "authorityModule": "/etc/celestan/authority.mjs",
+  "maxConcurrency": 2,
+  "executor": { "command": "/opt/worker", "args": [], "stateDirectory": "/var/lib/celestan/executor" },
+  "projects": [
+    { "projectId": "alpha", "workspaceRoot": "/srv/projects/alpha",
+      "identityFiles": ["/srv/projects/alpha/identity.md"] },
+    { "projectId": "beta", "workspaceRoot": "/srv/projects/beta",
+      "identityFiles": ["/srv/projects/beta/identity.md"] }
+  ]
+}
+```
+
+`tick` and `run` process all configured projects unless `--project` selects one.
+A pass prepares each project, prepares at most one plan per project, orders
+projects by their most recent non-deferred pass, and admits only the dispatches
+that fit the durable global pool. Projects that do not fit are recorded with
+reason `capacity-deferred` and are prioritized next time; a deferral is not
+counted as service. This preserves the existing rule that one project cannot
+hold two mutation authorities at once.
+
+`status` and `inspect` become aggregate views when more than one project is
+selected. `accept`, `cancel`, `decide-assignment`, and `submit` require
+`--project` in a multi-project configuration. `migrate` does not require a
+non-empty project list. Per-purpose executor state directories are used for
+dispatch recovery for each project.
+
 `accept` may ask the configured authority for a new acceptance decision or use an explicit decision document. A supplied decision is sent directly to the guarded acceptance operation so an exact historical receipt can replay after the Work Unit advances; the CLI still verifies that the Work Unit belongs to the configured project.
 
 ```sh
@@ -128,7 +185,7 @@ After those facts are proven, enable the configured pilot and test one bounded i
 node bin/vnext-pilot.mjs tick --config /etc/celestan/pilot.json
 ```
 
-Install the supplied `deploy/vnext-pilot.service` and `.timer` with the actual user and paths, then enable the timer through the host's normal deployment procedure. Match `TimeoutStartSec` to the configured worker timeout plus settlement margin; the supplied service uses 240 seconds for the 120-second worker. Do not run another project writer concurrently. The timer is not installed by this package.
+Install the supplied `deploy/vnext-pilot.service` and `.timer` with the actual user and paths, then enable the timer through the host's normal deployment procedure. Match `TimeoutStartSec` to the configured worker timeout plus settlement margin; the supplied service uses 240 seconds for the 120-second worker. A second coordinator is safe only when it shares the same database and durable pool policy; qualify that topology explicitly rather than assuming it. The timer is not installed by this package.
 
 The periodic scan recovers a missed wake signal because eligibility is in the same transaction as the result. Systemd prevents overlapping instances of the same unit; database authority also excludes competing project claims. Keep the service account, executor isolation and PostgreSQL permissions in the qualified operating envelope.
 

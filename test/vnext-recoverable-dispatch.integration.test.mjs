@@ -57,7 +57,7 @@ test('classification is a durable-records decision, never a timing guess', async
 });
 
 test('memory store: a never-launched attempt recovers exactly once and replays exactly', async () => {
-  const work = { ...createWorkUnit({ workUnitId: 'rec-memory', objectiveRef: 'objective', projectId: 'rec-memory-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date().toISOString() } };
+  const work = { ...createWorkUnit({ workUnitId: 'rec-memory', objectiveRef: 'objective', projectId: 'rec-memory-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date(0).toISOString() } };
   const store = createMemoryStore({ workUnits: [work], authorizationVerifier: authorization.verifyExecution });
   const past = new Date(Date.now() - 1000).toISOString();
   const executionId = `exec-${randomUUID()}`;
@@ -87,7 +87,7 @@ test('memory store: a never-launched attempt recovers exactly once and replays e
 });
 
 test('memory store: a launched attempt can never be resolved as never-launched', async () => {
-  const work = { ...createWorkUnit({ workUnitId: 'rec-guard', objectiveRef: 'objective', projectId: 'rec-guard-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date().toISOString() } };
+  const work = { ...createWorkUnit({ workUnitId: 'rec-guard', objectiveRef: 'objective', projectId: 'rec-guard-project' }), pilot: { input_seq: 1, consumed_input_seq: 1, considered_proposal_id: 0, next_wake_at: new Date(0).toISOString() } };
   const past = new Date(Date.now() - 1000).toISOString();
   const executionId = `exec-${randomUUID()}`;
   const claimed = claimWorkUnit({ ...work, state: 'actionable' }, { executionId, owner: 'test-owner', claimExpiresAt: past });
