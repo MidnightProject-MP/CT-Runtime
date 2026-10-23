@@ -345,7 +345,6 @@ try {
     }
   }
 } catch (error) {
-  if (process.env.CT_PILOT_DEBUG_ERRORS === '1') console.error(error?.stack ?? error);
   // Provider and database errors may contain credentials or source text.
   console.error(JSON.stringify({ status: 'failed', code: error.code || 'PILOT_FAILED', message: 'Pilot stopped. Check configuration and durable status; do not blindly repeat uncertain effects.' }));
   process.exitCode = 1;
