@@ -398,7 +398,7 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
           throw new Error('coordinator interrupted before worker spawn');
         }
         if (purpose === 'stewardship') return { proposal: `Check the follow-up for ${request.workUnit.project_id}.` };
-        if (purpose === 'review' && request.workUnit.project_id === aId && reviewDecisions.get(aId) === 0) {
+        if (purpose === 'review' && request.workUnit.project_id === aId && (reviewDecisions.get(aId) ?? 0) === 0) {
           return { outcome: 'request_changes', summary: 'Apply one bounded requested change.', requested_changes: 'Replace the original evidence with the corrected result.' };
         }
         if (purpose === 'review') return { outcome: 'recommend_accept', summary: 'The bound result is independently verified.' };
