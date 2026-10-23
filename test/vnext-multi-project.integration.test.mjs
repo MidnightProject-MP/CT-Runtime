@@ -487,7 +487,7 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       let reviewEntered;
       const entered = new Promise(resolve => { reviewEntered = resolve; });
       const held = new Promise(resolve => { holdRelease = resolve; });
-      const executor = async request => {
+      const executor = async (request, hooks) => {
         const purpose = request.assignment?.purpose;
         if (purpose === 'review' && request.workUnit.project_id === aId && failBeforeSpawn) {
           failBeforeSpawn = false;
@@ -496,12 +496,24 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
           await held;
           throw new Error('coordinator interrupted before worker spawn');
         }
-        if (purpose === 'stewardship') return { proposal: `Check the follow-up for ${request.workUnit.project_id}.` };
+        const recordSpawn = () => hooks.onSpawn({ pid: 2_000_000_000, pgid: 2_000_000_000,
+          start_ticks: '1', boot_id: 'simulated-worker', started_at: new Date().toISOString() });
+        if (purpose === 'stewardship') {
+          await recordSpawn();
+          return { proposal: `Check the follow-up for ${request.workUnit.project_id}.` };
+        }
         if (purpose === 'review' && request.workUnit.project_id === aId && (reviewDecisions.get(aId) ?? 0) === 0) {
+          await recordSpawn();
           return { outcome: 'request_changes', summary: 'Apply one bounded requested change.', requested_changes: 'Replace the original evidence with the corrected result.' };
         }
-        if (purpose === 'review') return { outcome: 'recommend_accept', summary: 'The bound result is independently verified.' };
-        if (purpose === 'diagnosis') return { outcome: 'stop', summary: 'No further retry is justified.' };
+        if (purpose === 'review') {
+          await recordSpawn();
+          return { outcome: 'recommend_accept', summary: 'The bound result is independently verified.' };
+        }
+        if (purpose === 'diagnosis') {
+          await recordSpawn();
+          return { outcome: 'stop', summary: 'No further retry is justified.' };
+        }
         if (purpose === 'execution') {
           const requestedChanges = request.assignment.instruction?.requested_changes;
           if (request.workUnit.project_id === aId && requestedChanges) {
@@ -509,6 +521,7 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
           }
           const content = Buffer.from(`${request.workUnit.project_id}:${requestedChanges ? 'corrected' : 'initial'}`);
           await writeFile(path.join(request.workspaceRoot, 'proof.txt'), content);
+          await recordSpawn();
           return { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Outcome checked.',
             outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(content).digest('hex') }] };
         }
@@ -597,10 +610,12 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       assert.equal(bLedger.works[0].state, 'terminal');
       assert.equal(aLedger.block, null);
       assert.equal(bLedger.block, null);
-      const attempts = await pool.query(`SELECT a.project_id,a.purpose,count(e.execution_id)::int AS count
+      const attempts = await pool.query(`SELECT a.project_id,a.purpose,count(e.execution_id)::int AS count,
+        count(e.execution_id) FILTER (WHERE e.launch IS NOT NULL)::int AS launched
         FROM vnext_assignments a LEFT JOIN vnext_executions e ON e.work_unit_id=a.assignment_work_unit_id
         WHERE a.project_id=ANY($1::text[]) AND a.purpose='review' GROUP BY a.project_id,a.purpose`, [[aId, bId]]);
       assert.equal(Number(attempts.rows.find(row => row.project_id === aId).count), 3, 'A has one safely unlaunched attempt and two review passes, with no duplicate launched review');
+      assert.equal(Number(attempts.rows.find(row => row.project_id === aId).launched), 2, 'only the retry and final review crossed the spawn barrier');
       assert.equal(reviewDecisions.get(aId), 2, 'A applied requested changes and received a fresh final review');
       assert.equal(reviewDecisions.get(bId), 1);
     });
