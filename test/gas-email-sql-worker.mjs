@@ -19,7 +19,11 @@ try {
   await pool.query("INSERT INTO gas_email_instances VALUES ('gas-test','gas-owner','gas-client','email-project','midnight.project.mp@gmail.com','midnightprojectantigravity@gmail.com',true,'reviewed:text-only:v1')");
   parentPort.postMessage({ready:true});
 } catch(e){parentPort.postMessage({error:e.message});}
-parentPort.on('message',async message=>{
+let queue=Promise.resolve();
+parentPort.on('message',message=>{
+  queue=queue.then(()=>handle(message)).catch(()=>{});
+});
+async function handle(message){
   const signal=new Int32Array(workerData.signal),bytes=new Uint8Array(workerData.bytes);
   let answer;
   try {
@@ -37,5 +41,6 @@ parentPort.on('message',async message=>{
     }
     answer={result:answer};
   }catch(e){answer={error:e.message};}
-  const encoded=new TextEncoder().encode(JSON.stringify(answer));bytes.set(encoded);Atomics.store(signal,1,encoded.length);Atomics.store(signal,0,1);Atomics.notify(signal,0);
-});
+  answer={...answer,sequence:message.sequence};
+  const encoded=new TextEncoder().encode(JSON.stringify(answer));bytes.set(encoded);Atomics.store(signal,1,encoded.length);Atomics.store(signal,0,message.sequence);Atomics.notify(signal,0);
+}

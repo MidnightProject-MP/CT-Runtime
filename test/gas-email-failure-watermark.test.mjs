@@ -2,18 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
 import { once } from 'node:events';
+import { createSqlWorkerClient } from './gas-email-sql-client.mjs';
 
 // F1: failure or expiry may suppress automatic retry of the captured attempt,
 // but must not suppress input received after that attempt's snapshot. The
 // watermark binds to the validated attempt's gas_email_turns row; a missing
 // binding fails closed instead of falling back to the latest work-unit input.
 test('GAS failure and expiry watermarks bind to the attempt snapshot', {timeout:120000}, async t=>{
-  const signal=new SharedArrayBuffer(8),bytes=new SharedArrayBuffer(2000000),state=new Int32Array(signal);
+  const signal=new SharedArrayBuffer(8),bytes=new SharedArrayBuffer(2000000);
   const worker=new Worker(new URL('./gas-email-sql-worker.mjs',import.meta.url),{workerData:{signal,bytes}});
   const [ready]=await once(worker,'message');assert.equal(ready.error,undefined);
-  function request(message){Atomics.store(state,0,0);worker.postMessage(message);assert.notEqual(Atomics.wait(state,0,0,30000),'timed-out');const answer=JSON.parse(new TextDecoder().decode(new Uint8Array(bytes,0,Atomics.load(state,1))));if(answer.error)throw new Error(answer.error);return answer.result;}
-  const sql=(sql,args)=>request({type:'sql',sql,args});
-  const rpc=(operation,input)=>request({type:'rpc',operation,input});
+  const client=createSqlWorkerClient(worker,{signal,bytes});
+  const sql=client.sql,rpc=client.rawRpc;
   const input=(id,body)=>({id,threadId:'f1thread',from:'midnightprojectantigravity@gmail.com',to:'midnight.project.mp@gmail.com',reference:`<${id}@example.com>`,subject:'Task',body});
   const reset=()=>sql("TRUNCATE gas_email_instances, vnext_work_units RESTART IDENTITY CASCADE; INSERT INTO gas_email_instances VALUES ('gas-test','gas-owner','gas-client','email-project','midnight.project.mp@gmail.com','midnightprojectantigravity@gmail.com',true,'reviewed:text-only:v1')");
   const progress=()=>sql('SELECT consumed_input_seq::int AS consumed,failed_through_seq::int AS failed,next_wake_at FROM vnext_pilot_progress')[0];
