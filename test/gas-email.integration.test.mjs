@@ -4,14 +4,14 @@ import { Worker } from 'node:worker_threads';
 import { once } from 'node:events';
 import { Pool } from 'pg';
 import { gasEmailFixture } from './gas-email-fixture.mjs';
+import { createSqlWorkerClient } from './gas-email-sql-client.mjs';
 
 test('GAS-hosted email vertical slice against transactional SQL', {timeout:120000}, async t=>{
-  const signal=new SharedArrayBuffer(8),bytes=new SharedArrayBuffer(2000000),state=new Int32Array(signal);
+  const signal=new SharedArrayBuffer(8),bytes=new SharedArrayBuffer(2000000);
   const worker=new Worker(new URL('./gas-email-sql-worker.mjs',import.meta.url),{workerData:{signal,bytes}});
   const [ready]=await once(worker,'message');assert.equal(ready.error,undefined);
-  function request(message){Atomics.store(state,0,0);worker.postMessage(message);assert.notEqual(Atomics.wait(state,0,0,30000),'timed-out');const answer=JSON.parse(new TextDecoder().decode(new Uint8Array(bytes,0,Atomics.load(state,1))));if(answer.error)throw new Error(answer.error);return answer.result;}
-  const sql=(sql,args)=>request({type:'sql',sql,args});
-  const rawRpc=(operation,input,extra={})=>request({type:'rpc',operation,input,...extra});
+  const client=createSqlWorkerClient(worker,{signal,bytes});
+  const sql=client.sql,rawRpc=client.rawRpc;
   const rpc=(operation,input,extra={})=>rawRpc(operation,operation==='delivery'&&!input?{execution_id:rawRpc('delivery-peek',{},extra).execution_id}:input,extra);
   const fixture=()=>gasEmailFixture(rawRpc);
   const input=(id,thread='sqlthread',body='Please draft.')=>({id,threadId:thread,from:'midnightprojectantigravity@gmail.com',to:'midnight.project.mp@gmail.com',reference:`<${id}@example.com>`,subject:'Task',body});
@@ -27,7 +27,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
       (SELECT count(*)::int FROM gas_email_outbox) AS outboxes,
       (SELECT count(*)::int FROM gas_email_admissions) AS admissions,
       (SELECT count(*)::int FROM vnext_events) AS events`)[0];
-    assert.deepEqual(state,{work_units:0,executions:0,authorities:0,blocks:0,outboxes:0,admissions:0,events:0},'GAS fixture reset clears project control, delivery, and event state');
+    assert.deepEqual(state,{work_units:0,executions:0,authorities:0,blocks:0,outboxes:0,admissions:0,events:0},`GAS fixture reset clears project control, delivery, and event state: ${JSON.stringify(state)}`);
   };
   const authorize=()=>{sql("INSERT INTO gas_email_acceptance_authorities VALUES ('gas-test','reviewed:owner-acceptance:v1','owner-acceptance:v1')");return 'reviewed:owner-acceptance:v1';};
   try {
@@ -208,7 +208,7 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
         if(mode==='to')headers.find(h=>h.name==='To').value='attacker@example.com';
         if(mode==='reference')headers.find(h=>h.name==='In-Reply-To').value='<other@example.com>';
         if(mode==='body')m.payload.body.data=Buffer.from('different').toString('base64url');
-        f.failIntake();const result=f.tick();assert.equal(result.status,mode==='recover'?'sent':mode==='duplicate'?'blocked':'uncertain',mode);
+        f.failIntake();const result=f.tick();const expected=mode==='recover'?'sent':mode==='duplicate'?'blocked':'uncertain';assert.equal(result.status,expected,`${mode}: ${JSON.stringify(result)}`);
         assert.equal(f.sends,1);assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,mode==='recover'?'sent':'admitted');
         assert.equal(rpc('claim').status,mode==='recover'?'idle':'blocked');
       }
