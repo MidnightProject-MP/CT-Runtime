@@ -11,7 +11,7 @@ if (process.env.CT_PILOT_DATABASE_URL || process.env.TEST_DATABASE_URL || proces
 const purpose = request.assignment?.purpose ?? 'execution';
 const invocationPath = path.join(controlDirectory, 'worker-invocations.jsonl');
 let previous = [];
-try { previous = (await readFile(invocationPath, 'utf8')).trim().split(/\r?\n/).filter(Boolean).map(JSON.parse); }
+try { previous = (await readFile(invocationPath, 'utf8')).trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 const priorReviews = previous.filter(row => row.purpose === 'review').length;
 const invocation = {

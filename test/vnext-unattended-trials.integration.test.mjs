@@ -27,7 +27,9 @@ const PLAN = Object.freeze({
   maxGlobalConcurrency: 2,
   maxPassesPerTrial: 12,
   maxCliCommandMs: 30000,
+  maxConcurrentCliProcesses: 3,
   workerTimeoutMs: 5000,
+  scanIntervalMs: 1000,
   interruptionRecoveryWaitMs: 80000,
   maxCoordinatorRestarts: 1,
   maxOverlappingWakes: 2,
@@ -293,7 +295,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
       authorityModule: authorityPath,
       coordinatorId: `3c-${campaignId.slice(0, 12)}`,
       intervalMs: 1000,
-      scanIntervalMs: 1000,
+      scanIntervalMs: PLAN.scanIntervalMs,
       timeoutMs: PLAN.workerTimeoutMs,
       maxConcurrency: PLAN.maxGlobalConcurrency,
       assignmentProfiles: profiles,
@@ -482,6 +484,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
         const isPendingWithAction = !acceptanceCount && !['none', undefined].includes(nextAction.kind);
         trials.push({
           trial_id: trial.id,
+          trial_instance_id: `${campaignId}:${trial.id}`,
           project_id: control.projectId,
           work_unit_id: workId,
           expected: trial.expected,
