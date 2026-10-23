@@ -31,7 +31,8 @@ const compactMany = result => ({
   capacity: result.capacity,
   recovered: result.recovered,
   dispatches: result.dispatches,
-  passes: (result.passes ?? []).map(compact),
+  passes: (result.passes ?? []).map(pass => ({ project_id: pass.project_id, ...compact(pass),
+    failure_phase: pass.failure_phase, diagnostic: pass.diagnostic })),
 });
 
 function configuredProjects(config) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -21,7 +21,7 @@ const profiles = {
   stewardship: { model: 'stewardship-model', agent: 'steward', access_class: 'read-only', permissions: ['project:read'] },
 };
 
-function makeAuthority() {
+function makeAuthority({ reviewOutcome = () => 'recommend_accept' } = {}) {
   const decisions = { execution: 0, assignment: 0, acceptance: 0 };
   return {
     decisions,
@@ -43,7 +43,7 @@ function makeAuthority() {
     async authorizeAssignmentDecision({ assignment, report }) {
       decisions.assignment += 1;
       const outcome = assignment.purpose === 'stewardship' ? 'propose'
-        : assignment.purpose === 'review' ? 'recommend_accept' : 'stop';
+        : assignment.purpose === 'review' ? reviewOutcome(assignment, report) : 'stop';
       return { ref: `multi-decision:${assignment.assignment_id}`, outcome,
         assignment_id: assignment.assignment_id, assignment_digest: assignment.assignment_digest,
         report_digest: digest(report), subject_digest: assignment.subject_digest };
@@ -219,6 +219,297 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       const retry = await runCoordinatorPass({ store: loserStore, projectId: loserId, workspaceRoot: loserProject.workspaceRoot,
         identityFiles: loserProject.identityFiles, executor, authority, timeoutMs: 30000 });
       assert.ok(retry.dispatch, 'released capacity admits the deferred project');
+    });
+
+    await t.test('durable workspace bindings reject aliases and nested project trees', async () => {
+      await pool.query('DELETE FROM vnext_pool_policy');
+      const parent = await workspace(`workspace-parent-${randomUUID()}`);
+      const alias = path.join(root, `workspace-alias-${randomUUID()}`);
+      await symlink(parent, alias, 'dir');
+      const aliasProjects = [
+        project(`workspace-alias-a-${randomUUID()}`, parent),
+        project(`workspace-alias-b-${randomUUID()}`, alias),
+      ];
+      const store = makeStore({ maxConcurrency: 2 });
+      let calls = 0;
+      await assert.rejects(runMultiProjectPass({ store, projects: aliasProjects,
+        executor: async () => { calls += 1; return {}; }, authority }), /E_WORKSPACE_CONFLICT/);
+      assert.equal(calls, 0, 'canonical aliases are rejected before project preparation or execution');
+
+      const parentId = `workspace-persisted-parent-${randomUUID()}`;
+      await store.bindProjectWorkspaces([{ projectId: parentId, workspaceRoot: parent }]);
+      const nested = path.join(parent, 'nested-project');
+      await mkdir(nested);
+      const nestedProject = project(`workspace-nested-${randomUUID()}`, nested);
+      await assert.rejects(runMultiProjectPass({ store, projects: [nestedProject],
+        executor: async () => { calls += 1; return {}; }, authority }), /E_WORKSPACE_CONFLICT/);
+      assert.equal(calls, 0, 'a different coordinator cannot bind a nested workspace');
+    });
+
+    await t.test('project preparation failures are isolated; shared database failures abort the pass', async () => {
+      await pool.query('DELETE FROM vnext_pool_policy');
+      const failingId = `prepare-a-${randomUUID()}`;
+      const healthyId = `prepare-b-${randomUUID()}`;
+      const failing = project(failingId, await workspace(failingId));
+      const healthy = project(healthyId, await workspace(healthyId));
+      const baseStore = makeStore({ maxConcurrency: 2 });
+      await submit(baseStore, failingId);
+      await submit(baseStore, healthyId);
+      let broken = true;
+      const store = { ...baseStore, async planNext(projectId, ...args) {
+        if (broken && projectId === failingId) throw new Error('project-local planner fault');
+        return baseStore.planNext(projectId, ...args);
+      } };
+      const executor = async ({ workUnit }) => ({ objective_id: workUnit.objective_ref,
+        disposition: 'waiting', summary: 'Waiting for a bounded fixture.',
+        continuation: { mode: 'condition', condition: { kind: 'external', condition: 'Fixture arrives.' } } });
+      const first = await runMultiProjectPass({ store, projects: [failing, healthy], executor, authority });
+      assert.equal(first.passes.find(pass => pass.project_id === failingId).failure_phase, 'prepare');
+      assert.equal(first.passes.find(pass => pass.project_id === failingId).diagnostic.code, 'PREPARATION_FAILED');
+      assert.equal(first.passes.find(pass => pass.project_id === healthyId).status, 'dispatched');
+      assert.equal((await baseStore.coordinatorLedger(healthyId)).works[0].state, 'waiting');
+
+      broken = false;
+      const second = await runMultiProjectPass({ store, projects: [failing, healthy], executor, authority });
+      assert.equal(second.passes.find(pass => pass.project_id === failingId).status, 'dispatched', 'the recovered project receives a later pass');
+      assert.equal(second.passes.find(pass => pass.project_id === healthyId).status, 'quiesced');
+
+      const unavailable = { ...baseStore, async planNext(projectId, ...args) {
+        if (projectId === failingId) throw Object.assign(new Error('database unavailable'), { code: 'ECONNREFUSED' });
+        return baseStore.planNext(projectId, ...args);
+      } };
+      await assert.rejects(runMultiProjectPass({ store: unavailable, projects: [failing, healthy], executor, authority }), error => error.code === 'ECONNREFUSED');
+
+      const recoveryAId = `recover-prepare-a-${randomUUID()}`;
+      const recoveryBId = `recover-prepare-b-${randomUUID()}`;
+      const recoveryA = project(recoveryAId, await workspace(recoveryAId));
+      const recoveryB = project(recoveryBId, await workspace(recoveryBId));
+      const recoveryBase = makeStore({ maxConcurrency: 2 });
+      await submit(recoveryBase, recoveryAId);
+      await submit(recoveryBase, recoveryBId);
+      const recoveryStore = { ...recoveryBase, async listInDoubtAttempts(projectId) {
+        if (projectId === recoveryAId) throw new Error('project-local recovery inspection fault');
+        return recoveryBase.listInDoubtAttempts(projectId);
+      } };
+      const recoveryResult = await runMultiProjectPass({ store: recoveryStore,
+        projects: [recoveryA, recoveryB], recovery: { stateDirectory: path.join(root, 'prep-recovery-state') }, executor, authority });
+      assert.equal(recoveryResult.passes.find(pass => pass.project_id === recoveryAId).failure_phase, 'prepare');
+      assert.equal(recoveryResult.passes.find(pass => pass.project_id === recoveryBId).status, 'dispatched');
+    });
+
+    await t.test('aggregate inspection reports active stewardship, review, and diagnosis assignments', async () => {
+      await pool.query('DELETE FROM vnext_pool_policy');
+      let clock = Date.now();
+      const store = makeStore({ maxConcurrency: 1, now: () => clock });
+      const worker = async request => {
+        const purpose = request.assignment?.purpose;
+        if (purpose === 'stewardship') return { proposal: `Bounded proposal for ${request.workUnit.project_id}.` };
+        if (purpose === 'review') return { outcome: 'non_progress', summary: 'One more bounded check is required.' };
+        if (purpose === 'diagnosis') return { outcome: 'stop', summary: 'Do not repeat this attempt.' };
+        if (purpose === 'execution') {
+          const bytes = Buffer.from(`evidence-${request.workUnit.project_id}`);
+          await writeFile(path.join(request.workspaceRoot, 'proof.txt'), bytes);
+          return { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Outcome checked.',
+            outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(bytes).digest('hex') }] };
+        }
+        throw new Error(`unexpected purpose ${purpose}`);
+      };
+
+      for (const purpose of ['stewardship','review','diagnosis']) {
+        const projectId = `active-${purpose}-${randomUUID()}`;
+        const entry = project(projectId, await workspace(projectId));
+        const authority = makeAuthority({ reviewOutcome: () => purpose === 'diagnosis' ? 'non_progress' : 'recommend_accept' });
+        await submit(store, projectId);
+        let observed = false;
+        for (let passIndex = 0; passIndex < 12 && !observed; passIndex += 1) {
+          let enter;
+          let release;
+          const entered = new Promise(resolve => { enter = resolve; });
+          const gate = new Promise(resolve => { release = resolve; });
+          const run = runMultiProjectPass({ store, projects: [entry], executor: async (request, hooks) => {
+            if (request.assignment?.purpose === purpose) {
+              enter({ request, hooks });
+              await gate;
+            }
+            return worker(request);
+          }, authority, assignmentProfiles: profiles, now: () => clock, timeoutMs: 30000 });
+          const held = await Promise.race([entered, run.then(() => null)]);
+          if (held) {
+            const status = deriveMultiProjectStatus([{ project_id: projectId, ledger: await store.coordinatorLedger(projectId) }], {
+              now: clock, capacity: await store.poolStatus(),
+            });
+            const summary = status.projects[0];
+            assert.equal(status.phase, 'active');
+            assert.equal(summary.active, 1);
+            assert.equal(summary.next_action.kind, 'wait');
+            assert.equal(summary.next_action.reason, 'assignment-running');
+            assert.equal(summary.next_action.purpose, purpose);
+            assert.ok(summary.next_action.assignment_id);
+            assert.ok(summary.next_action.assignment_work_unit_id);
+            observed = true;
+            release();
+            await run;
+          } else {
+            await run;
+            clock += 2000;
+          }
+        }
+        assert.equal(observed, true, `did not hold the ${purpose} assignment`);
+      }
+    });
+
+    await t.test('multi-project interruption recovers an unlaunched review while the peer advances requested changes', async () => {
+      await pool.query('DELETE FROM vnext_pool_policy');
+      const aId = `recovery-a-${randomUUID()}`;
+      const bId = `recovery-b-${randomUUID()}`;
+      const aWorkspace = await workspace(aId);
+      const bWorkspace = await workspace(bId);
+      const recoveryRoot = path.join(root, `recovery-${aId}`);
+      const stateDirectory = {};
+      for (const purpose of ['execution','review','diagnosis','stewardship']) {
+        stateDirectory[purpose] = path.join(recoveryRoot, purpose);
+        await mkdir(stateDirectory[purpose], { recursive: true });
+      }
+      const aRecovery = { stateDirectory, probe: async () => 'gone', groupProbe: async () => 'gone' };
+      const a = { ...project(aId, aWorkspace), recovery: aRecovery };
+      const b = project(bId, bWorkspace);
+      let clock = Date.now();
+      const store = makeStore({ maxConcurrency: 2, now: () => clock });
+      const reviewDecisions = new Map();
+      const authority = makeAuthority({ reviewOutcome: assignment => {
+        const count = reviewDecisions.get(assignment.project_id) ?? 0;
+        reviewDecisions.set(assignment.project_id, count + 1);
+        return assignment.project_id === aId && count === 0 ? 'request_changes' : 'recommend_accept';
+      } });
+      await submit(store, aId);
+      await submit(store, bId);
+      let failBeforeSpawn = true;
+      let holdRelease;
+      let reviewEntered;
+      const entered = new Promise(resolve => { reviewEntered = resolve; });
+      const held = new Promise(resolve => { holdRelease = resolve; });
+      const executor = async request => {
+        const purpose = request.assignment?.purpose;
+        if (purpose === 'review' && request.workUnit.project_id === aId && failBeforeSpawn) {
+          failBeforeSpawn = false;
+          await mkdir(path.join(stateDirectory.review, request.execution.execution_id), { recursive: true });
+          reviewEntered({ execution_id: request.execution.execution_id, work_unit_id: request.workUnit.work_unit_id });
+          await held;
+          throw new Error('coordinator interrupted before worker spawn');
+        }
+        if (purpose === 'stewardship') return { proposal: `Check the follow-up for ${request.workUnit.project_id}.` };
+        if (purpose === 'review' && request.workUnit.project_id === aId && reviewDecisions.get(aId) === 0) {
+          return { outcome: 'request_changes', summary: 'Apply one bounded requested change.', requested_changes: 'Replace the original evidence with the corrected result.' };
+        }
+        if (purpose === 'review') return { outcome: 'recommend_accept', summary: 'The bound result is independently verified.' };
+        if (purpose === 'diagnosis') return { outcome: 'stop', summary: 'No further retry is justified.' };
+        if (purpose === 'execution') {
+          if (request.workUnit.project_id === aId && request.assignment.instruction) {
+            assert.ok(JSON.stringify(request.assignment.instruction).includes('corrected result'));
+          }
+          const content = Buffer.from(`${request.workUnit.project_id}:${request.assignment.instruction ? 'corrected' : 'initial'}`);
+          await writeFile(path.join(request.workspaceRoot, 'proof.txt'), content);
+          return { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Outcome checked.',
+            outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(content).digest('hex') }] };
+        }
+        throw new Error(`unexpected assignment purpose ${purpose}`);
+      };
+      const projects = [a, b];
+      const pass = () => runMultiProjectPass({ store, projects, executor, authority,
+        assignmentProfiles: profiles, now: () => clock, timeoutMs: 30000 });
+      const interruptedPass = pass();
+      let reviewTimeout;
+      const interrupted = await Promise.race([entered, new Promise((_, reject) => {
+        reviewTimeout = setTimeout(() => reject(new Error('review worker was not reached')), 60000);
+      })]);
+      clearTimeout(reviewTimeout);
+
+      let bReviewReported = false;
+      for (let index = 0; index < 200; index += 1) {
+        const bReview = await pool.query(`SELECT 1 FROM vnext_assignments
+          WHERE project_id=$1 AND purpose='review' AND status='reported' LIMIT 1`, [bId]);
+        if (bReview.rowCount) { bReviewReported = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(bReviewReported, true, 'B completes its review while A is held before spawn');
+      for (let index = 0; index < 4; index += 1) {
+        const bState = (await store.coordinatorLedger(bId)).works[0]?.state;
+        if (bState === 'terminal') break;
+        await pass();
+        clock += 2000;
+      }
+      assert.equal((await store.coordinatorLedger(bId)).works[0].state, 'terminal', 'project B completes while A is interrupted');
+      const activeStatus = deriveMultiProjectStatus([
+        { project_id: aId, ledger: await store.coordinatorLedger(aId) },
+        { project_id: bId, ledger: await store.coordinatorLedger(bId) },
+      ], { now: clock, capacity: await store.poolStatus() });
+      assert.equal(activeStatus.projects.find(project => project.project_id === aId).active, 1);
+      assert.equal(activeStatus.projects.find(project => project.project_id === bId).terminal, 1);
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("UPDATE vnext_work_units SET claim_expires_at='2000-01-01T00:00:00Z' WHERE claim_execution_id=$1", [interrupted.execution_id]);
+        await client.query("UPDATE vnext_executions SET claim_expires_at='2000-01-01T00:00:00Z' WHERE execution_id=$1", [interrupted.execution_id]);
+        await client.query("UPDATE vnext_project_mutation_authority SET claim_expires_at='2000-01-01T00:00:00Z' WHERE execution_id=$1", [interrupted.execution_id]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally { client.release(); }
+
+      const recoveredPass = await pass();
+      assert.ok(recoveredPass.recovered.some(row => row.execution_id === interrupted.execution_id && row.action === 'retry-eligible'));
+      assert.equal(recoveredPass.passes.find(result => result.project_id === aId).status, 'dispatched');
+      holdRelease();
+      const stalePass = await interruptedPass;
+      assert.equal(stalePass.passes.find(result => result.project_id === aId).status, 'failed');
+
+      for (let index = 0; index < 16; index += 1) {
+        const ledgers = await Promise.all([aId, bId].map(projectId => store.coordinatorLedger(projectId)));
+        if (ledgers.every(ledger => ledger.works[0]?.state === 'terminal')) break;
+        await pass();
+        clock += 2000;
+      }
+      const [aLedger, bLedger] = await Promise.all([aId, bId].map(projectId => store.coordinatorLedger(projectId)));
+      assert.equal(aLedger.works[0].state, 'terminal');
+      assert.equal(bLedger.works[0].state, 'terminal');
+      assert.equal(aLedger.block, null);
+      assert.equal(bLedger.block, null);
+      const attempts = await pool.query(`SELECT a.project_id,a.purpose,count(e.execution_id)::int AS count
+        FROM vnext_assignments a LEFT JOIN vnext_executions e ON e.work_unit_id=a.assignment_work_unit_id
+        WHERE a.project_id=ANY($1::text[]) AND a.purpose='review' GROUP BY a.project_id,a.purpose`, [[aId, bId]]);
+      assert.equal(Number(attempts.rows.find(row => row.project_id === aId).count), 3, 'A has one safely unlaunched attempt and two review passes, with no duplicate launched review');
+      assert.equal(reviewDecisions.get(aId), 2, 'A applied requested changes and received a fresh final review');
+      assert.equal(reviewDecisions.get(bId), 1);
+    });
+
+    await t.test('service fairness follows durable event sequence when timestamps go backward', async () => {
+      await pool.query('DELETE FROM vnext_pool_policy');
+      const aId = `sequence-a-${randomUUID()}`;
+      const bId = `sequence-b-${randomUUID()}`;
+      const a = project(aId, await workspace(aId));
+      const b = project(bId, await workspace(bId));
+      let clock = Date.now();
+      const store = makeStore({ maxConcurrency: 1, now: () => clock });
+      await submit(store, aId);
+      await submit(store, bId);
+      const executor = async ({ workUnit }) => next(workUnit.objective_ref);
+
+      const first = await runMultiProjectPass({ store, projects: [a, b], executor, authority, now: () => clock });
+      assert.equal(first.dispatches[0].project_id, aId);
+      await pool.query(`UPDATE vnext_events SET created_at='2099-01-01T00:00:00Z'
+        WHERE event_type='coordinator.pass' AND payload->>'project_id'=$1`, [aId]);
+      clock += 2000;
+      const second = await runMultiProjectPass({ store, projects: [a, b], executor, authority, now: () => clock });
+      assert.equal(second.dispatches[0].project_id, bId, 'the never-served deferred project gets its turn');
+
+      await pool.query(`UPDATE vnext_events SET created_at=CASE WHEN payload->>'project_id'=$1
+        THEN '2099-01-01T00:00:00Z'::timestamptz ELSE '2000-01-01T00:00:00Z'::timestamptz END
+        WHERE event_type='coordinator.pass' AND payload->>'project_id'=ANY($2::text[])`, [aId, [aId, bId]]);
+      clock += 2000;
+      const third = await runMultiProjectPass({ store, projects: [a, b], executor, authority, now: () => clock });
+      assert.equal(third.dispatches[0].project_id, aId, 'wall-clock order cannot keep the older-served project deferred');
     });
 
     await t.test('project failure and uncertainty remain isolated', async () => {
@@ -404,6 +695,7 @@ export async function verifyAcceptance() { return false; }
       const tick = await invokeCli('tick', configPath);
       assert.equal(tick.dispatches.length, 2);
       assert.deepEqual(tick.dispatches.map(row => row.project_id).sort(), [leftId, rightId].sort());
+      assert.deepEqual(tick.passes.map(row => row.project_id).sort(), [leftId, rightId].sort());
       assert.equal(tick.capacity.max_concurrency, 2);
       const status = await invokeCli('status', configPath);
       assert.equal(status.projects.length, 2);
