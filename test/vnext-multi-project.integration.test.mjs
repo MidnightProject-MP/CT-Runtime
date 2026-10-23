@@ -154,7 +154,7 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
         observed.push({ project_id: workUnit.project_id, project_count: Number(projectCount.rows[0].count), total: Number(total.rows[0].count) });
         return next(workUnit.objective_ref);
       };
-      const first = await runMultiProjectPass({ store, projects: entries, executor, authority });
+      const first = await runMultiProjectPass({ store, projects: entries, executor, authority, now: () => clock });
       assert.equal(first.dispatches.length, 2);
       assert.equal(first.capacity.deferred.length, 1);
       assert.equal(first.capacity.max_concurrency, 2);
@@ -164,12 +164,12 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       const deferredProject = first.capacity.deferred[0];
       assert.equal(entries.some(entry => entry.projectId === deferredProject), true);
       clock += 2000;
-      const second = await runMultiProjectPass({ store, projects: entries, executor, authority });
+      const second = await runMultiProjectPass({ store, projects: entries, executor, authority, now: () => clock });
       assert.ok(second.dispatches.some(row => row.project_id === deferredProject), 'a capacity-deferred project is served next');
       assert.equal(second.dispatches.length, 2);
       assert.notDeepEqual(second.dispatches.map(row => row.project_id).sort(), firstServed);
       clock += 5000;
-      const third = await runMultiProjectPass({ store, projects: entries, executor, authority });
+      const third = await runMultiProjectPass({ store, projects: entries, executor, authority, now: () => clock });
       assert.ok(third.dispatches.length <= 2);
       const served = new Set([...first.dispatches, ...second.dispatches, ...third.dispatches].map(row => row.project_id));
       for (const entry of entries) assert.ok(served.has(entry.projectId), `project ${entry.projectId} is not starved`);
@@ -404,10 +404,11 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
         if (purpose === 'review') return { outcome: 'recommend_accept', summary: 'The bound result is independently verified.' };
         if (purpose === 'diagnosis') return { outcome: 'stop', summary: 'No further retry is justified.' };
         if (purpose === 'execution') {
-          if (request.workUnit.project_id === aId && request.assignment.instruction) {
+          const requestedChanges = request.assignment.instruction?.requested_changes;
+          if (request.workUnit.project_id === aId && requestedChanges) {
             assert.ok(JSON.stringify(request.assignment.instruction).includes('corrected result'));
           }
-          const content = Buffer.from(`${request.workUnit.project_id}:${request.assignment.instruction ? 'corrected' : 'initial'}`);
+          const content = Buffer.from(`${request.workUnit.project_id}:${requestedChanges ? 'corrected' : 'initial'}`);
           await writeFile(path.join(request.workspaceRoot, 'proof.txt'), content);
           return { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Outcome checked.',
             outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(content).digest('hex') }] };
@@ -417,6 +418,27 @@ await writeFile(process.env.CT_VNEXT_RESULT_FILE, JSON.stringify(result), { mode
       const projects = [a, b];
       const pass = () => runMultiProjectPass({ store, projects, executor, authority,
         assignmentProfiles: profiles, now: () => clock, timeoutMs: 30000 });
+      const stageExecutor = async request => {
+        const purpose = request.assignment?.purpose;
+        if (purpose === 'stewardship') return { proposal: `Check the follow-up for ${request.workUnit.project_id}.` };
+        if (purpose === 'execution') {
+          const bytes = Buffer.from(`initial-${request.workUnit.project_id}`);
+          await writeFile(path.join(request.workspaceRoot, 'proof.txt'), bytes);
+          return { objective_id: request.workUnit.objective_ref, disposition: 'done', summary: 'Outcome checked.',
+            outcome_evidence: [{ kind: 'file', path: 'proof.txt', sha256: createHash('sha256').update(bytes).digest('hex') }] };
+        }
+        throw new Error(`unexpected staging purpose ${purpose}`);
+      };
+      let reviewReady = false;
+      for (let index = 0; index < 8 && !reviewReady; index += 1) {
+        const ledgers = await Promise.all([aId, bId].map(projectId => store.coordinatorLedger(projectId)));
+        reviewReady = ledgers.every(ledger => ledger.works[0]?.state === 'review' && ledger.works[0]?.last_turn?.disposition === 'done');
+        if (reviewReady) break;
+        await runMultiProjectPass({ store, projects, executor: stageExecutor, authority,
+          assignmentProfiles: profiles, now: () => clock, timeoutMs: 30000 });
+        clock += 2000;
+      }
+      assert.equal(reviewReady, true, 'both projects reach review before the interruption is injected');
       const interruptedPass = pass();
       let reviewTimeout;
       const interrupted = await Promise.race([entered, new Promise((_, reject) => {
