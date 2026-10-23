@@ -834,7 +834,7 @@ export async function verifyAcceptance() { return false; }
       await invokeCli('submit', configPath, ['--project', rightId, '--thread', 'cli-objective',
         '--receipt', `cli-receipt-${randomUUID()}`, '--message-file', messageFile]);
       const tick = await invokeCli('tick', configPath);
-      assert.equal(tick.dispatches.length, 2);
+      assert.equal(tick.dispatches.length, 2, JSON.stringify(tick));
       assert.deepEqual(tick.dispatches.map(row => row.project_id).sort(), [leftId, rightId].sort());
       assert.deepEqual(tick.passes.map(row => row.project_id).sort(), [leftId, rightId].sort());
       assert.equal(tick.capacity.max_concurrency, 2);
