@@ -562,6 +562,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
           recovered_execution_id: recovered ? recovered.execution_id : null,
           expiry_to_recovery_ms: recovered ? recovered.expiry_to_recovery_ms : null,
           interruption_to_recovery_ms: recovered ? recovered.interruption_to_recovery_ms : null,
+          restart_pass_outputs: journalRows.filter(row => row.event === 'coordinator-restart-pass-output').map(row => row.json),
           next_action: nextAction,
         });
       } catch (reportError) {
