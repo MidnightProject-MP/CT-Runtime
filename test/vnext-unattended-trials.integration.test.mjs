@@ -134,6 +134,7 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   let maxAuthorityOccupancy = 0;
   let completed = false;
   let failure = null;
+  let planRecord = null;
 
   const record = async (event, details = {}) => {
     const entry = { campaign_id: campaignId, at_ms: Date.now(), event, ...details };
@@ -228,7 +229,7 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
     const testedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: gitRoot, encoding: 'utf8' }).trim();
     const worktreeDirty = execFileSync('git', ['status', '--porcelain'], { cwd: gitRoot, encoding: 'utf8' }).trim().length > 0;
     const pgVersion = (await pool.query('SHOW server_version')).rows[0].server_version;
-    const planRecord = {
+    planRecord = {
       ...PLAN,
       campaign_id: campaignId,
       tested_commit: testedCommit,
@@ -528,7 +529,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     const effectSummary = compareEffects(allEffects);
     const report = {
       campaign_id: campaignId,
-      plan: PLAN,
+      plan: planRecord ?? PLAN,
       completed,
       elapsed_ms: Date.now() - campaignWallStarted,
       effects: effectSummary,
