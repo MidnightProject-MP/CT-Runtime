@@ -132,7 +132,6 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   const journal = [];
   const artifactDigests = new Map();
   const campaignStarted = performance.now();
-  const campaignWallStarted = Date.now();
   let maxAuthorityOccupancy = 0;
   let completed = false;
   let failure = null;
@@ -576,7 +575,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
       campaign_id: campaignId,
       plan: planRecord ?? PLAN,
       completed,
-      elapsed_ms: Date.now() - campaignWallStarted,
+      elapsed_ms: Math.round(performance.now() - campaignStarted),
       effects: effectSummary,
       totals: {
         trials: trials.length,
