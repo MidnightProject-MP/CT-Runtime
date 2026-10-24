@@ -42,7 +42,7 @@ const PLAN = Object.freeze({
     { id: 'normal-completion', attempt: 1, expected: 'terminal-and-accepted', maxObjectiveExecutions: 1, maxNonProgress: 2,
       finish_condition: 'deliverable.txt hash matches durable evidence; acceptance receipt exists; two later CLI passes dispatch nothing' },
     { id: 'fresh-input', attempt: 1, expected: 'terminal-and-accepted-with-latest-input', maxObjectiveExecutions: 2, maxNonProgress: 2,
-      finish_condition: 'accepted artifact contains scripted input 2; durable consumed_input_seq equals latest_input_seq equals 2' },
+      finish_condition: 'accepted artifact contains the second scripted input; its input sequence exceeds the initial sequence and consumed_input_seq equals latest_input_seq' },
     { id: 'bounded-non-progress', attempt: 1, expected: 'reconsideration-required-without-blind-retry', maxObjectiveExecutions: 2, maxNonProgress: 2,
       finish_condition: 'exactly two review request_changes decisions; next action is reconsideration-exhausted; no acceptance or further dispatch' },
     { id: 'surviving-worker', attempt: 1, expected: 'retained-result-recovered-and-accepted', maxObjectiveExecutions: 1, maxNonProgress: 2,
@@ -59,7 +59,8 @@ async function exists(file) {
 async function waitFor(predicate, label, timeoutMs) {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
-    if (await predicate()) return;
+    const value = await predicate();
+    if (value) return value;
     await delay(25);
   }
   throw new Error(`timed out waiting for ${label}`);
@@ -122,6 +123,8 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   const projects = [];
   const controls = new Map();
   const workIds = new Map();
+  const inputSequences = new Map();
+  const initialInputSequences = new Map();
   const children = new Set();
   const workerPids = new Set();
   const journal = [];
@@ -208,6 +211,9 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   const submit = async (projectId, slug, receipt, file) => {
     const result = await invoke('submit', ['--project', projectId, '--thread', `3c-${slug}`, '--receipt', receipt, '--message-file', file]);
     workIds.set(slug, result.value.work_unit_id);
+    const inputSequence = Number(result.value.input_seq);
+    inputSequences.set(slug, inputSequence);
+    if (!initialInputSequences.has(slug)) initialInputSequences.set(slug, inputSequence);
     await record('input-submitted', { trial_id: slug, project_id: projectId, work_unit_id: result.value.work_unit_id, input_kind: receipt.includes('fresh') ? 'scripted-fresh-input' : 'initial-scripted-input' });
     return result.value;
   };
@@ -416,8 +422,11 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     }
     assert.equal(await accepted(nonProgressWork), false, 'reconsideration-exhausted work is not an unattended success');
     const freshWorkRow = (await queryWork(fresh.projectId)).find(row => row.work_unit_id === freshWork);
-    assert.equal(Number(freshWorkRow.latest_input_seq), 2);
-    assert.equal(Number(freshWorkRow.consumed_input_seq), 2, 'the accepted artifact must consume the newest input');
+    const initialFreshSequence = initialInputSequences.get('fresh-input');
+    const newestFreshSequence = inputSequences.get('fresh-input');
+    assert.ok(newestFreshSequence > initialFreshSequence, 'fresh input has its own increasing receipt sequence');
+    assert.equal(Number(freshWorkRow.latest_input_seq), newestFreshSequence);
+    assert.equal(Number(freshWorkRow.consumed_input_seq), newestFreshSequence, 'the accepted artifact must consume the newest input');
     const nonProgressStatus = deriveCoordinatorStatus(await store.coordinatorLedger(nonProgress.projectId), { maxNonProgress: 2 });
     assert.equal(nonProgressStatus.next_action.kind, 'reconsider');
     assert.equal(nonProgressStatus.next_action.reason, 'reconsideration-exhausted');
@@ -498,6 +507,8 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
           artifact_sha256: artifactDigests.get(trial.id) ?? null,
           latest_input_seq: Number(work?.latest_input_seq ?? 0),
           consumed_input_seq: Number(work?.consumed_input_seq ?? 0),
+          initial_input_seq: initialInputSequences.get(trial.id) ?? null,
+          latest_submitted_input_seq: inputSequences.get(trial.id) ?? null,
           executions: Number(executions.total),
           objective_executions: Number(await objectiveExecutions(workId)),
           scripted_worker_invocations: invocations.length,
