@@ -29,7 +29,8 @@ const PLAN = Object.freeze({
   maxConcurrentCliProcesses: 3,
   workerTimeoutMs: 5000,
   scanIntervalMs: 1000,
-  interruptionRecoveryWaitMs: 80000,
+  maxWorkerExitWaitMs: 10000,
+  maxRestartCommandMs: 30000,
   maxCoordinatorRestarts: 1,
   maxOverlappingWakes: 2,
   automaticTrialRetries: 0,
@@ -38,6 +39,7 @@ const PLAN = Object.freeze({
   effectMode: 'simulated local artifact write only',
   executorBoundaryFaultInjections: 0,
   actualProcessInterruption: 'coordinator process SIGKILL with detached scripted worker observed alive',
+  leaseExpiryControl: 'test-only fast-forward after confirming worker process/group exit and retained result; does not measure natural lease duration',
   trials: [
     { id: 'normal-completion', attempt: 1, expected: 'terminal-and-accepted', maxObjectiveExecutions: 1, maxNonProgress: 2,
       finish_condition: 'deliverable.txt hash matches durable evidence; acceptance receipt exists; two later CLI passes dispatch nothing' },
@@ -137,7 +139,7 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   let planRecord = null;
 
   const record = async (event, details = {}) => {
-    const entry = { campaign_id: campaignId, at_ms: Date.now(), event, ...details };
+    const entry = { campaign_id: campaignId, at_ms: Date.now(), at_monotonic_ms: performance.now(), event, ...details };
     journal.push(entry);
     await appendFile(journalPath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   };
@@ -239,7 +241,7 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
       worktree_dirty: worktreeDirty,
       environment: { node: process.versions.node, platform: process.platform, arch: process.arch, postgresql: pgVersion },
       classification: { workers: 'deterministic scripted fixture', effects: 'simulated local artifacts only', authority: 'scripted offline test authority', real_model_calls: 0, human_rescues: 'none expected' },
-      qualification_gaps: ['one isolated PostgreSQL instance and host', 'scripted workers and authority; no real model/provider calls', 'four bounded trials only; no long-duration soak or commissioning'],
+      qualification_gaps: ['one isolated PostgreSQL instance and host', 'scripted workers and authority; no real model/provider calls', 'lease-expiry duration is fast-forwarded after worker exit, not naturally timed', 'four bounded trials only; no long-duration soak or commissioning'],
       expected_native_test_skips: 0,
       failure_policy: 'append-only journal; zero automatic retries; each later campaign gets a distinct campaign and trial identity',
     };
@@ -384,29 +386,61 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     assert.ok(killed, 'coordinator process must terminate within the interruption budget');
     assert.equal(killed.signal, 'SIGKILL', 'the campaign records an actual coordinator-process kill');
     assert.equal(processAlive(workerMarker.pid), true, 'the detached scripted worker must survive coordinator SIGKILL');
-    const interruptedAt = Date.now();
+    const interruptedAt = performance.now();
     await record('coordinator-interrupted', { trial_id: 'surviving-worker', coordinator_pid: coordinator.child.pid,
       worker_pid: workerMarker.pid, execution_id: workerMarker.execution_id, interruption: 'actual coordinator process SIGKILL; worker remained live' });
 
     await writeFile(interrupted.gate, 'release-scripted-worker\n', { mode: 0o600 });
-    await waitFor(() => exists(path.join(interrupted.controlDirectory, 'worker-finished.json')), 'surviving worker writes its retained result', 15000);
-    await waitFor(() => processStopped(workerMarker.pid), 'scripted worker exits after writing its result', 10000);
-    const expiry = await waitFor(async () => {
-      const row = (await pool.query('SELECT claim_expires_at<=clock_timestamp() AS expired FROM vnext_work_units WHERE work_unit_id=$1', [interruptedWork])).rows[0];
-      return row?.expired ? row : false;
-    }, 'durable claim expiry for restart recovery', PLAN.interruptionRecoveryWaitMs);
-    assert.ok(expiry.expired);
+    await waitFor(() => exists(path.join(interrupted.controlDirectory, 'worker-finished.json')), 'surviving worker writes its retained result', PLAN.maxWorkerExitWaitMs);
+    await waitFor(() => processStopped(workerMarker.pid), 'scripted worker exits after writing its result', PLAN.maxWorkerExitWaitMs);
+    const retainedResultPath = path.join(interrupted.stateDirectory, workerMarker.execution_id, 'result.json');
+    assert.equal(await exists(retainedResultPath), true, 'the interrupted worker leaves a durable retained result before recovery');
+    assert.equal(Number((await pool.query('SELECT count(*)::int AS count FROM vnext_pilot_results WHERE execution_id=$1', [workerMarker.execution_id])).rows[0].count),
+      0, 'the retained worker result remains unsettled until a coordinator restarts');
+    const expiryClient = await pool.connect();
+    let expiry;
+    try {
+      await expiryClient.query('BEGIN');
+      expiry = (await expiryClient.query("SELECT clock_timestamp()-interval '1 second' AS expired_at")).rows[0].expired_at;
+      const workExpiry = await expiryClient.query('UPDATE vnext_work_units SET claim_expires_at=$2 WHERE work_unit_id=$1 AND claim_execution_id=$3',
+        [interruptedWork, expiry, workerMarker.execution_id]);
+      const executionExpiry = await expiryClient.query("UPDATE vnext_executions SET claim_expires_at=$2 WHERE execution_id=$1 AND state IN ('created','running')",
+        [workerMarker.execution_id, expiry]);
+      const authorityExpiry = await expiryClient.query('UPDATE vnext_project_mutation_authority SET claim_expires_at=$2 WHERE project_id=$1 AND execution_id=$3',
+        [interrupted.projectId, expiry, workerMarker.execution_id]);
+      assert.equal(workExpiry.rowCount, 1);
+      assert.equal(executionExpiry.rowCount, 1);
+      assert.equal(authorityExpiry.rowCount, 1);
+      await expiryClient.query('COMMIT');
+    } catch (error) {
+      await expiryClient.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally { expiryClient.release(); }
+    await record('scripted-lease-expiry-fast-forward', { trial_id: 'surviving-worker', execution_id: workerMarker.execution_id,
+      expired_at: expiry.toISOString(), test_control: true, human_intervention: false });
 
-    const restartStarted = Date.now();
-    const restarted = await invoke('run', ['--project', interrupted.projectId, '--max-passes', '1'], 30000);
-    const recoveryPass = restarted.jsonLines.find(row => Array.isArray(row.recovered)
-      && row.recovered.some(entry => entry.execution_id === workerMarker.execution_id));
-    assert.ok(recoveryPass, 'restart pass must report recovery of the interrupted execution');
-    const recoveryRow = recoveryPass.recovered.find(entry => entry.execution_id === workerMarker.execution_id);
-    assert.equal(recoveryRow.action, 'settled-from-retained-result');
-    const recoveryCompletedAt = Date.now();
+    const restartStarted = performance.now();
+    const restarted = await invoke('run', ['--project', interrupted.projectId, '--max-passes', '1'], PLAN.maxRestartCommandMs);
+    const restartOutput = restarted.jsonLines.map(row => ({ status: row.status, recovered: row.recovered ?? null,
+      passes: Array.isArray(row.passes) ? row.passes.map(pass => ({ status: pass.status, recovered: pass.recovered ?? null })) : row.passes ?? null }));
+    await record('coordinator-restart-pass-output', { trial_id: 'surviving-worker', json: restartOutput });
+    const recoveryRows = restartOutput.flatMap(row => [
+      ...(Array.isArray(row.recovered) ? row.recovered : []),
+      ...(Array.isArray(row.passes) ? row.passes.flatMap(pass => Array.isArray(pass.recovered) ? pass.recovered : []) : []),
+    ]);
+    const recoveryRow = recoveryRows.find(entry => entry.execution_id === workerMarker.execution_id);
+    if (recoveryRow) assert.equal(recoveryRow.action, 'settled-from-retained-result');
+    const durableRecovery = await pool.query(`SELECT e.state,r.recorded_at FROM vnext_executions e
+      JOIN vnext_pilot_results r USING (execution_id) WHERE e.execution_id=$1`, [workerMarker.execution_id]);
+    assert.equal(durableRecovery.rowCount, 1,
+      `restart must settle the retained result exactly once; pass=${JSON.stringify(restartOutput)}`);
+    assert.equal(durableRecovery.rows[0].state, 'succeeded');
+    const recoveryCompletedAt = performance.now();
     await record('coordinator-restarted-and-recovered', { trial_id: 'surviving-worker', execution_id: workerMarker.execution_id,
-      action: recoveryRow.action, recovery_started_at_ms: restartStarted, recovery_completed_at_ms: recoveryCompletedAt,
+      action: recoveryRow?.action ?? 'settled-from-retained-result-confirmed-by-durable-records',
+      durable_result_recorded_at: durableRecovery.rows[0].recorded_at.toISOString(),
+      recovery_started_at_ms: restartStarted, recovery_completed_at_ms: recoveryCompletedAt,
+      expiry_to_recovery_ms: recoveryCompletedAt - restartStarted,
       interruption_to_recovery_ms: recoveryCompletedAt - interruptedAt });
     assert.equal(await objectiveExecutions(interruptedWork), 1, 'recovery must settle the retained result without relaunching the objective execution');
     await driveUntil('surviving-worker', interrupted.projectId, () => accepted(interruptedWork), 'accepted recovered completion');
@@ -524,7 +558,9 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
           stranded_work: !acceptanceCount && !isPendingWithAction && !ledger.block && !ledger.authority ? 1 : 0,
           simulated_effects: { records: effects.length, duplicate_effects: effectSummary.duplicate_effects, conflicting_effects: effectSummary.conflicting_effects },
           actual_coordinator_interruption: Boolean(interruption),
+          lease_expiry_fast_forwarded: journalRows.some(row => row.event === 'scripted-lease-expiry-fast-forward'),
           recovered_execution_id: recovered ? recovered.execution_id : null,
+          expiry_to_recovery_ms: recovered ? recovered.expiry_to_recovery_ms : null,
           interruption_to_recovery_ms: recovered ? recovered.interruption_to_recovery_ms : null,
           next_action: nextAction,
         });
