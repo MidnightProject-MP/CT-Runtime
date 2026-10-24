@@ -20,7 +20,7 @@ const profiles = {
 // Frozen before the campaign starts. A repeat gets a new campaign ID and new
 // project/work identities; this harness never retries or resets a failed trial.
 const PLAN = Object.freeze({
-  name: 'milestone-3c-offline-v1',
+  name: 'milestone-3c-offline-v2',
   maxDurationMs: 220000,
   maxProjects: 4,
   maxGlobalConcurrency: 2,
@@ -33,22 +33,23 @@ const PLAN = Object.freeze({
   maxRestartCommandMs: 30000,
   maxCoordinatorRestarts: 1,
   maxOverlappingWakes: 2,
+  quietProbePasses: 2,
   automaticTrialRetries: 0,
   externalProviders: false,
   realModelCalls: 0,
   effectMode: 'simulated local artifact write only',
   executorBoundaryFaultInjections: 0,
-  actualProcessInterruption: 'coordinator process SIGKILL with detached scripted worker observed alive',
+  actualProcessInterruption: 'coordinator process SIGKILL with detached scripted worker observed alive; overlapping wakes occur before the kill, not during the orphan interval',
   leaseExpiryControl: 'test-only fast-forward after confirming worker process/group exit and retained result; does not measure natural lease duration',
   trials: [
     { id: 'normal-completion', attempt: 1, expected: 'terminal-and-accepted', maxObjectiveExecutions: 1, maxNonProgress: 2,
-      finish_condition: 'deliverable.txt hash matches durable evidence; acceptance receipt exists; two later CLI passes dispatch nothing' },
+      finish_condition: 'deliverable.txt hash matches durable evidence; acceptance receipt exists; two later CLI passes dispatch no objective/assignment work, worker invocation, or simulated effect' },
     { id: 'fresh-input', attempt: 1, expected: 'terminal-and-accepted-with-latest-input', maxObjectiveExecutions: 2, maxNonProgress: 2,
-      finish_condition: 'accepted artifact contains the second scripted input; its input sequence exceeds the initial sequence and consumed_input_seq equals latest_input_seq' },
+      finish_condition: 'accepted artifact contains the second scripted input; its input sequence exceeds the initial sequence and consumed_input_seq equals latest_input_seq; two later CLI passes dispatch nothing' },
     { id: 'bounded-non-progress', attempt: 1, expected: 'reconsideration-required-without-blind-retry', maxObjectiveExecutions: 2, maxNonProgress: 2,
-      finish_condition: 'exactly two review request_changes decisions; next action is reconsideration-exhausted; no acceptance or further dispatch' },
+      finish_condition: 'exactly two review request_changes decisions; next action is reconsideration-exhausted; two later CLI wakes dispatch nothing while that action remains visible' },
     { id: 'surviving-worker', attempt: 1, expected: 'retained-result-recovered-and-accepted', maxObjectiveExecutions: 1, maxNonProgress: 2,
-      finish_condition: 'actual coordinator SIGKILL while worker survives; overlapping wakes do not duplicate; restart settles retained result and accepts artifact' },
+      finish_condition: 'two overlapping wakes occur before actual coordinator SIGKILL while worker survives; restart settles retained result and accepts artifact; later CLI passes dispatch nothing' },
   ],
 });
 
@@ -89,6 +90,15 @@ async function readJsonLines(file) {
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
 
+async function readRequiredJsonLines(file, label) {
+  if (!await exists(file)) throw new Error(`missing ${label}`);
+  return readJsonLines(file);
+}
+
+function sanitizeReportMessage(error) {
+  return String(error?.message ?? error).replace(/postgres(?:ql)?:\/\/[^\s'"`]+/gi, '[redacted-database-url]').slice(0, 300);
+}
+
 function compareEffects(rows) {
   const seen = new Map();
   let duplicates = 0;
@@ -103,6 +113,102 @@ function compareEffects(rows) {
   return { records: rows.length, duplicate_effects: duplicates, conflicting_effects: conflicts };
 }
 
+function unavailableTrialReport(trial, error, { projectId = null, workUnitId = null } = {}) {
+  return {
+    trial_id: trial.id,
+    trial_instance_id: null,
+    project_id: projectId,
+    work_unit_id: workUnitId,
+    expected: trial.expected,
+    report_status: 'unavailable',
+    report_error: sanitizeReportMessage(error),
+    work_state: null,
+    accepted_outcome: null,
+    artifact_sha256: null,
+    latest_input_seq: null,
+    consumed_input_seq: null,
+    initial_input_seq: null,
+    latest_submitted_input_seq: null,
+    executions: null,
+    objective_executions: null,
+    assignment_executions: null,
+    assignments: null,
+    scripted_worker_invocations: null,
+    real_model_calls: null,
+    review_request_changes: null,
+    review_non_progress: null,
+    reconsideration_required: null,
+    human_interventions: null,
+    human_rescued: null,
+    scripted_input_events: null,
+    quiet_passes: null,
+    quiet_activity: null,
+    overlapping_wake_ordering: null,
+    human_followup_required: null,
+    stranded_work: null,
+    simulated_effects: null,
+    actual_coordinator_interruption: null,
+    lease_expiry_fast_forwarded: null,
+    recovered_execution_id: null,
+    expiry_to_recovery_ms: null,
+    interruption_to_recovery_ms: null,
+    restart_pass_outputs: null,
+    next_action: null,
+  };
+}
+
+function sumKnown(trials, field) {
+  if (trials.some(row => typeof row[field] !== 'number')) return null;
+  return trials.reduce((total, row) => total + row[field], 0);
+}
+
+function summarizeTrialTotals(trials, maxAuthorityOccupancy) {
+  const acceptedKnown = trials.every(row => typeof row.accepted_outcome === 'boolean');
+  const interventionsKnown = trials.every(row => Array.isArray(row.human_interventions));
+  const rescuesKnown = trials.every(row => typeof row.human_rescued === 'boolean');
+  return {
+    trials: trials.length,
+    accepted_outcomes: acceptedKnown ? trials.filter(row => row.accepted_outcome).length : null,
+    objective_executions: sumKnown(trials, 'objective_executions'),
+    scripted_worker_invocations: sumKnown(trials, 'scripted_worker_invocations'),
+    real_model_calls: sumKnown(trials, 'real_model_calls'),
+    stranded_work: sumKnown(trials, 'stranded_work'),
+    human_interventions: interventionsKnown ? trials.flatMap(row => row.human_interventions) : null,
+    human_rescued_trials: rescuesKnown ? trials.filter(row => row.human_rescued).map(row => row.trial_id) : null,
+    sampled_peak_authority_occupancy: maxAuthorityOccupancy,
+    executor_boundary_fault_injections: PLAN.executorBoundaryFaultInjections,
+  };
+}
+
+function campaignReportComplete({ failure, reportIssues, persisted }) {
+  return !failure && reportIssues.length === 0 && persisted;
+}
+
+async function persistCampaignReport({ report, reportPath, partialReportPath, write = writeFile }) {
+  try {
+    await write(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+    return { persisted: true, path: reportPath };
+  } catch (error) {
+    const partial = {
+      ...report,
+      completed: false,
+      report_status: 'partial',
+      verification: {
+        ...(report.verification ?? {}),
+        report_complete: false,
+        failures: Number(report.verification?.failures ?? 0) + 1,
+      },
+      report_issues: [...(report.report_issues ?? []), { stage: 'report-persistence', message: sanitizeReportMessage(error) }],
+    };
+    try {
+      await write(partialReportPath, `${JSON.stringify(partial, null, 2)}\n`, { mode: 0o600 });
+      return { persisted: false, path: partialReportPath, error };
+    } catch {
+      throw error;
+    }
+  }
+}
+
 test('bounded offline Milestone 3C trial campaign records outcomes and recovery evidence', {
   skip: !enabled,
   timeout: 240000,
@@ -114,6 +220,7 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   const planPath = path.join(campaignDirectory, 'plan.json');
   const journalPath = path.join(campaignDirectory, 'journal.jsonl');
   const reportPath = path.join(campaignDirectory, 'report.json');
+  const partialReportPath = path.join(campaignDirectory, 'report.partial.json');
   const workerPath = path.resolve(import.meta.dirname, 'fixtures/vnext-unattended-scripted-worker.mjs');
   const cliPath = path.resolve(import.meta.dirname, '../bin/vnext-pilot.mjs');
   const configPath = path.join(campaignDirectory, 'pilot.json');
@@ -131,6 +238,7 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   const workerPids = new Set();
   const journal = [];
   const artifactDigests = new Map();
+  const reportIssues = [];
   const campaignStarted = performance.now();
   let maxAuthorityOccupancy = 0;
   let completed = false;
@@ -198,6 +306,30 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   const accepted = async workId => Number((await pool.query(`SELECT count(*)::int AS count FROM vnext_events
     WHERE event_type='work.accepted' AND payload->'result'->>'work_unit_id'=$1`, [workId])).rows[0].count) > 0;
   const objectiveExecutions = async workId => Number((await pool.query('SELECT count(*)::int AS count FROM vnext_executions WHERE work_unit_id=$1', [workId])).rows[0].count);
+  const assignmentExecutions = async workId => Number((await pool.query(`SELECT count(*)::int AS count FROM vnext_executions
+    WHERE work_unit_id IN (SELECT assignment_work_unit_id FROM vnext_assignments WHERE work_unit_id=$1)`, [workId])).rows[0].count);
+  const assignmentCount = async workId => Number((await pool.query('SELECT count(*)::int AS count FROM vnext_assignments WHERE work_unit_id=$1', [workId])).rows[0].count);
+  const activitySnapshot = async (trialId, workId) => {
+    const control = controls.get(trialId);
+    const invocations = await readRequiredJsonLines(path.join(control.controlDirectory, 'worker-invocations.jsonl'), `${trialId} worker invocation journal`);
+    const effects = await readRequiredJsonLines(path.join(control.controlDirectory, 'simulated-effects.jsonl'), `${trialId} simulated effect journal`);
+    return {
+      objective_executions: await objectiveExecutions(workId),
+      assignment_executions: await assignmentExecutions(workId),
+      assignments: await assignmentCount(workId),
+      scripted_worker_invocations: invocations.length,
+      simulated_effects: effects.length,
+    };
+  };
+  const assertQuiet = async (trialId, workId, scope) => {
+    const control = controls.get(trialId);
+    const before = await activitySnapshot(trialId, workId);
+    for (let pass = 0; pass < PLAN.quietProbePasses; pass += 1) await tick(control.projectId);
+    const after = await activitySnapshot(trialId, workId);
+    assert.deepEqual(after, before, `${trialId} later CLI wakes must not dispatch objective/assignment work, invoke a worker, or create an effect`);
+    await record('quiet-probe', { trial_id: trialId, scope, quiet_passes: PLAN.quietProbePasses, activity_before: before, activity_after: after });
+    return { before, after };
+  };
   const verifyArtifact = async (trialId, projectId, workId) => {
     const rows = await pool.query(`SELECT turn->'outcome_evidence'->0->>'sha256' AS sha256
       FROM vnext_pilot_results WHERE work_unit_id=$1 AND jsonb_typeof(turn->'outcome_evidence')='array'
@@ -328,11 +460,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     const normal = controls.get('normal-completion');
     const normalWork = workIds.get('normal-completion');
     await driveUntil('normal-completion', normal.projectId, () => accepted(normalWork), 'accepted terminal completion');
-    const quietBefore = await objectiveExecutions(normalWork);
-    await tick(normal.projectId);
-    await tick(normal.projectId);
-    assert.equal(await objectiveExecutions(normalWork), quietBefore, 'two post-acceptance CLI passes must remain quiet');
-    await record('accepted-and-quiet', { trial_id: 'normal-completion', quiet_passes: 2, objective_executions: quietBefore });
+    await assertQuiet('normal-completion', normalWork, 'accepted-completion');
 
     const fresh = controls.get('fresh-input');
     const freshWork = workIds.get('fresh-input');
@@ -344,6 +472,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     await driveUntil('fresh-input', fresh.projectId, () => accepted(freshWork), 'accepted completion consuming the newest input');
     const freshArtifact = await readFile(path.join(fresh.workspace, 'deliverable.txt'), 'utf8');
     assert.match(freshArtifact, /Use this newer scripted input/);
+    await assertQuiet('fresh-input', freshWork, 'accepted-completion');
 
     const nonProgress = controls.get('bounded-non-progress');
     const nonProgressWork = workIds.get('bounded-non-progress');
@@ -353,6 +482,12 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     }, 'bounded reconsideration stop');
     assert.equal(await accepted(nonProgressWork), false, 'bounded non-progress must not be counted as accepted success');
     await record('bounded-non-progress-stopped', { trial_id: 'bounded-non-progress', max_non_progress: 2, human_followup_required: true });
+    await assertQuiet('bounded-non-progress', nonProgressWork, 'reconsideration-exhausted');
+    const nonProgressAfterQuiet = deriveCoordinatorStatus(await store.coordinatorLedger(nonProgress.projectId), { maxNonProgress: 2 });
+    assert.equal(nonProgressAfterQuiet.next_action.kind, 'reconsider');
+    assert.equal(nonProgressAfterQuiet.next_action.reason, 'reconsideration-exhausted');
+    await record('reconsideration-remains-visible-after-quiet', { trial_id: 'bounded-non-progress',
+      next_action: nonProgressAfterQuiet.next_action, quiet_passes: PLAN.quietProbePasses });
 
     const interrupted = controls.get('surviving-worker');
     const interruptedWork = workIds.get('surviving-worker');
@@ -377,6 +512,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     maxAuthorityOccupancy = Math.max(maxAuthorityOccupancy, liveAuthorities);
     assert.ok(maxAuthorityOccupancy <= PLAN.maxGlobalConcurrency);
     await record('overlapping-cli-wakes', { trial_id: 'surviving-worker', wake_count: PLAN.maxOverlappingWakes,
+      ordering: 'before coordinator SIGKILL; not during the post-kill orphan interval',
       resulting_statuses: overlapping.map(row => row.value?.status), objective_execution_count: 1 });
 
     const processExit = new Promise(resolve => coordinator.child.once('exit', (code, signal) => resolve({ code, signal })));
@@ -443,10 +579,7 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
       interruption_to_recovery_ms: recoveryCompletedAt - interruptedAt });
     assert.equal(await objectiveExecutions(interruptedWork), 1, 'recovery must settle the retained result without relaunching the objective execution');
     await driveUntil('surviving-worker', interrupted.projectId, () => accepted(interruptedWork), 'accepted recovered completion');
-    const interruptedQuietCount = await objectiveExecutions(interruptedWork);
-    await tick(interrupted.projectId);
-    assert.equal(await objectiveExecutions(interruptedWork), interruptedQuietCount, 'recovered accepted work must remain quiet');
-    await record('accepted-and-quiet', { trial_id: 'surviving-worker', quiet_passes: 1, objective_executions: interruptedQuietCount });
+    await assertQuiet('surviving-worker', interruptedWork, 'accepted-completion-after-recovery');
 
     assert.equal(await observeAuthorityOccupancy(), 0, 'all completed/reconsidered trials must release project authorities');
 
@@ -487,7 +620,9 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
       assert.equal(stranded, false, `${trial.id} remains durably eligible, accepted, reconsiderable, or blocked with an explicit reason`);
     }
     const scriptedEffects = [];
-    for (const control of controls.values()) scriptedEffects.push(...await readJsonLines(path.join(control.controlDirectory, 'simulated-effects.jsonl')));
+    for (const control of controls.values()) {
+      scriptedEffects.push(...await readRequiredJsonLines(path.join(control.controlDirectory, 'simulated-effects.jsonl'), 'campaign simulated effect journal'));
+    }
     const effectSummary = compareEffects(scriptedEffects);
     assert.equal(effectSummary.duplicate_effects, 0);
     assert.equal(effectSummary.conflicting_effects, 0);
@@ -512,7 +647,12 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     for (const trial of PLAN.trials) {
       const control = controls.get(trial.id);
       const workId = workIds.get(trial.id);
-      if (!control || !workId) continue;
+      if (!control || !workId) {
+        const missing = new Error(`missing ${control ? 'work unit' : 'project control'} for trial report`);
+        reportIssues.push({ trial_id: trial.id, stage: 'trial-report', message: sanitizeReportMessage(missing) });
+        trials.push(unavailableTrialReport(trial, missing, { projectId: control?.projectId ?? null, workUnitId: workId ?? null }));
+        continue;
+      }
       try {
         const ledger = await store.coordinatorLedger(control.projectId);
         const status = deriveCoordinatorStatus(ledger, { maxNonProgress: trial.maxNonProgress });
@@ -520,10 +660,12 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
         const executions = (await pool.query('SELECT count(*)::int AS total FROM vnext_executions WHERE work_unit_id=$1 OR work_unit_id IN (SELECT assignment_work_unit_id FROM vnext_assignments WHERE work_unit_id=$1)', [workId])).rows[0];
         const assignments = (await pool.query(`SELECT purpose,status,decision->>'outcome' AS outcome FROM vnext_assignments
           WHERE work_unit_id=$1 ORDER BY created_at,assignment_id`, [workId])).rows;
-        const invocations = await readJsonLines(path.join(control.controlDirectory, 'worker-invocations.jsonl'));
-        const effects = await readJsonLines(path.join(control.controlDirectory, 'simulated-effects.jsonl'));
+        const invocations = await readRequiredJsonLines(path.join(control.controlDirectory, 'worker-invocations.jsonl'), `${trial.id} worker invocation journal`);
+        const effects = await readRequiredJsonLines(path.join(control.controlDirectory, 'simulated-effects.jsonl'), `${trial.id} simulated effect journal`);
         const acceptanceCount = await accepted(workId);
         const journalRows = journal.filter(row => row.trial_id === trial.id);
+        const quietRows = journalRows.filter(row => row.event === 'quiet-probe');
+        const overlappingWakes = journalRows.find(row => row.event === 'overlapping-cli-wakes');
         const interruption = journalRows.find(row => row.event === 'coordinator-interrupted');
         const recovered = journalRows.find(row => row.event === 'coordinator-restarted-and-recovered');
         const effectSummary = compareEffects(effects);
@@ -535,15 +677,19 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
           project_id: control.projectId,
           work_unit_id: workId,
           expected: trial.expected,
+          report_status: 'complete',
+          report_error: null,
           work_state: work?.state ?? null,
           accepted_outcome: acceptanceCount,
           artifact_sha256: artifactDigests.get(trial.id) ?? null,
-          latest_input_seq: Number(work?.latest_input_seq ?? 0),
-          consumed_input_seq: Number(work?.consumed_input_seq ?? 0),
+          latest_input_seq: work ? Number(work.latest_input_seq) : null,
+          consumed_input_seq: work ? Number(work.consumed_input_seq) : null,
           initial_input_seq: initialInputSequences.get(trial.id) ?? null,
           latest_submitted_input_seq: inputSequences.get(trial.id) ?? null,
           executions: Number(executions.total),
           objective_executions: Number(await objectiveExecutions(workId)),
+          assignment_executions: Number(await assignmentExecutions(workId)),
+          assignments: assignments.length,
           scripted_worker_invocations: invocations.length,
           real_model_calls: 0,
           review_request_changes: assignments.filter(row => row.purpose === 'review' && row.outcome === 'request_changes').length,
@@ -552,7 +698,9 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
           human_interventions: journalRows.filter(row => row.event === 'human-intervention'),
           human_rescued: journalRows.some(row => row.event === 'human-rescue'),
           scripted_input_events: journalRows.filter(row => row.event === 'scripted-fresh-input-injected').length,
-          quiet_passes: journalRows.filter(row => row.event === 'accepted-and-quiet').reduce((total, row) => total + Number(row.quiet_passes ?? 0), 0),
+          quiet_passes: quietRows.reduce((total, row) => total + Number(row.quiet_passes ?? 0), 0),
+          quiet_activity: quietRows.map(row => ({ scope: row.scope, passes: row.quiet_passes, before: row.activity_before, after: row.activity_after })),
+          overlapping_wake_ordering: overlappingWakes?.ordering ?? null,
           human_followup_required: nextAction.kind === 'reconsider',
           stranded_work: !acceptanceCount && !isPendingWithAction && !ledger.block && !ledger.authority ? 1 : 0,
           simulated_effects: { records: effects.length, duplicate_effects: effectSummary.duplicate_effects, conflicting_effects: effectSummary.conflicting_effects },
@@ -565,39 +713,94 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
           next_action: nextAction,
         });
       } catch (reportError) {
-        trials.push({ trial_id: trial.id, expected: trial.expected, report_error: String(reportError?.message ?? reportError).slice(0, 300) });
+        reportIssues.push({ trial_id: trial.id, stage: 'trial-report', message: sanitizeReportMessage(reportError) });
+        trials.push(unavailableTrialReport(trial, reportError, { projectId: control.projectId, workUnitId: workId }));
       }
     }
-    const allEffects = [];
-    for (const entry of controls.values()) allEffects.push(...await readJsonLines(path.join(entry.controlDirectory, 'simulated-effects.jsonl')));
-    const effectSummary = compareEffects(allEffects);
+    let effectSummary;
+    try {
+      const allEffects = [];
+      for (const entry of controls.values()) {
+        allEffects.push(...await readRequiredJsonLines(path.join(entry.controlDirectory, 'simulated-effects.jsonl'), 'campaign simulated effect journal'));
+      }
+      effectSummary = compareEffects(allEffects);
+    } catch (effectError) {
+      reportIssues.push({ stage: 'effect-aggregation', message: sanitizeReportMessage(effectError) });
+      effectSummary = { records: null, duplicate_effects: null, conflicting_effects: null };
+    }
+    const observationsComplete = !failure && reportIssues.length === 0;
     const report = {
       campaign_id: campaignId,
       plan: planRecord ?? PLAN,
-      completed,
+      completed: completed && observationsComplete,
       elapsed_ms: Math.round(performance.now() - campaignStarted),
       effects: effectSummary,
-      totals: {
-        trials: trials.length,
-        accepted_outcomes: trials.filter(row => row.accepted_outcome).length,
-        objective_executions: trials.reduce((total, row) => total + (row.objective_executions ?? 0), 0),
-        scripted_worker_invocations: trials.reduce((total, row) => total + (row.scripted_worker_invocations ?? 0), 0),
-        real_model_calls: 0,
-        stranded_work: trials.reduce((total, row) => total + (row.stranded_work ?? 0), 0),
-        human_interventions: trials.flatMap(row => row.human_interventions ?? []),
-        human_rescued_trials: trials.filter(row => row.human_rescued).map(row => row.trial_id),
-        sampled_peak_authority_occupancy: maxAuthorityOccupancy,
-        executor_boundary_fault_injections: PLAN.executorBoundaryFaultInjections,
-      },
+      totals: summarizeTrialTotals(trials, maxAuthorityOccupancy),
       trials,
-      verification: { native_test_skips: 0, local_test_failures: failure ? 1 : 0 },
+      report_status: observationsComplete ? 'complete' : 'partial',
+      report_issues: reportIssues,
+      verification: { native_test_skips: 0, report_complete: observationsComplete, failures: (failure ? 1 : 0) + reportIssues.length },
       failures: failure ? [failure] : [],
-      verification: { native_test_skips: 0, failures: failure ? 1 : 0 },
       report_source: 'PostgreSQL durable work/execution/input/result/assignment/acceptance records plus append-only scripted-worker/effect and interruption journal files; no raw process output or credentials.',
       artifact_directory: campaignDirectory,
     };
-    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 }).catch(() => {});
+    let persistence;
+    try {
+      persistence = await persistCampaignReport({ report, reportPath, partialReportPath });
+    } catch (persistenceError) {
+      persistence = { persisted: false, path: null, error: persistenceError };
+    }
+    if (!persistence.persisted) {
+      reportIssues.push({ stage: 'report-persistence', message: sanitizeReportMessage(persistence.error) });
+    }
     t.diagnostic(`milestone-3c-offline-report ${JSON.stringify(report)}`);
     await pool.end();
+    if (!failure && !campaignReportComplete({ failure, reportIssues, persisted: persistence.persisted })) {
+      throw new Error(reportIssues.length > 0
+        ? `campaign report is incomplete or unpersisted: ${reportIssues.map(issue => issue.message).join('; ')}`
+        : 'campaign report persistence could not be confirmed');
+    }
   }
+});
+
+test('campaign report gaps are unknown measurements and fail qualification', async () => {
+  const trial = { id: 'unavailable-trial', expected: 'terminal-and-accepted' };
+  const unavailable = unavailableTrialReport(trial, new Error('fixture report generation failure'), { projectId: 'project-1', workUnitId: 'work-1' });
+  assert.equal(unavailable.report_status, 'unavailable');
+  assert.equal(unavailable.accepted_outcome, null);
+  assert.equal(unavailable.objective_executions, null);
+  assert.equal(unavailable.scripted_worker_invocations, null);
+  assert.equal(unavailable.stranded_work, null);
+  assert.equal(unavailable.human_interventions, null);
+  assert.equal(unavailable.human_rescued, null);
+
+  const totals = summarizeTrialTotals([unavailable], 0);
+  assert.equal(totals.accepted_outcomes, null);
+  assert.equal(totals.objective_executions, null);
+  assert.equal(totals.scripted_worker_invocations, null);
+  assert.equal(totals.stranded_work, null);
+  assert.equal(totals.human_interventions, null);
+  assert.equal(totals.human_rescued_trials, null);
+  assert.equal(campaignReportComplete({ failure: null, reportIssues: [], persisted: true }), true);
+  assert.equal(campaignReportComplete({ failure: null, reportIssues: [{ stage: 'trial-report' }], persisted: true }), false);
+  assert.equal(campaignReportComplete({ failure: null, reportIssues: [], persisted: false }), false);
+  assert.equal(campaignReportComplete({ failure: new Error('campaign failure'), reportIssues: [], persisted: true }), false);
+
+  const writes = [];
+  const persistence = await persistCampaignReport({
+    report: { campaign_id: 'fixture', completed: true, verification: { report_complete: true }, report_issues: [] },
+    reportPath: '/campaign/report.json',
+    partialReportPath: '/campaign/report.partial.json',
+    write: async (file, data) => {
+      writes.push([file, data]);
+      if (file === '/campaign/report.json') throw new Error('fixture disk failure');
+    },
+  });
+  assert.equal(persistence.persisted, false);
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1][0], '/campaign/report.partial.json');
+  const partial = JSON.parse(writes[1][1]);
+  assert.equal(partial.completed, false);
+  assert.equal(partial.verification.report_complete, false);
+  assert.equal(partial.report_issues.at(-1).stage, 'report-persistence');
 });
