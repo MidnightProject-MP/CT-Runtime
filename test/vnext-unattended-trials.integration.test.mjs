@@ -165,9 +165,15 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
       await running.exited;
       throw new Error(`${action} exceeded the ${timeoutMs}ms CLI command budget`);
     }
-    if (exit.code !== 0) throw new Error(`${action} exited with code ${exit.code ?? exit.signal}`);
-    const output = running.output().stdout.trim();
-    const lines = output.split(/\r?\n/).filter(Boolean);
+    const output = running.output();
+    if (exit.code !== 0) {
+      let structuredFailure = null;
+      try { structuredFailure = JSON.parse(output.stderr.trim().split(/\r?\n/).at(-1)); } catch { /* no structured error record */ }
+      const error = new Error(`${action} exited with code ${exit.code ?? exit.signal}${structuredFailure?.code ? ` (${structuredFailure.code})` : ''}`);
+      if (typeof structuredFailure?.code === 'string') error.code = structuredFailure.code;
+      throw error;
+    }
+    const lines = output.stdout.trim().split(/\r?\n/).filter(Boolean);
     const jsonLines = lines.map(line => JSON.parse(line));
     return { value: jsonLines.at(-1) ?? null, jsonLines };
   };
@@ -244,10 +250,11 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
 export async function authorizeExecution({ execution }) { return { ref: '3c-scripted-execution:' + execution.execution_id }; }
 export async function verifyExecution(decision, { execution }) { return decision?.ref === '3c-scripted-execution:' + execution.execution_id; }
 export async function authorizeAssignmentDecision({ assignment, report }) {
-  return { ref: '3c-scripted-decision:' + assignment.assignment_id, outcome: report.outcome,
+  const outcome = assignment.purpose === 'stewardship' ? 'propose' : report.outcome;
+  return { ref: '3c-scripted-decision:' + assignment.assignment_id, outcome,
     assignment_id: assignment.assignment_id, assignment_digest: assignment.assignment_digest,
     report_digest: digest(report), subject_digest: assignment.subject_digest,
-    ...(report.outcome === 'request_changes' ? { requested_changes: report.requested_changes } : {}) };
+    ...(outcome === 'request_changes' ? { requested_changes: report.requested_changes } : {}) };
 }
 export async function verifyAssignmentDecision(decision, { assignment, report }) {
   return decision?.assignment_id === assignment.assignment_id && decision.report_digest === digest(report);
