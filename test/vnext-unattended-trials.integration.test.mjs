@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -106,10 +105,8 @@ test('bounded offline Milestone 3C trial campaign records outcomes and recovery 
   timeout: 240000,
 }, async t => {
   const campaignId = randomUUID();
-  const suppliedOutputRoot = process.env.CT_VNEXT_TRIAL_ARTIFACTS_DIR;
-  const campaignDirectory = suppliedOutputRoot
-    ? path.join(path.resolve(suppliedOutputRoot), `campaign-${campaignId}`)
-    : await mkdtemp(path.join(tmpdir(), `vnext-3c-${campaignId.slice(0, 8)}-`));
+  const outputRoot = path.resolve(process.env.CT_VNEXT_TRIAL_ARTIFACTS_DIR ?? '/var/tmp/ct-runtime-vnext-unattended-trials');
+  const campaignDirectory = path.join(outputRoot, `campaign-${campaignId}`);
   await mkdir(campaignDirectory, { recursive: true, mode: 0o700 });
   const planPath = path.join(campaignDirectory, 'plan.json');
   const journalPath = path.join(campaignDirectory, 'journal.jsonl');
