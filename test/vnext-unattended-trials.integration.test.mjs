@@ -184,27 +184,31 @@ function campaignReportComplete({ failure, reportIssues, persisted }) {
   return !failure && reportIssues.length === 0 && persisted;
 }
 
+function markReportFailure(report, error) {
+  return {
+    ...report,
+    completed: false,
+    report_status: 'partial',
+    verification: {
+      ...(report.verification ?? {}),
+      report_complete: false,
+      failures: Number(report.verification?.failures ?? 0) + 1,
+    },
+    report_issues: [...(report.report_issues ?? []), { stage: 'report-persistence', message: sanitizeReportMessage(error) }],
+  };
+}
+
 async function persistCampaignReport({ report, reportPath, partialReportPath, write = writeFile }) {
   try {
     await write(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
-    return { persisted: true, path: reportPath };
+    return { persisted: true, path: reportPath, report };
   } catch (error) {
-    const partial = {
-      ...report,
-      completed: false,
-      report_status: 'partial',
-      verification: {
-        ...(report.verification ?? {}),
-        report_complete: false,
-        failures: Number(report.verification?.failures ?? 0) + 1,
-      },
-      report_issues: [...(report.report_issues ?? []), { stage: 'report-persistence', message: sanitizeReportMessage(error) }],
-    };
+    const failedReport = markReportFailure(report, error);
     try {
-      await write(partialReportPath, `${JSON.stringify(partial, null, 2)}\n`, { mode: 0o600 });
-      return { persisted: false, path: partialReportPath, error };
-    } catch {
-      throw error;
+      await write(partialReportPath, `${JSON.stringify(failedReport, null, 2)}\n`, { mode: 0o600 });
+      return { persisted: false, path: partialReportPath, error, report: failedReport };
+    } catch (fallbackError) {
+      return { persisted: false, path: null, error: fallbackError, report: failedReport };
     }
   }
 }
@@ -748,16 +752,14 @@ export async function verifyAcceptance(decision, context) { return decision?.ref
     try {
       persistence = await persistCampaignReport({ report, reportPath, partialReportPath });
     } catch (persistenceError) {
-      persistence = { persisted: false, path: null, error: persistenceError };
+      persistence = { persisted: false, path: null, error: persistenceError, report: markReportFailure(report, persistenceError) };
     }
-    if (!persistence.persisted) {
-      reportIssues.push({ stage: 'report-persistence', message: sanitizeReportMessage(persistence.error) });
-    }
-    t.diagnostic(`milestone-3c-offline-report ${JSON.stringify(report)}`);
+    const emittedReport = persistence.report ?? report;
+    t.diagnostic(`milestone-3c-offline-report ${JSON.stringify(emittedReport)}`);
     await pool.end();
-    if (!failure && !campaignReportComplete({ failure, reportIssues, persisted: persistence.persisted })) {
-      throw new Error(reportIssues.length > 0
-        ? `campaign report is incomplete or unpersisted: ${reportIssues.map(issue => issue.message).join('; ')}`
+    if (!failure && !campaignReportComplete({ failure, reportIssues: emittedReport.report_issues, persisted: persistence.persisted })) {
+      throw new Error(emittedReport.report_issues.length > 0
+        ? `campaign report is incomplete or unpersisted: ${emittedReport.report_issues.map(issue => issue.message).join('; ')}`
         : 'campaign report persistence could not be confirmed');
     }
   }
@@ -800,7 +802,11 @@ test('campaign report gaps are unknown measurements and fail qualification', asy
   assert.equal(writes.length, 2);
   assert.equal(writes[1][0], '/campaign/report.partial.json');
   const partial = JSON.parse(writes[1][1]);
-  assert.equal(partial.completed, false);
-  assert.equal(partial.verification.report_complete, false);
-  assert.equal(partial.report_issues.at(-1).stage, 'report-persistence');
+  const emittedReport = persistence.report;
+  assert.deepEqual(partial, emittedReport);
+  assert.equal(emittedReport.completed, false);
+  assert.equal(emittedReport.report_status, 'partial');
+  assert.equal(emittedReport.verification.report_complete, false);
+  assert.equal(emittedReport.verification.failures, 1);
+  assert.equal(emittedReport.report_issues.at(-1).stage, 'report-persistence');
 });
