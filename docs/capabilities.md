@@ -78,7 +78,7 @@ Example:
 
 ```powershell
 $env:CELESTAN_BINDINGS_JSON='{"global":{"durable_state":"postgres","evidence_store":"s3"},"projects":{"BorderCrossing":{"project_system":"jira"}}}'
-node bin/ct-runtime.mjs run --project BorderCrossing ...
+node bin/ct-runtime.mjs bindings --project BorderCrossing
 ```
 
 Standard Postgres and S3 interfaces keep bindings replaceable (Neon→Supabase changes only `CT_RUNTIME_DATABASE_URL`; changing the S3-compatible provider changes only the `CT_RUNTIME_S3_*` configuration).

@@ -7,7 +7,7 @@ federation. It carries no production reliability claim.
 
 State is caller-owned and lives under the selected `--store`: manifests, leases, lock files, schedules, bounded raw evidence, result handoffs, events, telemetry, and the Observer bridge directory. Files are retained indefinitely unless the external supervisor applies its own reviewed retention policy.
 
-The external supervisor supplies model, agent, bootstrap task, cwd, executable, timeout/retry bounds, and Observer path. Task Scheduler may invoke the one-shot `scheduler` command and periodically invoke `recover` and `observe-pending`.
+The external timer invokes `node bin/vnext-pilot.mjs tick`; the optional long-running loop is `node bin/vnext-pilot.mjs run`. Configuration, dispatch recovery, cancellation, and acceptance are documented in `docs/VNEXT-PILOT.md`.
 
 The configured current prototype binding is Northflank for `disposable_compute` and `scheduler`, using the existing immutable CT-Runtime image, Neon durable state, and Backblaze B2 evidence store. Northflank API discovery identified the existing `CT-Runtime` project as `ct-runtime`; it currently has no jobs. Live job/secret permission, project secret-group, image, runtime credential, and model-secret authorization plus fresh-container proof are pending; this is not a verified deployment claim.
 

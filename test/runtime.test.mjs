@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { promisify } from 'node:util';
-import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,7 +12,6 @@ const fixture = path.join(process.cwd(), 'test', 'fixture-runner.mjs');
 const base = (store, extra = {}) => store.createManifest({ executionId: extra.executionId || 'run-1', project: 'demo', task: 'test task', model: 'provider/model', agent: 'build', ...extra });
 const observerPath = path.resolve('../CT-Foundry/capabilities/observer/observer.mjs');
 const wake = { time: '2030-01-01T00:00:00Z', reason: 'self_scheduled', priority: 'low', project: 'demo' };
-const execFileAsync = promisify(execFile);
 
 test('atomic manifest creation is idempotent under concurrent duplicate calls', async () => {
   const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-')));
@@ -201,9 +198,9 @@ test('recover rebuilds authoritative parent links and rejects supplied childIds'
   const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(store, { executionId: 'root' }); await base(store, { executionId: 'child', topology: { rootId: 'root', parentId: 'root', childIds: [] } }); const root = await store.manifest('root'); root.topology.childIds = ['forged']; await store.atomic(store.file(store.manifests, 'root'), root); await recover({ store }); assert.deepEqual((await store.manifest('root')).topology.childIds, ['child']); await assert.rejects(() => base(store, { executionId: 'bad', topology: { rootId: 'root', parentId: 'root', childIds: ['child'] } }), /authoritative/);
 });
 
-test('direct run --id consumes a requeued manifest without changing execution identity', async () => {
+test('invoking a requeued manifest preserves execution identity', async () => {
   const store = new Store(await mkdtemp(path.join(os.tmpdir(), 'ct-runtime-'))); await base(store); await store.updateManifest('run-1', { execution: { status: 'requeued', startedAt: new Date(0).toISOString() } });
-  await execFileAsync(process.execPath, ['bin/ct-runtime.mjs', 'run', '--store', store.root, '--id', 'run-1', '--opencode', process.execPath, '--opencode-arg', fixture, '--max-retries', '0']); const manifest = await store.manifest('run-1'); assert.equal(manifest.execution.id, 'run-1'); assert.equal(manifest.execution.status, 'success');
+  const result = await invoke({ store, executionId: 'run-1', command: process.execPath, commandArgs: [fixture], model: 'm', agent: 'a', task: 't', maxRetries: 0 }); const manifest = await store.manifest('run-1'); assert.equal(result.status, 'success'); assert.equal(manifest.execution.id, 'run-1'); assert.equal(manifest.execution.status, 'success');
 });
 
 function nowForTest() { return new Date().toISOString(); }

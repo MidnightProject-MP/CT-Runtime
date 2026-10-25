@@ -2,15 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import vm from 'node:vm';
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { rm, readFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const repoRoot = new URL('..', import.meta.url);
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+const removedCommands = ['run', 'wake', 'schedule', 'scheduler', 'recover'];
 
 function runCli(command, args = []) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['bin/ct-runtime.mjs', command, ...args], {
-      cwd: new URL(repoRoot).pathname,
-      env: { ...process.env, CT_AUTONOMY_MODE: 'vnext' },
+      cwd: repoRoot,
+      env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -22,12 +27,23 @@ function runCli(command, args = []) {
   });
 }
 
-test('legacy CLI admission paths retire before creating a store or mutating state', async () => {
-  for (const command of ['run', 'wake', 'schedule', 'scheduler', 'recover']) {
-    const result = await runCli(command, ['--store', '/tmp/ct-runtime-vnext-retirement-test']);
-    assert.equal(result.code, 0, `${command}: ${result.stderr}`);
-    assert.deepEqual(JSON.parse(result.stdout), { status: 'RETIRED_VNEXT', command, autonomy_mode: 'vnext' });
-    assert.equal(result.stderr, '');
+test('removed legacy autonomous commands fail before creating a store', async () => {
+  for (const command of removedCommands) {
+    const store = path.join(os.tmpdir(), `ct-runtime-removed-${command}-${process.pid}`);
+    await rm(store, { recursive: true, force: true });
+    const result = await runCli(command, ['--store', store]);
+    assert.equal(result.code, 2, `${command}: ${result.stderr}`);
+    assert.match(result.stderr, /bin\/vnext-pilot\.mjs/);
+    assert.equal(existsSync(store), false, `${command} created a store before failing`);
+  }
+});
+
+test('help points to the vNext pilot and omits removed command surfaces', async () => {
+  const result = await runCli('--help');
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /bin\/vnext-pilot\.mjs/);
+  for (const command of removedCommands) {
+    assert.doesNotMatch(result.stdout, new RegExp(`${command} --store`));
   }
 });
 
