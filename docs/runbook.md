@@ -1,37 +1,38 @@
-# V2 Runbook
+# vNext Runbook
 
-Image, CI, Cloud Run, and Oracle gates described here are instructions, not evidence that they have run. Keep those gates marked unverified until the corresponding CI job or deployment output exists.
+This runbook covers the supported Node/PostgreSQL/OpenCode pilot. Image, CI, host, and deployment gates described here are instructions, not evidence that they have run. Keep those gates marked unverified until the corresponding CI job or deployment output exists. The optional GAS/email path remains separate and is not selected by this runbook.
 
 ## Initial setup
 
-1. Build and publish one immutable image digest from GitHub Actions.
-2. Provision standard PostgreSQL and an S3-compatible bucket outside this repository.
-3. Inject credentials through the platform secret mechanism.
-4. Run `node bin/ct-runtime.mjs migrate --database-url URL` using the migration role.
-5. Configure `CT_RUNTIME_MODE=production` and the non-secret variables in `deploy/cloud-run-job.env.example`.
-6. Run `doctor` and `reconstruct` as one-shot jobs.
+1. Build and publish one immutable image digest from GitHub Actions, or install the reviewed Node 22–24 source on the selected host.
+2. Provision standard PostgreSQL and the least-privilege runtime roles. Keep migration, runtime, and authority credentials outside the worker environment and source.
+3. Install the code at `/opt/CT-Runtime`, the approved project checkout at its own path, and the authoritative identity files outside the runtime checkout.
+4. Copy `examples/vnext-pilot.config.json` or `examples/vnext-pilot-multi.config.json` to `/etc/celestan/pilot.json` and replace all paths, authority module, executor, model/agent, and permission values. Keep `enabled` and `legacyExcluded` false during qualification.
+5. Configure `CT_PILOT_DATABASE_URL` and the authority settings in `/etc/celestan/pilot.env`, readable only by the runtime account. Do not expose database credentials to the worker.
+6. Apply the vNext schema with `node bin/vnext-pilot.mjs migrate --config /etc/celestan/pilot.json`. Normal operation never applies migrations.
+7. Verify the durable view with `node bin/vnext-pilot.mjs status --config /etc/celestan/pilot.json` and `inspect`. After the remaining qualification gates pass, run one bounded `tick`.
 
-Normal production commands never apply migrations. `doctor` verifies PostgreSQL, exact migration versions/checksums, and S3 bucket reachability and exits nonzero on any unhealthy probe. `reconstruct` additionally validates leases, schedules, topology, Observer state, database evidence references against S3 HEAD responses, and deployment/image/config/Git provenance before conflict-checked deployment registration. Its workspace is deleted and recreated under the ephemeral temporary root; no canonical state is written there.
+The two configuration booleans are operator assertions, not proof that legacy admission is excluded. Establish the real schema/grants, worker availability, authority, exact release, and absence of competing legacy work before enabling the pilot.
 
 ## Routine operation
 
-Run `scheduler` from an external timer, `recover` on a separate bounded cadence, and `observe-pending` after terminal executions. Use `export-observer` for stable JSON export. Never mount a local runtime store in production.
+The systemd timer invokes one bounded pass:
 
-Provider credentials must be named explicitly in `CT_RUNTIME_PROVIDER_SECRET_NAMES`. The production store adds only those values to a claimed schedule in memory and marks them for child redaction. Database URLs, PostgreSQL credentials, S3 credentials, AWS credentials, and secret access keys are rejected from that allowlist and are never placed in schedule records.
+```sh
+node bin/vnext-pilot.mjs tick --config /etc/celestan/pilot.json
+```
 
-## Cloud Run
+Use `node bin/vnext-pilot.mjs run --config /etc/celestan/pilot.json` only when a long-running loop with a shorter scan interval is wanted. The timer's repeated `tick` has the same pass semantics. `pause` prevents the next pass from admitting work without interrupting a live worker; `resume` restores admission.
 
-Set the variables required by `deploy/cloud-run.sh`, then run it with a principal authorized to manage Cloud Run Jobs and Cloud Scheduler. The script creates or updates the job with an immutable image, one task, zero platform retries, bounded CPU/memory/timeout, non-secret environment, Secret Manager bindings, and the image entrypoint's single scheduler argument list. It then creates or updates an authenticated Cloud Scheduler POST to the Cloud Run v2 `jobs:run` URI in the same region.
+Use `submit` for human input, `status` and `inspect` for the durable operator view, and `accept`, `cancel`, `reconcile`, or `decide-assignment` only through their guarded decision inputs. `cancel` requires an authorized cancellation decision and current work revision. `reconcile` requires an exact decision document containing `ref`, `project_id`, `work_unit_id`, `execution_id`, `fence`, and `resolution` (`no_effect` or `effect_applied`). These commands are operator surfaces, not evidence that an external effect occurred.
 
-## Oracle systemd
-
-Install `deploy/oracle-systemd.service.example` as `/etc/systemd/system/ct-runtime-scheduler.service` and the timer as `/etc/systemd/system/ct-runtime-scheduler.timer`. Store `/etc/ct-runtime/runtime.env` as mode `0600`, owned by the host `ctruntime` service account so the Docker CLI can read it. The example pulls the immutable digest on every run, uses a read-only root and `/tmp` tmpfs, and relies on the timer for the next retry after a failed one-shot execution.
-
-Membership in the host `docker` group and access to `/var/run/docker.sock` are effectively root-equivalent. Prefer a separately configured rootless Docker service where practical and adjust the unit's Docker dependency/socket accordingly. A public GHCR package needs no login; a private package requires a prior least-privilege `docker login ghcr.io` for the service account's Docker configuration.
+Deploy the supplied `deploy/vnext-pilot.service` and `deploy/vnext-pilot.timer` with the actual user and paths, then enable the timer through the host's normal procedure. The timer is not installed by this package. Match `TimeoutStartSec` to the configured worker timeout plus settlement margin. A second coordinator is safe only when it shares the same database and durable pool policy; qualify that topology explicitly.
 
 ## Incident handling
 
-If a worker loses its fence, its child must be terminated and its terminal write must be rejected. Run `recover`; inspect the immutable crash event and attempt rows. Reconcile S3 objects that lack database references before deleting anything.
+If a worker loses its fence, its child must be terminated and its terminal write must be rejected. Do not rerun effects based on a guessed outcome. A later `tick` or `run` performs dispatch recovery from durable state; an ambiguous settlement remains in review or reconciliation rather than becoming a fabricated success.
+
+Inspect `status` or `inspect`, the exact attempt request/result/evidence files, and the external project before resolving uncertainty. `reconcile` is an explicit decision-bound resolution, not an unguarded force-unlock. `cancel` requires a durable authorized intent; do not treat killing a process as proof of cancellation. Reconcile external evidence or artifact records that lack durable references before deleting anything.
 
 ### GAS feedback deployment
 
@@ -39,4 +40,4 @@ Before repeating a GAS external effect, inspect reality first: run `diagnoseFeed
 
 ## Human blockers
 
-Database, bucket, network, secret-management, image-signing, retention, semantic-provider, Cloud Run, Oracle, and production Git access require external authorization and credentials. Local syntax and unit checks do not satisfy those gates.
+Database, bucket, network, secret-management, authority-module, image-signing, retention, model-provider, host, and production Git access require external authorization and credentials. Local syntax and unit checks do not satisfy those gates.

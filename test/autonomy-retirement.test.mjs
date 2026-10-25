@@ -42,6 +42,7 @@ test('help points to the vNext pilot and omits removed command surfaces', async 
   const result = await runCli('--help');
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /bin\/vnext-pilot\.mjs/);
+  assert.match(result.stdout, /vnext-pilot\.mjs migrate --config/);
   for (const command of removedCommands) {
     assert.doesNotMatch(result.stdout, new RegExp(`${command} --store`));
   }

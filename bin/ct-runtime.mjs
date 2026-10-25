@@ -22,8 +22,11 @@ const RETAINED_COMMANDS = new Set([
 ]);
 const help = () => console.log(`CT-Runtime: vNext execution utilities
 
+First-launch setup:
+  node bin/vnext-pilot.mjs migrate --config /etc/celestan/pilot.json
+
 Autonomous execution:
-  node bin/vnext-pilot.mjs submit|tick|run|status|inspect|accept|cancel|reconcile
+  node bin/vnext-pilot.mjs submit|tick|run|status|inspect|accept|decide-assignment|cancel|reconcile|pause|resume
   See docs/VNEXT-PILOT.md for configuration and command details.
 
 Retained utilities:
