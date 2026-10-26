@@ -2,9 +2,53 @@
 
 Governing dependency map. Derived from the approved design baseline, the Phase 0
 transition-authority/lineage map, and the review of #76 / the local Phase 1
-follow-on. This document defines *what must be true*, not what is done.
+follow-on. This document records both required outcomes and commit-bound progress;
+code, offline qualification, and operational proof remain distinct.
 
-**Current phase: PR #102 (Milestone 2A coordinator) merged at `3ce806e9d579a7c04950d3dc2cf772ecc757429b`; PR #103 (purpose-bound execute/review/revise/accept) at `29f6c860564806689a90a7898fe13f6c24d3a29c`; PR #104 (multi-project workspace isolation and fair scheduling) at `ed274f146604ddde6ddef7691257a1edf1cea124`; and PR #105 (F4 test-harness hardening) at `d8dc44c3cb3c381735c2734b15c4ce1d0f75b707`. Their exact-head/post-merge CI evidence is recorded below. F4 is partial hardening: the worker processes messages FIFO and the shared client matches monotonic response sequences, guarding stale-response consumption; the original wrong-marker (`blocked` vs `uncertain`) trigger remains unresolved. The protocol test exercises stale-response handling, but thread scheduling means FIFO alone does not guarantee that every run against the old client fails; this is not claimed as a controlled reproduction of the original failure. Exact-commit WSL targeted GAS suites passed 70 tests (64 pass, 6 expected skips); protocol passed 10/10 and integration 3/3 pre-commit runs. Local full-core evidence on `b6c1b11` remains incomplete: the first run had one unrelated command-executor timeout failure under load (the isolated test passed); a follow-up passed all 610 local tests but WSL became unresponsive during native multi-project verification. Preserve those results as incomplete/failed local evidence. PR #105 exact-head checks and post-merge run `40015030829` passed. No live migration, activation, deployment, or commissioning is implied. The next large slice is Milestone 3C, **Repeated unattended trials**: an isolated useful objective with a clear finish condition, measuring accepted outcomes, recovery time, duplicate/conflicting effects, lost/stranded work, unnecessary model calls, repeated non-progress, human rescue, and quiet after completion; identify human-rescued runs.**
+## Current progress
+
+- **Merged baseline:** PR #107 merged at
+  `70b511184dde069191e7c82b649c6c96b4bddb42`; post-merge CI `40185638482`
+  passed (`core` and `gas-data-api-role-handoff`). This follows #102 coordinator,
+  #103 purpose-bound assignments, #104 multi-project isolation/fairness, #105 F4
+  harness hardening, and #106 roadmap reconciliation (merge `fd2d0c8`, post-merge
+  CI `40021470976` passed).
+- **Milestone 3C offline slice complete:** four scripted trials, three accepted
+  outcomes and one explicit bounded reconsideration. The corrected campaign at
+  `384558e` records 6 objective executions, 18 worker invocations, 6 simulated
+  effects, and zero real model calls, duplicate/conflicting effects, stranded
+  work, or human interventions. Actual coordinator termination with a surviving
+  worker recovered in **315.3 ms**, including test-only lease-expiry fast-forward.
+  See the detailed status under 3C and
+  [the qualification report](VNEXT-UNATTENDED-TRIAL-QUALIFICATION.md).
+- **Merged — Milestone 3E, Node-first cleanup:** PR #108 merged at
+  `242223579b9ae875894a6c8476e1b5db1359c310` (head
+  `b26bcdbe40adf055f719c7d4353bf4bf284003e1`). It extracts shared validation,
+  retires the five legacy autonomous CLI commands, and aligns help/runbook
+  guidance. The separate CI repair, PR #109, merged first at
+  `38c40331ef5456e94774038744c899bc5d9b92ed` after replacing the deleted
+  Docker Hub MinIO images with checksum-pinned GitHub release binaries. Fresh
+  PR #108 checks passed, as did post-merge main CI `40350177230` and Legacy S3
+  run `40350177481`. Two earlier failed `legacy-s3` check runs remain attached
+  to the same head in GitHub's historical check rollup; the latest PR run and
+  the post-merge run are green.
+- **First-launch scope:** Node/PostgreSQL/OpenCode with CLI input and local
+  artifacts. There is no running implementation to migrate from. GAS/email
+  remains separate; its retention or removal is undecided. Real decision-authority
+  integration, enforced worker permissions, and host qualification remain launch
+  obligations. Offline campaign success does not establish these.
+- **Open findings:** F2 release controls and F4's original wrong-marker trigger
+  remain open. F3 was fixed in #86; the table below now reflects that disposition.
+  No live migration, activation, deployment, or commissioning is claimed.
+
+### Historical boundary progress
+
+PR #105 local full-core evidence on `b6c1b11` remains incomplete: the first run
+had a command-executor timeout under load (isolated test passed); a follow-up
+passed all 610 local tests but WSL became unresponsive during native multi-project
+verification. Those failed/incomplete results remain distinct from its passing
+exact-head CI and post-merge run `40015030829`.
+
 Changes 1
 and 2 on the Node operating boundary (#76) are done; the separate F1 GAS
 watermark correction is merged forward (004 snapshot binding plus 005
@@ -64,7 +108,7 @@ cutover is implied.
 | GAS canonical settlement — durable continuation proposals | `007_continuation_proposals.sql` in #81 @ `8f838c4`; forward-only within the checksum-ledger chain 002–007; merged to the email stack base at `95e2bd1` | GAS suites through the public RPC: proposal bound to the settling attempt (fence and captured input snapshot), cooldown-gated consideration, consumption exactly with authorized successor admission, exactly one successor under competing claims, waiting quiet, late-input supersession, delivery-first rejection staying pending, rollback and inert exact replay, and a 002–006→007 backfill admitting only authorized legacy continuations; the native CI stage executes the concurrent proposal admission proof (not skipped); focused 61 tests / 58 pass / 3 native-only skips / 0 fail | Merged to main via #101; not applied live; acceptance binding remains operationally unqualified; `no_effect` recovery is closed by decision (permanent stop) |
 | GAS canonical settlement — acceptance separation | `008_acceptance_decisions.sql` in #84 @ accepted head `e38e702`; forward-only within the checksum-ledger chain 002–008; merged to the email stack base at `c0e0d77` | GAS suites through the public RPC: acceptance binds the settled revision to the canonical digest over the exact settlement receipt, exact replay returns the recorded decision, divergent content fails before mutation, stale decisions fail closed against superseded input / newer attempts / unknown work, the terminal transition rolls back atomically, an unprovisioned instance cannot accept, new acceptance is refused during unresolved reconciliation blocks or active mutation with the read-only context aligned, and an accepted decision replays while exclusions hold; the native CI stage executes concurrent acceptance and authority rotation/revocation racing acceptance in both orderings (verified not skipped at the accepted head); reviewer-verified focused integration/upgrade/F1 suites 61 pass / 5 native-only skips / 0 fail | Merged to main via #101; not applied live; acceptance-authority provisioning, the actual accepting caller, and its substantive review remain operating-path qualification obligations |
 | F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C implemented on main (#88 at `9e8413a`, recovery invariants hardened by #90 at `007792d`); #101 carries the integrated stack | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
-| F4 — GAS SQL-worker stale-response hardening | PR #105 at `b6c1b11`, merged at `d8dc44c`: monotonic response-sequence matching, FIFO worker handling, shared client for both SQL-worker consumers, and observed-state/result diagnostics | Partial hardening for stale-response consumption; the original wrong-marker (`blocked` vs `uncertain`) trigger at `test/gas-email.integration.test.mjs:211` remains unresolved. The regression exercises a stale response but does not claim every old-client schedule fails or reproduce the original trigger. Timeline: GAS failures preceded `55aeae1`; Docker rate-limit failures followed that hardening and blocked CI; PR #104's first attempt then reproduced the GAS failure, so the earlier hardening did not eliminate it. Exact-commit targeted WSL suites: 70 tests, 64 pass / 6 expected skips / 0 fail; protocol 10/10 and integration 3/3 stability runs passed pre-commit. Exact-head CI runs `40004335202` / `40004404632` and post-merge run `40015030829` passed | No operational change. F4 remains open pending resolution of the original trigger. Milestone 3C, Repeated unattended trials, remains the next large slice |
+| F4 — GAS SQL-worker stale-response hardening | PR #105 at `b6c1b11`, merged at `d8dc44c`: monotonic response-sequence matching, FIFO worker handling, shared client for both SQL-worker consumers, and observed-state/result diagnostics | Partial hardening for stale-response consumption; the original wrong-marker (`blocked` vs `uncertain`) trigger at `test/gas-email.integration.test.mjs:211` remains unresolved. The regression exercises a stale response but does not claim every old-client schedule fails or reproduce the original trigger. Timeline: GAS failures preceded `55aeae1`; Docker rate-limit failures followed that hardening and blocked CI; PR #104's first attempt then reproduced the GAS failure, so the earlier hardening did not eliminate it. Exact-commit targeted WSL suites: 70 tests, 64 pass / 6 expected skips / 0 fail; protocol 10/10 and integration 3/3 stability runs passed pre-commit. Exact-head CI runs `40004335202` / `40004404632` and post-merge run `40015030829` passed | No operational change. F4 remains open pending resolution of the original trigger. The later 3C offline campaign does not resolve F4 |
 
 The PR's exact-head CI checks are the native evidence record; local PGlite is not
 native PostgreSQL and local Windows runs do not prove Linux process groups.
@@ -379,8 +423,9 @@ cross-process proof passed. Follow-up targeted evidence at `c609d19`: coordinato
 skips). PR #102 exact-head checks `39674851927` and `39674864967`, and merged-head
 CI run `39677618494`, passed. These historical results remain tied to their
 tested commits. The coordinator code is merged, but this does not qualify live
-operation or commissioning; Milestone 3 recovery and unattended-trial gates
-remain.
+operation or commissioning. The later PR #107 offline campaign supplies the
+bounded recovery and unattended evidence described under Milestone 3C; remaining
+operational gaps are not closed by either increment.
 
 **B. Bounded Celestan assignment purposes.** Stewardship (bounded next-work
 proposals), Execution (result, evidence, remaining work, uncertainties), Review
@@ -422,15 +467,82 @@ or conflicting effects, lost or stranded work, unnecessary model calls, repeated
 non-progress, human coordination/rescue, stable quiet behavior after completion.
 Human-rescued runs must be identified explicitly.
 
-**D. Reversible cutover.** Stop old admission → inventory and reconcile
-in-flight work and effects → verify artifact/schema/permissions/scheduler →
-enable one coordinator → observe with a tested pause path. Rollback stops new
-admission first and preserves reconciliation access; it must not reactivate a
-competing writer while old effects remain unresolved.
+*Status: bounded offline campaign delivered in PR #107 (head `b552de8`, merge
+`70b5111`).* Corrected campaign `edb51127-fa3d-4c26-966e-6d2e1f311c9b`
+tested clean commit `384558e5188a0a02c2ff285788c0e60365e7b338` on Linux,
+Node 22.14.0 and PostgreSQL 16.15. Campaign suite: 2/2; supporting coordinator
+CLI 6/6, recoverable dispatch 14/14, multi-project 13/13; zero failures/skips.
+Exact-head CI `40184966367` / `40185006409` and post-merge `40185638482` passed.
+
+Four predeclared trials produced three accepted outcomes and one
+`reconsideration-exhausted` outcome, explicitly not counted as accepted success.
+Durable records show 6 objective executions, 12 assignment executions, 18 scripted
+worker invocations, 6 simulated effects, zero duplicate/conflicting effects,
+zero stranded work, zero real model calls, and zero human interventions/rescues.
+Two later quiet probes per trial left execution, assignment, worker, and effect
+counts unchanged. The actual coordinator was killed while its worker survived;
+restart settled retained evidence without repeating the objective execution.
+Corrected-campaign recovery was 315.3 ms including the lease fast-forward,
+281.1 ms from fast-forward to settlement.
+
+Limits: scripted workers and decision authority, one Linux host and isolated
+database, simulated local effects only. Natural lease expiry, overlapping wakes
+during the post-kill orphan interval, long-duration operation, real model judgment,
+and production effects remain unqualified. Overlapping wakes occurred before the
+kill. Prior failed attempts and the earlier narrower successful campaign remain
+recorded in [the qualification report](VNEXT-UNATTENDED-TRIAL-QUALIFICATION.md).
+The reporting-only correction `b552de8` has focused failure-path evidence; the
+reported corrected campaign remains tied to `384558e`, not a new local campaign
+at the final head. This closes the delivered offline slice, not live qualification.
+
+**D. Qualified first launch and reversible stop.** No running implementation is
+being migrated. Verify the exact artifact, fresh schema, permissions, real
+decision authority, worker isolation, and timer/host → enable one coordinator →
+observe with a tested pause path. Stopping admission must preserve claims,
+receipts, and reconciliation access; repair or reset an isolated environment only
+after accounting for its outstanding effects. Legacy cutover is not a prerequisite
+for this fresh launch, although current code still requires the `legacyExcluded`
+operator assertion. Historical cutover instructions are not deployment authority.
+
+*Status: not operationally qualified.* The example authority is not a complete
+assignment-decision integration, and permission labels alone do not enforce
+read-only workers. Provision and qualify those concrete boundaries before launch.
 
 **E. Retire superseded orchestration.** Remove duplicate admission and
 scheduling decisions first, then obsolete adapters, triggers, commands, docs.
 Close #68/#69 after preserving unique required content.
+
+*Status: merged via [PR #108](https://github.com/MidnightProject-MP/CT-Runtime/pull/108)
+at `2422235` (head `b26bcdb`).* Branch `work/node-first-cleanup` started from
+`70b5111` and contains:
+
+| Commit | Delivered change |
+| --- | --- |
+| `ee2814d595f4d5a1ad658cdfa0e2458e3e03977a` | Neutral `lib/celestan-result.mjs` validators; handoff no longer imports legacy runtime; compatibility re-exports retained |
+| `f1c39c76e7c2139fcb5c87cbab240f66c30d7e54` | Removes legacy CLI `run`, `wake`, `schedule`, `scheduler`, `recover`; rejects them before store creation; updates tests and active guidance |
+| `b26bcdbe40adf055f719c7d4353bf4bf284003e1` | Aligns runbook and CLI help, including discoverable vNext migration setup |
+
+Reported exact-commit WSL evidence at `b26bcdb`: clean checkout, Node 22.14.0,
+PostgreSQL 16.15; retirement/runtime/handoff suites 45/45; targeted coordinator
+CLI 6/6, recoverable dispatch 14/14, cancellation 11/11 (31 pass, zero skips).
+An earlier combined run failed a legacy scheduler test, then passed isolated
+5/5 and in the exact-commit rerun; its cause remains unresolved, not fixed by
+the documentation correction. Review approved push/PR. Fresh PR #108 checks
+passed: `core` and `gas-data-api-role-handoff` in run `40349077380`;
+`legacy-s3` in run `40349077365`. Post-merge main CI `40350177230` and Legacy S3
+`40350177481` also passed. Earlier failed `legacy-s3` runs `40200639886` /
+`40200672421` remain in GitHub's historical check rollup and reflect deleted
+upstream Docker Hub images, not this cleanup. The separate repair
+[PR #109](https://github.com/MidnightProject-MP/CT-Runtime/pull/109) replaced
+those images with checksum-pinned GitHub release binaries and merged at
+`38c4033` before this PR; GitHub retained the earlier failures in the rollup, so
+the PR page did not present a fully clean check rollup at merge time. The latest
+PR and post-merge runs are green.
+
+Next: trace remaining legacy runtime consumers before deleting implementations.
+Retained migration, inspection, evidence, and Observer utilities still have
+consumers. GAS/email retention is a separate scope decision; no GAS removal or
+issue #68/#69 closure is claimed.
 
 ## Tracked findings carried forward
 
@@ -438,7 +550,8 @@ Close #68/#69 after preserving unique required content.
 | --- | --- | --- |
 | F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. The suites pin the separate eligibility guarantee too: after a permitted recovery succeeds on the older three-input batch, the fourth input must become eligible **without another human message** — preventing repeated commissioning and eventually processing preserved input are distinct guarantees. |
 | F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — repository configuration. |
-| F3 | A9 overlapping-acquisition race test is timing-flaky: `test/vnext-a9-transactional.test.mjs:105` pins the loser's refusal to `E_PROJECT_AUTH_HELD` / `Work Unit changed before execution could be claimed`, but when the two `claimWorkUnit` calls land ≥1 ms apart the loser is refused earlier at `lib/vnext/memory-store.mjs:130` (`execution claim expiration does not match Work Unit claim`) and the pinned regex misses. Observed once on PR #84's run (attempt 2, one failing test; same SHA green elsewhere and on the final attempt). | Open — separate small PR. The fix must make the race test deterministic or accept the documented losing-claim outcome, without weakening the single-winner invariant. |
+| F3 | A9 overlapping-acquisition race test used independently sampled claim clocks, allowing a different losing-claim refusal and missing its pinned regex. | Fixed on main in #86 at `164fbda`: deterministic shared-clock claim, preserving the single-winner invariant. This is distinct from the later legacy scheduler-test failure reported during cleanup verification. |
+| F4 | GAS SQL-worker stale-response cascade and original wrong-marker (`blocked` vs `uncertain`) failure. | Partial hardening merged in #105 at `d8dc44c`: FIFO handling and monotonic response matching. Original wrong-marker trigger remains unresolved; green reruns do not establish its cause or resolution. See proof-status evidence above. |
 
 ## Management rules
 
