@@ -39,8 +39,10 @@ permissions:
 env:
   NODE_VERSION: '22.14.0'
   POSTGRES_URL: postgresql://postgres:test@127.0.0.1:5432/ctruntime
-  MINIO_IMAGE: minio/minio:RELEASE.2025-04-22T22-12-26Z
-  MC_IMAGE: minio/mc:RELEASE.2025-04-16T18-13-26Z
+  MINIO_BINARY_URL: https://github.com/minio/minio/releases/download/RELEASE.2025-04-22T22-12-26Z/minio.linux-amd64.RELEASE.2025-04-22T22-12-26Z
+  MINIO_BINARY_SHA256: 53e2a2cb16c5366ea6fbbc479c19ddb4c6a0948273e752f740fb1fbf27bb817c
+  MC_BINARY_URL: https://github.com/minio/mc/releases/download/RELEASE.2025-04-16T18-13-26Z/mc.linux-amd64.RELEASE.2025-04-16T18-13-26Z
+  MC_BINARY_SHA256: ac90da87a35641be5a0ac75d49de5161ddb47d629b5ba01261b0ae9e00aea15f
   FOUNDRY_COMMIT: ${{ vars.FOUNDRY_COMMIT || '5bb45fca93394800f533e75150599a54e6aaf96b' }}
 
 jobs:
@@ -85,19 +87,36 @@ jobs:
           END
           $$;
           SQL
+      - name: Install pinned MinIO and mc binaries
+        run: |
+          set -euo pipefail
+          install -d "$RUNNER_TEMP/minio-bin"
+          curl --fail --silent --show-error --location "$MINIO_BINARY_URL" --output "$RUNNER_TEMP/minio-bin/minio"
+          printf '%s  %s\n' "$MINIO_BINARY_SHA256" "$RUNNER_TEMP/minio-bin/minio" | sha256sum --check -
+          curl --fail --silent --show-error --location "$MC_BINARY_URL" --output "$RUNNER_TEMP/minio-bin/mc"
+          printf '%s  %s\n' "$MC_BINARY_SHA256" "$RUNNER_TEMP/minio-bin/mc" | sha256sum --check -
+          chmod +x "$RUNNER_TEMP/minio-bin/minio" "$RUNNER_TEMP/minio-bin/mc"
       - name: Start healthy MinIO service
         run: |
-          docker run --detach --name minio --publish 9000:9000 \
-            --env MINIO_ROOT_USER=test --env MINIO_ROOT_PASSWORD=testtest \
-            "$MINIO_IMAGE" server /data
+          set -euo pipefail
+          install -d "$RUNNER_TEMP/minio-data"
+          MINIO_ROOT_USER=test MINIO_ROOT_PASSWORD=testtest \
+            nohup "$RUNNER_TEMP/minio-bin/minio" server "$RUNNER_TEMP/minio-data" \
+            --address 127.0.0.1:9000 > "$RUNNER_TEMP/minio.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/minio.pid"
           for attempt in {1..30}; do
-            curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live; then
+              exit 0
+            fi
             sleep 2
           done
-          docker logs minio
+          cat "$RUNNER_TEMP/minio.log"
           exit 1
       - name: Create integration bucket
-        run: docker run --rm --network host --entrypoint /bin/sh "$MC_IMAGE" -c "mc alias set local http://127.0.0.1:9000 test testtest && mc mb --ignore-existing local/ct-runtime"
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/minio-bin/mc" alias set local http://127.0.0.1:9000 test testtest
+          "$RUNNER_TEMP/minio-bin/mc" mb --ignore-existing local/ct-runtime
       - name: Apply migrations explicitly
         run: npm run migrate -- --database-url "$POSTGRES_URL"
       - name: Run S3 integration
@@ -131,3 +150,9 @@ jobs:
           CT_RUNTIME_CONFIG_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
           CT_RUNTIME_GIT_REPOSITORY: ${{ github.repository }}
           CT_RUNTIME_GIT_COMMIT: ${{ github.sha }}
+      - name: Stop MinIO
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/minio.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/minio.pid")" 2>/dev/null || true
+          fi
