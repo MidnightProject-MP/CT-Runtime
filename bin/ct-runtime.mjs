@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { invoke, observePending, recover, runScheduler, validateNextWake, validateWakeReason } from '../lib/runtime.mjs';
+import { observePending } from '../lib/runtime.mjs';
 import { createStore, createCapabilityStores } from '../lib/stores.mjs';
 import { loadConfig } from '../lib/config.mjs';
 import { migrate } from '../lib/migration.mjs';
@@ -16,39 +16,36 @@ const args = process.argv.slice(2);
 const command = args[0];
 const values = (name) => args.flatMap((v, i) => v === name ? [args[i + 1]] : []).filter((v) => v !== undefined);
 const opt = (name, fallback) => values(name)[0] ?? fallback;
-const defined = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-const LEGACY_AUTONOMOUS_COMMANDS = new Set(['run', 'wake', 'schedule', 'scheduler', 'recover']);
-const legacyAutonomyRetired = () => {
-  if (!LEGACY_AUTONOMOUS_COMMANDS.has(command) || process.env.CT_AUTONOMY_MODE !== 'vnext') return false;
-  console.log(JSON.stringify({ status: 'RETIRED_VNEXT', command, autonomy_mode: 'vnext' }));
-  return true;
-};
-const help = () => console.log(`CT-Runtime: capability-first execution mechanics (durable_state, evidence_store, ...)
+const RETAINED_COMMANDS = new Set([
+  'migrate', 'capabilities', 'adapters', 'bindings', 'doctor', 'reconstruct',
+  'export-observer', 'evidence', 'observe-pending', 'status', 'inspect'
+]);
+const help = () => console.log(`CT-Runtime: vNext execution utilities
 
-Commands:
-  run --store PATH --project NAME --model MODEL --agent AGENT --task TEXT [--cwd PATH] [--opencode BIN] [--opencode-arg ARG]
-  schedule --store PATH --time ISO --reason REASON --priority NAME --project NAME [--model MODEL --agent AGENT --task TEXT --cwd PATH --observer PATH]
-  scheduler --store PATH --model MODEL --agent AGENT --task TEXT [--cwd PATH] [--observer PATH] [--opencode BIN]
-  recover --store PATH [--stale-ms N]
+First-launch setup:
+  node bin/vnext-pilot.mjs migrate --config /etc/celestan/pilot.json
+
+Autonomous execution:
+  node bin/vnext-pilot.mjs submit|tick|run|status|inspect|accept|decide-assignment|cancel|reconcile|pause|resume
+  See docs/VNEXT-PILOT.md for configuration and command details.
+
+Retained utilities:
+  migrate --database-url URL
+  doctor
+  reconstruct
+  export-observer
   observe-pending --store PATH --observer PATH [--semantic-result FILE]
   evidence export EXECUTION|ses_... --store PATH [--project NAME] [--rich|--source rich]
   evidence backfill --store PATH [--project NAME]  # all local OpenCode sessions; current-version metadata-only sanitized revisions
-  wake --store PATH --reason REASON
   status | inspect --id ID
   capabilities [--project NAME]        # list purpose-level capabilities and current bindings
   adapters [--capability NAME]         # list adapters with purpose/authority/limitations
-  bindings [--project NAME]            # show resolved bindings (global + per-project)
-
-Celestan requests capabilities, not vendors:
-  durable_state:      persist canonical execution state via durable_state (not "write to Neon")
-  evidence_store:     put raw logs via evidence_store (not "write to R2")
-  knowledge_publishing: publishChronicle({...}) via knowledge_publishing (not "write to Confluence")
-Bindings (bindings.example.json / CELESTAN_BINDINGS_JSON) select the adapter; changing Neon↔Supabase or R2↔S3 changes only config, not Celestan code.
-The scheduler launches due wakes once, using only its caller-supplied launch values.
-Each run must write the exact CT_RUNTIME_RESULT_FILE JSON handoff. Runtime schedules
-only its validated requested_next_wake. State is retained in the selected store.`);
+  bindings [--project NAME]            # show resolved bindings (global + per-project)`);
 if (!command || command === '--help') { help(); process.exit(command ? 0 : 2); }
-if (legacyAutonomyRetired()) process.exit(0);
+if (!RETAINED_COMMANDS.has(command)) {
+  console.error(`Unknown command: ${command}. Autonomous execution uses node bin/vnext-pilot.mjs (see docs/VNEXT-PILOT.md).`);
+  process.exit(2);
+}
 
 try {
   if (command === 'migrate') {
@@ -88,19 +85,8 @@ try {
     console.log(JSON.stringify(await observePostgres({ store, observerStore: configured.observerStore, semanticResultFile: opt('--semantic-result'), reflection })));
     process.exit(0);
   }
-  if (command === 'run') {
-    const requestedId = opt('--id');
-    const existing = requestedId ? await store.manifest(requestedId).catch(() => null) : null;
-    const result = existing ? { manifest: existing, created: false } : await store.createManifest({ executionId: requestedId, project: opt('--project'), task: opt('--task'), model: opt('--model'), agent: opt('--agent'), cwd: opt('--cwd'), wake_reason: opt('--reason', 'user'), topology: opt('--parent') || opt('--root') ? { rootId: opt('--root', requestedId), parentId: opt('--parent'), childIds: [] } : undefined });
-    console.log(JSON.stringify(result));
-    if (result.created || ['requeued', 'manifested', 'retrying'].includes(result.manifest.execution.status)) { const run = await invoke({ store, executionId: result.manifest.execution.id, command: opt('--opencode', process.env.OPENCODE_BIN || 'opencode'), commandArgs: values('--opencode-arg'), model: opt('--model', result.manifest.execution.model), agent: opt('--agent', result.manifest.execution.agent), task: opt('--task', result.manifest.execution.task), cwd: opt('--cwd', result.manifest.execution.cwd), env: Object.fromEntries(values('--env').map((v) => v.split('='))), secretNames: values('--secret-name'), timeoutMs: Number(opt('--timeout', '3600000')), dryRun: args.includes('--dry-run'), resultFile: opt('--result-file'), maxRetries: Number(opt('--max-retries', '2')) }); console.log(JSON.stringify(run)); if (run.status !== 'success') process.exitCode = 1; }
-  } else if (command === 'wake') { const reason = validateWakeReason(opt('--reason')); const wake = { time: new Date().toISOString(), reason, priority: opt('--priority', 'normal'), project: opt('--project') }; const scheduled = await store.schedule(wake, { command: opt('--opencode', process.env.OPENCODE_BIN || 'opencode'), model: opt('--model'), agent: opt('--agent'), task: opt('--task'), cwd: opt('--cwd'), observerPath: opt('--observer') }); console.log(JSON.stringify({ status: 'enqueued', ...scheduled }));
-  } else if (command === 'schedule') { console.log(JSON.stringify(await store.schedule({ time: opt('--time'), reason: opt('--reason'), priority: opt('--priority', 'normal'), project: opt('--project') }, { command: opt('--opencode'), model: opt('--model'), agent: opt('--agent'), task: opt('--task'), cwd: opt('--cwd'), observerPath: opt('--observer') })));
-  } else if (command === 'scheduler') { const scheduler = await runScheduler({ store, invokeOptions: defined({ command: opt('--opencode', process.env.OPENCODE_BIN), model: opt('--model'), agent: opt('--agent'), task: opt('--task'), cwd: opt('--cwd'), observerPath: opt('--observer'), resultFile: opt('--result-file'), dryRun: args.includes('--dry-run') ? true : undefined, maxRetries: values('--max-retries').length ? Number(opt('--max-retries')) : undefined }) }); console.log(JSON.stringify(scheduler)); if (!scheduler.success) process.exitCode = 1;
-  } else if (command === 'recover') console.log(JSON.stringify(await recover({ store, staleMs: Number(opt('--stale-ms', '300000')) })));
-  else if (command === 'status') console.log(JSON.stringify({ manifests: await store.manifestsAll() }));
+  if (command === 'status') console.log(JSON.stringify({ manifests: await store.manifestsAll() }));
   else if (command === 'inspect') console.log(JSON.stringify(await store.manifest(opt('--id')), null, 2));
   else if (command === 'observe-pending') console.log(JSON.stringify(await observePending({ store, observerPath: opt('--observer'), semanticResultFile: opt('--semantic-result') })));
-  else if (command === 'schedule-help') help();
   else { help(); process.exitCode = 2; }
 } catch (error) { console.error(JSON.stringify({ error: String(error.message).slice(0, 500) })); process.exitCode = 1; }
