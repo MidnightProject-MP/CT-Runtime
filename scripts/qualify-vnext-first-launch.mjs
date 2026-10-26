@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Pool } from 'pg';
-import { applyCleanupResults } from './vnext-first-launch-cleanup.mjs';
+import { applyCleanupResults, verifyCleanupOperation } from './vnext-first-launch-cleanup.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const node = process.execPath;
@@ -560,39 +560,53 @@ try {
     cleanupOutcomes.systemd_cleanup_attempts = [...(cleanupOutcomes.systemd_cleanup_attempts ?? []), ...systemdCleanup.attempts];
     timerUnit = null;
   }
+  const systemdCleanupFailed = cleanupOutcomes.systemd_cleanup_verified === false;
   if (runtimePool) {
-    try { await runtimePool.end(); cleanupOutcomes.runtime_pool = true; }
-    catch { cleanupOutcomes.runtime_pool = false; }
+    const outcome = await verifyCleanupOperation(() => runtimePool.end(), async () => runtimePool.ended === true);
+    cleanupOutcomes.runtime_pool = outcome.ok;
+    cleanupOutcomes.runtime_pool_details = outcome;
   }
   if (freshAdminPool) {
-    try { await freshAdminPool.end(); cleanupOutcomes.fresh_admin_pool = true; }
-    catch { cleanupOutcomes.fresh_admin_pool = false; }
+    const outcome = await verifyCleanupOperation(() => freshAdminPool.end(), async () => freshAdminPool.ended === true);
+    cleanupOutcomes.fresh_admin_pool = outcome.ok;
+    cleanupOutcomes.fresh_admin_pool_details = outcome;
   }
-  if (basePool && databaseCreated) {
-    try {
+  if (basePool && databaseCreated && !systemdCleanupFailed) {
+    const outcome = await verifyCleanupOperation(async () => {
       await basePool.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1', [databaseName]);
       await basePool.query(`DROP DATABASE "${databaseName}"`);
-      cleanupOutcomes.database = (await basePool.query('SELECT 1 FROM pg_database WHERE datname=$1', [databaseName])).rowCount === 0;
-    } catch { cleanupOutcomes.database = false; }
+    }, async () => (await basePool.query('SELECT 1 FROM pg_database WHERE datname=$1', [databaseName])).rowCount === 0);
+    cleanupOutcomes.database = outcome.ok;
+    cleanupOutcomes.database_details = outcome;
+  } else if (databaseCreated && systemdCleanupFailed) {
+    cleanupOutcomes.database = false;
+    cleanupOutcomes.database_details = { status: 'retained-after-systemd-cleanup-failure' };
   }
-  if (basePool && roleCreated) {
-    try {
-      await basePool.query(`DROP ROLE "${roleName}"`);
-      cleanupOutcomes.runtime_role = (await basePool.query('SELECT 1 FROM pg_roles WHERE rolname=$1', [roleName])).rowCount === 0;
-    } catch { cleanupOutcomes.runtime_role = false; }
+  if (basePool && roleCreated && !systemdCleanupFailed) {
+    const outcome = await verifyCleanupOperation(() => basePool.query(`DROP ROLE "${roleName}"`), async () =>
+      (await basePool.query('SELECT 1 FROM pg_roles WHERE rolname=$1', [roleName])).rowCount === 0);
+    cleanupOutcomes.runtime_role = outcome.ok;
+    cleanupOutcomes.runtime_role_details = outcome;
+  } else if (roleCreated && systemdCleanupFailed) {
+    cleanupOutcomes.runtime_role = false;
+    cleanupOutcomes.runtime_role_details = { status: 'retained-after-systemd-cleanup-failure' };
   }
   if (basePool) {
-    try { await basePool.end(); cleanupOutcomes.base_pool = true; }
-    catch { cleanupOutcomes.base_pool = false; }
+    const outcome = await verifyCleanupOperation(() => basePool.end(), async () => basePool.ended === true);
+    cleanupOutcomes.base_pool = outcome.ok;
+    cleanupOutcomes.base_pool_details = outcome;
   }
   if (keep && stateRoot) {
     cleanupOutcomes.temporary_state = 'retained';
     report.retained_state = stateRoot;
+  } else if (systemdCleanupFailed && stateRoot) {
+    cleanupOutcomes.temporary_state = 'retained';
+    cleanupOutcomes.temporary_state_details = { status: 'retained-after-systemd-cleanup-failure' };
+    report.retained_state = stateRoot;
   } else if (stateRoot) {
-    try {
-      await rm(stateRoot, { recursive: true, force: true });
-      cleanupOutcomes.temporary_state = await isAbsent(stateRoot);
-    } catch { cleanupOutcomes.temporary_state = false; }
+    const outcome = await verifyCleanupOperation(() => rm(stateRoot, { recursive: true, force: true }), async () => isAbsent(stateRoot));
+    cleanupOutcomes.temporary_state = outcome.ok;
+    cleanupOutcomes.temporary_state_details = outcome;
   }
   if (cleanupOutcomes.database === false || cleanupOutcomes.runtime_role === false) {
     report.cleanup_resources = {
