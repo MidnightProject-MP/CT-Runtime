@@ -495,18 +495,30 @@ The reporting-only correction `b552de8` has focused failure-path evidence; the
 reported corrected campaign remains tied to `384558e`, not a new local campaign
 at the final head. This closes the delivered offline slice, not live qualification.
 
-**D. Qualified first launch and reversible stop.** No running implementation is
-being migrated. Verify the exact artifact, fresh schema, permissions, real
-decision authority, worker isolation, and timer/host → enable one coordinator →
-observe with a tested pause path. Stopping admission must preserve claims,
-receipts, and reconciliation access; repair or reset an isolated environment only
-after accounting for its outstanding effects. Legacy cutover is not a prerequisite
-for this fresh launch, although current code still requires the `legacyExcluded`
-operator assertion. Historical cutover instructions are not deployment authority.
+**D. Qualified first launch and reversible stop (Milestone 3D).** No running
+implementation is being migrated. Verify the exact artifact, fresh schema,
+permissions, real decision authority, worker isolation, and timer/host → enable
+one coordinator → observe with a tested pause path. Stopping admission must
+preserve claims, receipts, and reconciliation access; repair or reset an isolated
+environment only after accounting for its outstanding effects. Legacy cutover is
+not a prerequisite for this fresh launch, although current code still requires the
+`legacyExcluded` operator assertion. Historical cutover instructions are not
+deployment authority.
 
-*Status: not operationally qualified.* The example authority is not a complete
-assignment-decision integration, and permission labels alone do not enforce
-read-only workers. Provision and qualify those concrete boundaries before launch.
+*Status: not operationally qualified.* Required evidence before launch:
+
+- a real assignment-decision authority, not the deliberately incomplete example
+  adapter;
+- an OS- or sandbox-enforced worker permission boundary, not only
+  `access_class`, permissions metadata, or prompt text;
+- a fresh database with the exact migrations and least-privilege runtime roles,
+  separate from production credentials;
+- one host timer invocation with the configured timeout and restart behavior;
+- pause preventing new admission while a live worker finishes, plus restart and
+  recovery without duplicate effects.
+
+None of these is established by the offline 3C campaign or the Legacy S3 repair.
+F2 and F4 remain open independently.
 
 **E. Retire superseded orchestration.** Remove duplicate admission and
 scheduling decisions first, then obsolete adapters, triggers, commands, docs.
