@@ -165,6 +165,16 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
         && decision.snapshotDigest === context.snapshotDigest;
     }
     export async function verifyCancellation(decision) { return decision?.ref?.startsWith('operator-cancel:') === true; }
+    export async function verifyReconciliation(decision, context) {
+      return decision?.ref?.startsWith('operator-reconcile:') === true
+        && decision.evidence_ref === 'test-evidence:' + context.executionId
+        && decision.sender_stop_confirmed === true
+        && decision.project_id === context.projectId
+        && decision.work_unit_id === context.workUnitId
+        && decision.execution_id === context.executionId
+        && decision.fence === context.fence
+        && decision.resolution === context.resolution;
+    }
   `;
   const baseConfig = {
     enabled: true,
@@ -215,6 +225,8 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
       execution_id: block.execution_id,
       fence: Number(block.fence),
       resolution,
+      evidence_ref: `test-evidence:${block.execution_id}`,
+      sender_stop_confirmed: true,
     };
   };
   const writeDecision = async (name, value) => {
@@ -378,6 +390,24 @@ test('native coordinator CLI survives restart, recovers real worker, binds decis
 
       const blockerDecision = await decisionForBlock(`operator-reconcile:${randomUUID()}`, 'effect_applied');
       const blockerDecisionFile = await writeDecision('reconcile-status-blocker', blockerDecision);
+      const noReconciliationAuthorityPath = path.join(directory, 'authority-no-reconciliation.mjs');
+      const noReconciliationConfigPath = path.join(directory, 'pilot-no-reconciliation-authority.json');
+      await writeFile(noReconciliationAuthorityPath, 'export const unused = true;');
+      await writeFile(noReconciliationConfigPath, JSON.stringify({ ...blockerConfig, authorityModule: noReconciliationAuthorityPath }));
+      const missingVerifier = await invoke(cliPath, 'reconcile', noReconciliationConfigPath, connectionString,
+        ['--decision-file', blockerDecisionFile], 1);
+      assert.equal(missingVerifier.status, 'failed');
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows[0].count, 1,
+        'missing reconciliation verifier must leave the durable block intact');
+      const rejectingAuthorityPath = path.join(directory, 'authority-reject-reconciliation.mjs');
+      const rejectingConfigPath = path.join(directory, 'pilot-reject-reconciliation.json');
+      await writeFile(rejectingAuthorityPath, 'export async function verifyReconciliation() { return false; }');
+      await writeFile(rejectingConfigPath, JSON.stringify({ ...blockerConfig, authorityModule: rejectingAuthorityPath }));
+      const rejectedDecision = await invoke(cliPath, 'reconcile', rejectingConfigPath, connectionString,
+        ['--decision-file', blockerDecisionFile], 1);
+      assert.equal(rejectedDecision.status, 'failed');
+      assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows[0].count, 1,
+        'authority rejection must leave the durable block intact');
       await invoke(cliPath, 'reconcile', blockerConfigPath, connectionString, ['--decision-file', blockerDecisionFile]);
       assert.equal((await inspect()).objectives.find(objective => objective.work_unit_id === acceptedAWorkId).accepted_completion.accepted, true);
 

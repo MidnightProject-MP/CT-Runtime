@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { testAuthorizationVerifier } from './vnext-test-authorization.mjs';
 
-const createNeonStore = (options = {}) => createNeonStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier });
+const createNeonStore = (options = {}) => createNeonStoreCore({ ...options, authorizationVerifier: testAuthorizationVerifier, reconciliationVerifier: verifyTestReconciliation });
 const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { migrateVNext } from '../lib/vnext/migration.mjs';
 import { claimWorkUnit, createExecution as createExecutionCore, createWorkUnit, startExecution, applyTurn, failExecution } from '../lib/vnext/kernel.mjs';
 import { createNeonStore as createNeonStoreCore } from '../lib/vnext/neon-store.mjs';
+import { testReconciliationDecision, verifyTestReconciliation } from './vnext-test-reconciliation.mjs';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 
@@ -44,6 +45,18 @@ async function expireClaim(pool, claim, execution) {
     execution: { ...execution, claim_expires_at: expired },
   };
 }
+
+test('Neon reconciliation refuses to run without an independent verifier', { skip: !connectionString }, async () => {
+  const pool = new Pool({ connectionString, max: 1 });
+  try {
+    const store = createNeonStoreCore({ pool });
+    const decision = testReconciliationDecision({ projectId: 'project-reconcile-no-verifier', workUnitId: 'work-reconcile-no-verifier',
+      executionId: 'exec-reconcile-no-verifier', fence: 1 });
+    await assert.rejects(store.reconcileFailure({ decision }), /reconciliation verifier is required/);
+  } finally {
+    await pool.end();
+  }
+});
 
 test('Neon grants one mutation authority across different Work Units in one project and releases it on settlement', { skip: !connectionString, timeout: 60000 }, async () => {
   const pool = new Pool({ connectionString, max: 8 });
@@ -390,8 +403,8 @@ test('Neon uncertain failure blocks another Work Unit until exact reconciliation
       project_id: projectId, work_unit_id: firstWork.work_unit_id, execution_id: firstExecution.execution_id, fence: 1, reason: 'external-effect-uncertain',
     }]);
 
-    await assert.rejects(() => store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: firstExecution.execution_id, fence: 2, resolution: 'no_effect' }), /does not match durable project block/);
-    const reconciled = await store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: firstExecution.execution_id, fence: 1, resolution: 'no_effect' });
+    await assert.rejects(() => store.reconcileFailure({ decision: testReconciliationDecision({ projectId, workUnitId: firstWork.work_unit_id, executionId: firstExecution.execution_id, fence: 2, resolution: 'no_effect' }) }), /does not match durable project block/);
+    const reconciled = await store.reconcileFailure({ decision: testReconciliationDecision({ projectId, workUnitId: firstWork.work_unit_id, executionId: firstExecution.execution_id, fence: 1, resolution: 'no_effect' }) });
     assert.equal(reconciled.state, 'actionable');
     assert.equal((await pool.query('SELECT count(*)::int AS count FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [projectId])).rows[0].count, 0);
 
