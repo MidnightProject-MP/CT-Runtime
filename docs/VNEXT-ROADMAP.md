@@ -505,19 +505,39 @@ not a prerequisite for this fresh launch, although current code still requires t
 `legacyExcluded` operator assertion. Historical cutover instructions are not
 deployment authority.
 
-*Status: not operationally qualified.* Required evidence before launch:
+*Status: local mechanics passed; operational qualification remains open.* The
+standalone WSL harness passed on exact commit `7910e44` (clean worktree, Node
+22.14.0, PostgreSQL 16.15), with a scripted authority and worker and zero model
+calls. It exercised a fresh migration ledger and restricted runtime role, a WSL
+read-only write probe, worker credential exclusion, pause while a worker remained
+live, resume, and one systemd user-timer invocation. This is not a
+`verify.mjs`-suite pass or evidence of the selected production path; details are
+recorded in PR #112. The disposable config kept both pilot flags false during
+preflight and set them true before its first bounded tick. At the remote heads
+observed before this roadmap update, PR #111 at `50ea188` and PR #112 at
+`5bb4ca6` were open, all checks were green, and `mergeStateStatus=CLEAN`; neither
+was merged. This PR #111 update requires fresh checks.
 
-- a real assignment-decision authority, not the deliberately incomplete example
-  adapter;
-- an OS- or sandbox-enforced worker permission boundary, not only
-  `access_class`, permissions metadata, or prompt text;
-- a fresh database with the exact migrations and least-privilege runtime roles,
-  separate from production credentials;
-- one host timer invocation with the configured timeout and restart behavior;
-- pause preventing new admission while a live worker finishes, plus restart and
-  recovery without duplicate effects.
+Before the selected target's first tick, observe that it has no competing legacy
+writers or in-flight effects. For this fresh launch, that target-specific
+exclusion check does not require a legacy cutover or migration exercise. The
+`legacyExcluded` boolean remains an operator assertion, not that evidence.
 
-None of these is established by the offline 3C campaign or the Legacy S3 repair.
+Still required for operational qualification:
+
+- the real assignment-decision authority, not the deliberately incomplete
+  example or deterministic local authority;
+- the selected host and service account, with an OS- or sandbox-enforced worker
+  permission boundary; the WSL read-only probe does not qualify the target host;
+- the exact approved artifact and target fresh database with least-privilege
+  runtime roles, separate from production credentials;
+- a target-host timer invocation, recurring timer/reboot behavior, and the
+  configured timeout and restart behavior;
+- pause preventing new admission while a live worker finishes, plus recovery
+  without duplicate effects on the selected path. The local pause/resume check
+  passed, while the separate 3C crash-recovery evidence remains limited to its
+  scripted environment.
+
 F2 and F4 remain open independently.
 
 **E. Retire superseded orchestration.** Remove duplicate admission and

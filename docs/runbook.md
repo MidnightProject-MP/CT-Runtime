@@ -12,7 +12,7 @@ This runbook covers the supported Node/PostgreSQL/OpenCode pilot. Image, CI, hos
 6. Apply the vNext schema with `node bin/vnext-pilot.mjs migrate --config /etc/celestan/pilot.json`. Normal operation never applies migrations.
 7. Verify the durable view with `node bin/vnext-pilot.mjs status --config /etc/celestan/pilot.json` and `inspect`. After the remaining qualification gates pass, set both `enabled` and `legacyExcluded` to `true` in `/etc/celestan/pilot.json` before running the first bounded `tick`.
 
-The two configuration booleans are operator assertions, not proof that legacy admission is excluded. Both must be `true` after qualification and before the first `tick`. Establish the real schema/grants, worker availability, authority, exact release, and absence of competing legacy work before enabling the pilot.
+The two configuration booleans are operator assertions, not proof that legacy admission is excluded. Both must be `true` after qualification and before the first `tick`. Before the first tick, inspect the selected target for competing legacy writers and in-flight effects; this fresh-launch check does not require a legacy cutover or migration exercise. Establish the real schema/grants, worker availability, authority, and exact release before enabling the pilot.
 
 ## Routine operation
 
