@@ -495,18 +495,50 @@ The reporting-only correction `b552de8` has focused failure-path evidence; the
 reported corrected campaign remains tied to `384558e`, not a new local campaign
 at the final head. This closes the delivered offline slice, not live qualification.
 
-**D. Qualified first launch and reversible stop.** No running implementation is
-being migrated. Verify the exact artifact, fresh schema, permissions, real
-decision authority, worker isolation, and timer/host → enable one coordinator →
-observe with a tested pause path. Stopping admission must preserve claims,
-receipts, and reconciliation access; repair or reset an isolated environment only
-after accounting for its outstanding effects. Legacy cutover is not a prerequisite
-for this fresh launch, although current code still requires the `legacyExcluded`
-operator assertion. Historical cutover instructions are not deployment authority.
+**D. Qualified first launch and reversible stop (Milestone 3D).** No running
+implementation is being migrated. Verify the exact artifact, fresh schema,
+permissions, real decision authority, worker isolation, and timer/host → enable
+one coordinator → observe with a tested pause path. Stopping admission must
+preserve claims, receipts, and reconciliation access; repair or reset an isolated
+environment only after accounting for its outstanding effects. Legacy cutover is
+not a prerequisite for this fresh launch, although current code still requires the
+`legacyExcluded` operator assertion. Historical cutover instructions are not
+deployment authority.
 
-*Status: not operationally qualified.* The example authority is not a complete
-assignment-decision integration, and permission labels alone do not enforce
-read-only workers. Provision and qualify those concrete boundaries before launch.
+*Status: local mechanics passed; operational qualification remains open.* The
+standalone WSL harness passed on exact commit `7910e44` (clean worktree, Node
+22.14.0, PostgreSQL 16.15), with a scripted authority and worker and zero model
+calls. It exercised a fresh migration ledger and restricted runtime role, a WSL
+read-only write probe, worker credential exclusion, pause while a worker remained
+live, resume, and one systemd user-timer invocation. This is not a
+`verify.mjs`-suite pass or evidence of the selected production path; details are
+recorded in PR #112. The disposable config kept both pilot flags false during
+preflight and set them true before its first bounded tick. At the remote heads
+observed before this roadmap update, PR #111 at `50ea188` and PR #112 at
+`5bb4ca6` were open, all checks were green, and `mergeStateStatus=CLEAN`; neither
+was merged. This PR #111 update requires fresh checks.
+
+Before the selected target's first tick, observe that it has no competing legacy
+writers or in-flight effects. For this fresh launch, that target-specific
+exclusion check does not require a legacy cutover or migration exercise. The
+`legacyExcluded` boolean remains an operator assertion, not that evidence.
+
+Still required for operational qualification:
+
+- the real assignment-decision authority, not the deliberately incomplete
+  example or deterministic local authority;
+- the selected host and service account, with an OS- or sandbox-enforced worker
+  permission boundary; the WSL read-only probe does not qualify the target host;
+- the exact approved artifact and target fresh database with least-privilege
+  runtime roles, separate from production credentials;
+- a target-host timer invocation, recurring timer/reboot behavior, and the
+  configured timeout and restart behavior;
+- pause preventing new admission while a live worker finishes, plus recovery
+  without duplicate effects on the selected path. The local pause/resume check
+  passed, while the separate 3C crash-recovery evidence remains limited to its
+  scripted environment.
+
+F2 and F4 remain open independently.
 
 **E. Retire superseded orchestration.** Remove duplicate admission and
 scheduling decisions first, then obsolete adapters, triggers, commands, docs.
