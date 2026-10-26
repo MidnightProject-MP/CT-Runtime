@@ -173,9 +173,17 @@ async function stopUnit(unit) {
   const serviceStateAfter = await systemdProperties(`${unit}.service`, ['LoadState', 'ActiveState']);
   const timerInactive = timerStateAfter.LoadState === 'not-found' || timerStateAfter.ActiveState === 'inactive';
   const serviceInactive = serviceStateAfter.LoadState === 'not-found' || serviceStateAfter.ActiveState === 'inactive';
-  const reset = await run('systemctl', ['--user', 'reset-failed', `${unit}.timer`, `${unit}.service`], { timeoutMs: 10000 });
-  let timerLinkRemoved = false;
-  let serviceLinkRemoved = false;
+  const details = {
+    timer_stop: timerStopNeeded ? timerStop.code === 0 : 'not-needed',
+    service_stop: serviceStopNeeded ? serviceStop.code === 0 : 'not-needed',
+    service_inactive: serviceInactive,
+    timer_inactive: timerInactive,
+    service_link_removed: false,
+    timer_link_removed: false,
+    daemon_reload: false,
+  };
+  if ([details.timer_stop, details.service_stop, serviceInactive, timerInactive]
+    .some(value => value !== true && value !== 'not-needed')) return { ok: false, details };
   try {
     for (const extension of ['service', 'timer']) {
       const link = path.join(unitDirectory, `${unit}.${extension}`);
@@ -183,20 +191,11 @@ async function stopUnit(unit) {
         if ((await lstat(link)).isSymbolicLink()) await rm(link, { force: true });
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
-    serviceLinkRemoved = await isAbsent(serviceLink);
-    timerLinkRemoved = await isAbsent(timerLink);
+    details.service_link_removed = await isAbsent(serviceLink);
+    details.timer_link_removed = await isAbsent(timerLink);
   } catch {}
   const reloaded = await run('systemctl', ['--user', 'daemon-reload'], { timeoutMs: 10000 });
-  const details = {
-    timer_stop: timerStopNeeded ? timerStop.code === 0 : 'not-needed',
-    service_stop: serviceStopNeeded ? serviceStop.code === 0 : 'not-needed',
-    service_inactive: serviceInactive,
-    timer_inactive: timerInactive,
-    service_link_removed: serviceLinkRemoved,
-    timer_link_removed: timerLinkRemoved,
-    daemon_reload: reloaded.code === 0,
-    reset_failed: reset.code === 0,
-  };
+  details.daemon_reload = reloaded.code === 0;
   const required = Object.values(details).filter(value => value !== 'not-needed');
   return { ok: required.every(value => value === true), details };
 }
@@ -206,9 +205,9 @@ async function cleanupSystemdUnit(unit) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const result = await stopUnit(unit);
     attempts.push(result);
-    if (result.ok) return { ok: true, attempts };
+    if (result.ok) break;
   }
-  return { ok: false, attempts };
+  return { ok: attempts.every(result => result.ok), attempts };
 }
 
 async function systemdProperties(unit, properties) {
