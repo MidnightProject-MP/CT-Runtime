@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Pool } from 'pg';
+import { applyCleanupResults, verifyCleanupOperation } from './vnext-first-launch-cleanup.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const node = process.execPath;
@@ -87,6 +88,11 @@ async function exists(file) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
+async function isAbsent(file) {
+  try { await lstat(file); return false; }
+  catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+}
+
 async function countCoordinatorPasses(pool, coordinatorId) {
   const result = await pool.query(`SELECT count(*)::int AS count FROM vnext_events
     WHERE event_type='coordinator.pass' AND payload->>'coordinator_id'=$1`, [coordinatorId]);
@@ -145,26 +151,63 @@ async function localDiagnostics(stateRoot) {
   };
 }
 
-async function stopUnit(unit, files = []) {
-  if (!unit) return true;
-  await run('systemctl', ['--user', 'stop', `${unit}.timer`], { timeoutMs: 10000 }).catch(() => {});
-  await run('systemctl', ['--user', 'stop', `${unit}.service`], { timeoutMs: 10000 }).catch(() => {});
-  await run('systemctl', ['--user', 'reset-failed', `${unit}.timer`, `${unit}.service`], { timeoutMs: 10000 }).catch(() => {});
-  if (files.length) {
-    const configHome = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME, '.config');
-    const unitDirectory = path.join(configHome, 'systemd', 'user');
-    try {
-      for (const extension of ['service', 'timer']) {
-        const link = path.join(unitDirectory, `${unit}.${extension}`);
-        try {
-          if ((await lstat(link)).isSymbolicLink()) await rm(link, { force: true });
-        } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      }
-    } catch { return false; }
-    const reloaded = await run('systemctl', ['--user', 'daemon-reload'], { timeoutMs: 10000 });
-    if (reloaded.code !== 0) return false;
+async function stopUnit(unit) {
+  if (!unit) return { ok: true, details: { status: 'not-created' } };
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME, '.config');
+  const unitDirectory = path.join(configHome, 'systemd', 'user');
+  const serviceLink = path.join(unitDirectory, `${unit}.service`);
+  const timerLink = path.join(unitDirectory, `${unit}.timer`);
+  const linksBefore = { service: !(await isAbsent(serviceLink)), timer: !(await isAbsent(timerLink)) };
+  if (!linksBefore.service && !linksBefore.timer) return { ok: true, details: { status: 'not-created' } };
+  const timerStateBefore = await systemdProperties(`${unit}.timer`, ['LoadState', 'ActiveState']);
+  const serviceStateBefore = await systemdProperties(`${unit}.service`, ['LoadState', 'ActiveState']);
+  const timerStopNeeded = ['active', 'activating', 'reloading'].includes(timerStateBefore.ActiveState);
+  const serviceStopNeeded = ['active', 'activating', 'reloading'].includes(serviceStateBefore.ActiveState);
+  const timerStop = timerStopNeeded
+    ? await run('systemctl', ['--user', 'stop', `${unit}.timer`], { timeoutMs: 10000 })
+    : { code: 0 };
+  const serviceStop = serviceStopNeeded
+    ? await run('systemctl', ['--user', 'stop', `${unit}.service`], { timeoutMs: 10000 })
+    : { code: 0 };
+  const timerStateAfter = await systemdProperties(`${unit}.timer`, ['LoadState', 'ActiveState']);
+  const serviceStateAfter = await systemdProperties(`${unit}.service`, ['LoadState', 'ActiveState']);
+  const timerInactive = timerStateAfter.LoadState === 'not-found' || timerStateAfter.ActiveState === 'inactive';
+  const serviceInactive = serviceStateAfter.LoadState === 'not-found' || serviceStateAfter.ActiveState === 'inactive';
+  const details = {
+    timer_stop: timerStopNeeded ? timerStop.code === 0 : 'not-needed',
+    service_stop: serviceStopNeeded ? serviceStop.code === 0 : 'not-needed',
+    service_inactive: serviceInactive,
+    timer_inactive: timerInactive,
+    service_link_removed: false,
+    timer_link_removed: false,
+    daemon_reload: false,
+  };
+  if ([details.timer_stop, details.service_stop, serviceInactive, timerInactive]
+    .some(value => value !== true && value !== 'not-needed')) return { ok: false, details };
+  try {
+    for (const extension of ['service', 'timer']) {
+      const link = path.join(unitDirectory, `${unit}.${extension}`);
+      try {
+        if ((await lstat(link)).isSymbolicLink()) await rm(link, { force: true });
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    details.service_link_removed = await isAbsent(serviceLink);
+    details.timer_link_removed = await isAbsent(timerLink);
+  } catch {}
+  const reloaded = await run('systemctl', ['--user', 'daemon-reload'], { timeoutMs: 10000 });
+  details.daemon_reload = reloaded.code === 0;
+  const required = Object.values(details).filter(value => value !== 'not-needed');
+  return { ok: required.every(value => value === true), details };
+}
+
+async function cleanupSystemdUnit(unit) {
+  const attempts = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await stopUnit(unit);
+    attempts.push(result);
+    if (result.ok) break;
   }
-  return true;
+  return { ok: attempts.every(result => result.ok), attempts };
 }
 
 async function systemdProperties(unit, properties) {
@@ -199,12 +242,20 @@ let databaseName;
 let roleName;
 let stateRoot;
 let timerUnit;
-let timerFiles = [];
 let liveTick;
 let releaseGate;
 let databaseCreated = false;
 let roleCreated = false;
 let stageDiagnostics = null;
+const cleanupOutcomes = {
+  systemd_cleanup_verified: 'not-created',
+  database: 'not-created',
+  runtime_role: 'not-created',
+  runtime_pool: 'not-created',
+  fresh_admin_pool: 'not-created',
+  base_pool: 'not-created',
+  temporary_state: 'not-created',
+};
 
 try {
   if (process.platform !== 'linux') fail('qualification must run on Linux');
@@ -405,7 +456,6 @@ try {
   const environmentFile = path.join(stateRoot, 'pilot.env');
   const serviceFile = path.join(stateRoot, `${timerUnit}.service`);
   const timerFile = path.join(stateRoot, `${timerUnit}.timer`);
-  timerFiles = [serviceFile, timerFile];
   await writeFile(environmentFile, [
     `CT_PILOT_DATABASE_URL=${runtimeDatabaseUrl.href}`,
     `CT_QUALIFY_RUNTIME_ROOT=${root}`,
@@ -444,9 +494,11 @@ try {
     return properties.ActiveState === 'inactive' && properties.Result === 'success' ? properties : false;
   }, 'successful systemd timer service completion', 10000);
   if (!(await exists(path.join(controlDirectory, 'worker-finished.json')))) fail('systemd timer pass did not finish its bounded execution worker');
-  if (!await stopUnit(timerUnit, timerFiles)) fail('systemd user unit cleanup failed');
+  const systemdCleanup = await cleanupSystemdUnit(timerUnit);
+  cleanupOutcomes.systemd_cleanup_verified = systemdCleanup.ok;
+  cleanupOutcomes.systemd_cleanup_attempts = systemdCleanup.attempts;
+  if (!systemdCleanup.ok) fail('systemd user unit cleanup failed');
   timerUnit = null;
-  timerFiles = [];
 
   const effects = (await readFile(path.join(controlDirectory, 'simulated-effects.jsonl'), 'utf8'))
     .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
@@ -501,21 +553,69 @@ try {
     } catch {}
     await Promise.race([liveTick.done, sleep(5000)]);
   }
-  const timerClean = await stopUnit(timerUnit, timerFiles);
-  if (!timerClean && report.result === 'PASS') {
-    report.result = 'failed';
-    report.failure = 'systemd user unit cleanup failed';
+  if (timerUnit && cleanupOutcomes.systemd_cleanup_verified !== true) {
+    const systemdCleanup = await cleanupSystemdUnit(timerUnit);
+    if (cleanupOutcomes.systemd_cleanup_verified === 'not-created') cleanupOutcomes.systemd_cleanup_verified = systemdCleanup.ok;
+    else cleanupOutcomes.systemd_cleanup_retry = systemdCleanup.ok;
+    cleanupOutcomes.systemd_cleanup_attempts = [...(cleanupOutcomes.systemd_cleanup_attempts ?? []), ...systemdCleanup.attempts];
+    timerUnit = null;
   }
-  await runtimePool?.end().catch(() => {});
-  await freshAdminPool?.end().catch(() => {});
-  if (basePool && databaseCreated) {
-    await basePool.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1', [databaseName]).catch(() => {});
-    await basePool.query(`DROP DATABASE IF EXISTS "${databaseName}"`).catch(() => {});
+  const systemdCleanupFailed = cleanupOutcomes.systemd_cleanup_verified === false;
+  if (runtimePool) {
+    const outcome = await verifyCleanupOperation(() => runtimePool.end(), async () => runtimePool.ended === true);
+    cleanupOutcomes.runtime_pool = outcome.ok;
+    cleanupOutcomes.runtime_pool_details = outcome;
   }
-  if (basePool && roleCreated) await basePool.query(`DROP ROLE IF EXISTS "${roleName}"`).catch(() => {});
-  await basePool?.end().catch(() => {});
-  if (!keep && stateRoot) await rm(stateRoot, { recursive: true, force: true }).catch(() => {});
-  if (keep && stateRoot) report.retained_state = stateRoot;
+  if (freshAdminPool) {
+    const outcome = await verifyCleanupOperation(() => freshAdminPool.end(), async () => freshAdminPool.ended === true);
+    cleanupOutcomes.fresh_admin_pool = outcome.ok;
+    cleanupOutcomes.fresh_admin_pool_details = outcome;
+  }
+  if (basePool && databaseCreated && !systemdCleanupFailed) {
+    const outcome = await verifyCleanupOperation(async () => {
+      await basePool.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1', [databaseName]);
+      await basePool.query(`DROP DATABASE "${databaseName}"`);
+    }, async () => (await basePool.query('SELECT 1 FROM pg_database WHERE datname=$1', [databaseName])).rowCount === 0);
+    cleanupOutcomes.database = outcome.ok;
+    cleanupOutcomes.database_details = outcome;
+  } else if (databaseCreated && systemdCleanupFailed) {
+    cleanupOutcomes.database = false;
+    cleanupOutcomes.database_details = { status: 'retained-after-systemd-cleanup-failure' };
+  }
+  if (basePool && roleCreated && !systemdCleanupFailed) {
+    const outcome = await verifyCleanupOperation(() => basePool.query(`DROP ROLE "${roleName}"`), async () =>
+      (await basePool.query('SELECT 1 FROM pg_roles WHERE rolname=$1', [roleName])).rowCount === 0);
+    cleanupOutcomes.runtime_role = outcome.ok;
+    cleanupOutcomes.runtime_role_details = outcome;
+  } else if (roleCreated && systemdCleanupFailed) {
+    cleanupOutcomes.runtime_role = false;
+    cleanupOutcomes.runtime_role_details = { status: 'retained-after-systemd-cleanup-failure' };
+  }
+  if (basePool) {
+    const outcome = await verifyCleanupOperation(() => basePool.end(), async () => basePool.ended === true);
+    cleanupOutcomes.base_pool = outcome.ok;
+    cleanupOutcomes.base_pool_details = outcome;
+  }
+  if (keep && stateRoot) {
+    cleanupOutcomes.temporary_state = 'retained';
+    report.retained_state = stateRoot;
+  } else if (systemdCleanupFailed && stateRoot) {
+    cleanupOutcomes.temporary_state = 'retained';
+    cleanupOutcomes.temporary_state_details = { status: 'retained-after-systemd-cleanup-failure' };
+    report.retained_state = stateRoot;
+  } else if (stateRoot) {
+    const outcome = await verifyCleanupOperation(() => rm(stateRoot, { recursive: true, force: true }), async () => isAbsent(stateRoot));
+    cleanupOutcomes.temporary_state = outcome.ok;
+    cleanupOutcomes.temporary_state_details = outcome;
+  }
+  if (cleanupOutcomes.database === false || cleanupOutcomes.runtime_role === false) {
+    report.cleanup_resources = {
+      ...(cleanupOutcomes.database === false ? { database: databaseName } : {}),
+      ...(cleanupOutcomes.runtime_role === false ? { runtime_role: roleName } : {}),
+    };
+  }
+  if (cleanupOutcomes.temporary_state === false) report.retained_state = stateRoot;
+  applyCleanupResults(report, cleanupOutcomes);
 }
 
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

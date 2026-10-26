@@ -44,3 +44,15 @@ The harness created and dropped the database and role. Post-run checks found no 
 - F2 and F4 remain open independently.
 
 The local result narrows the remaining work; it does not authorize activation or establish operational qualification.
+
+## R3 cleanup follow-up
+
+The standalone harness cleanup was tightened and tested on exact commit `f0bc4a8`.
+Three cleanup unit tests passed. The harness now reports operation success and
+postcondition verification separately for pools, the temporary database and
+runtime role, temporary state, and systemd unit stop/inactive/link-removal checks.
+An injected cleanup operation exception and a failed postcondition both produce
+a failed qualification result. The `f0bc4a8` run passed with all cleanup outcomes
+verified; post-run inspection found no disposable database, runtime role, or
+temporary systemd unit links. This remains local cleanup evidence, not target-host
+qualification.
