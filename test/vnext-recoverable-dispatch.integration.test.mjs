@@ -14,6 +14,7 @@ import { classifyAttempt, recoverDispatches } from '../lib/vnext/dispatch-recove
 import { createCommandExecutor } from '../lib/vnext/command-executor.mjs';
 import { probeRunIdentity, probeProcessGroup, readRunIdentity } from '../lib/vnext/process-identity.mjs';
 import { claimWorkUnit, createExecution, startExecution, createWorkUnit } from '../lib/vnext/kernel.mjs';
+import { testReconciliationDecision, verifyTestReconciliation } from './vnext-test-reconciliation.mjs';
 
 const next = objective_id => ({ objective_id, disposition: 'continue', summary: 'Checked increment.', continuation: { mode: 'immediate', next_action: 'Check again.' } });
 const done = (objective_id, evidence) => ({ objective_id, disposition: 'done', summary: 'Checked outcome.', outcome_evidence: evidence });
@@ -102,7 +103,7 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
   const dir = await mkdtemp(path.join(tmpdir(), 'recoverable-dispatch-'));
   let pool = await testPool({ dataDir: path.join(dir, 'db') });
   await writeFile(path.join(dir, 'identity.md'), 'Recover, classify, settle from durable records only.');
-  const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: async () => false, ...options });
+  const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: async () => false, reconciliationVerifier: verifyTestReconciliation, ...options });
   let seq = 0;
   const submit = async projectId => store().submit({ projectId, threadId: 'thread', receiptId: `receipt-${randomUUID()}`, message: `Input ${++seq}` });
   const attemptsDirectory = path.join(dir, 'attempts');
@@ -202,7 +203,7 @@ test('recoverable dispatch: crash classification, retry, reconciliation and sett
       assert.equal(execRow.failure.reason, 'launch-was-not-confirmed');
       const block = (await pool.query('SELECT * FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0];
       assert.ok(block, 'uncertainty is durable before anything may run again');
-      const reconciled = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: Number(block.fence), resolution: 'no_effect' });
+      const reconciled = await store().reconcileFailure({ decision: testReconciliationDecision({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: Number(block.fence) }) });
       assert.equal(reconciled.state, 'actionable');
     });
 

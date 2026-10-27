@@ -1,7 +1,8 @@
 import test from 'node:test';
 import { testAuthorizationDecision, testAuthorizationVerifier } from './vnext-test-authorization.mjs';
+import { testReconciliationDecision, verifyTestReconciliation } from './vnext-test-reconciliation.mjs';
 
-const createMemoryStore = (options = {}) => createMemoryStoreCore({ authorizationVerifier: testAuthorizationVerifier, ...options });
+const createMemoryStore = (options = {}) => createMemoryStoreCore({ authorizationVerifier: testAuthorizationVerifier, reconciliationVerifier: verifyTestReconciliation, ...options });
 const createExecution = (workUnit, options = {}) => createExecutionCore(workUnit, { ...options, authorizationDecisionRef: options.authorizationDecisionRef || `test-auth:${options.executionId}` });
 const runOuterLoop = (options = {}) => runOuterLoopCore({ authorizeExecution: testAuthorizationDecision, ...options });
 import assert from 'node:assert/strict';
@@ -267,17 +268,17 @@ test('memory uncertain failure blocks another Work Unit until exact reconciliati
   assert.deepEqual(store.snapshot().reconciliationBlocks, [{ project_id: projectId, work_unit_id: firstWork.work_unit_id, execution_id: first.execution.execution_id, fence: 1, reason: 'external-effect-uncertain' }]);
   const second = claimedExecution(secondWork, 'exec-reconcile-b', 'owner-b');
   await assert.rejects(() => store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref }), /E_RECONCILIATION_REQUIRED/);
-  await assert.rejects(() => store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 2, resolution: 'no_effect' }), /does not match durable project block/);
-  const reconciled = await store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  await assert.rejects(() => store.reconcileFailure({ decision: testReconciliationDecision({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 2, resolution: 'no_effect' }) }), /does not match durable project block/);
+  const reconciled = await store.reconcileFailure({ decision: testReconciliationDecision({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'no_effect' }) });
   assert.equal(reconciled.state, 'actionable');
   assert.deepEqual(store.snapshot().reconciliationBlocks, []);
   const recorded = store.snapshot().events.filter(e => e.event_id === `reconciliation:${first.execution.execution_id}`);
   assert.equal(recorded.length, 1);
   assert.equal(recorded[0].payload.result.state, 'actionable');
-  const replay = await store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'no_effect' });
+  const replay = await store.reconcileFailure({ decision: testReconciliationDecision({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'no_effect' }) });
   assert.deepEqual(replay, reconciled);
   assert.equal(store.snapshot().events.filter(e => e.event_id === `reconciliation:${first.execution.execution_id}`).length, 1);
-  await assert.rejects(() => store.reconcileFailure({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'effect_applied' }), /content conflict/);
+  await assert.rejects(() => store.reconcileFailure({ decision: testReconciliationDecision({ projectId, workUnitId: firstWork.work_unit_id, executionId: first.execution.execution_id, fence: 1, resolution: 'effect_applied' }) }), /content conflict/);
   await store.beginExecution(second.claimed, second.execution, { ref: second.execution.authorization_decision_ref });
 });
 

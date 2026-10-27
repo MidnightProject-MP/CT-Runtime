@@ -132,7 +132,7 @@ try {
     if (action === 'migrate') {
       console.log(JSON.stringify(await migrateVNext({ pool, directory: path.join(import.meta.dirname,'../vnext-migrations') })));
     } else {
-      const needsAuthority = ['tick','run','accept','decide-assignment','cancel'].includes(action);
+      const needsAuthority = ['tick','run','accept','decide-assignment','cancel','reconcile'].includes(action);
       const authority = needsAuthority ? await import(pathToFileURL(await realpath(config.authorityModule)).href) : {};
       const store = createPilotStore({
         pool,
@@ -144,6 +144,7 @@ try {
         acceptanceVerifier: authority.verifyAcceptance,
         cancellationVerifier: authority.verifyCancellation,
         assignmentDecisionVerifier: authority.verifyAssignmentDecision,
+        reconciliationVerifier: authority.verifyReconciliation,
         intervalMs: config.intervalMs ?? 60000,
         // Coordinator-configured global pool capacity; null keeps accounting
         // on with no cap.
@@ -205,6 +206,7 @@ try {
         console.log(JSON.stringify(await store.recordCancellation({ projectId: project.projectId, workUnitId, expectedRevision: Number(work.work_revision), decision })));
       } else if (action === 'reconcile') {
         const decision = await jsonFile(required('--decision-file'));
+        if (typeof authority.verifyReconciliation !== 'function') throw new Error('authority.verifyReconciliation is required for reconciliation');
         if (!decision?.ref) throw new Error('reconciliation decision requires a ref');
         if (!projects.some(project => project.projectId === decision.project_id)) throw new Error('reconciliation decision project is not configured');
         if (typeof decision.work_unit_id !== 'string' || !decision.work_unit_id
@@ -213,14 +215,7 @@ try {
           throw new Error('reconciliation decision requires exact project, Work Unit, execution, and fence identity');
         }
         if (!['no_effect','effect_applied'].includes(decision.resolution)) throw new Error('reconciliation decision resolution must be no_effect or effect_applied');
-        console.log(JSON.stringify(await store.reconcileFailure({
-          projectId: decision.project_id,
-          workUnitId: decision.work_unit_id,
-          executionId: decision.execution_id,
-          fence: decision.fence,
-          resolution: decision.resolution,
-          decisionRef: decision.ref,
-        })));
+        console.log(JSON.stringify(await store.reconcileFailure({ decision })));
       } else if (action === 'run') {
         assertPilotEnabled(config);
         assertExecutorProfiles(config);

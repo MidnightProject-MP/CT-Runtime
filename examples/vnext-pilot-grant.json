@@ -5,6 +5,7 @@
   "expiresAt": "REPLACE_WITH_UTC_EXPIRY",
   "acceptanceModule": "/etc/celestan/supersimplegames-acceptance.mjs",
   "assignmentDecisionModule": "/etc/celestan/supersimplegames-assignment-decisions.mjs",
+  "reconciliationModule": "/etc/celestan/supersimplegames-reconciliation.mjs",
   "assignmentProfiles": {
     "execution": { "model": "REPLACE_WITH_EXECUTION_MODEL", "agent": "REPLACE_WITH_EXECUTION_AGENT", "permissions": ["project:write"] },
     "review": { "model": "REPLACE_WITH_DISTINCT_REVIEW_MODEL", "agent": "REPLACE_WITH_READ_ONLY_REVIEW_AGENT", "permissions": ["project:read"] },

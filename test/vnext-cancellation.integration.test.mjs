@@ -11,6 +11,7 @@ import { runPilotOnce } from '../lib/vnext/pilot.mjs';
 import { recoverDispatches } from '../lib/vnext/dispatch-recovery.mjs';
 import { createCommandExecutor } from '../lib/vnext/command-executor.mjs';
 import { claimWorkUnit, createExecution, failExecution, startExecution } from '../lib/vnext/kernel.mjs';
+import { testReconciliationDecision, verifyTestReconciliation } from './vnext-test-reconciliation.mjs';
 
 const next = objective_id => ({ objective_id, disposition: 'continue', summary: 'Checked increment.', continuation: { mode: 'immediate', next_action: 'Check again.' } });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -33,7 +34,7 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
   const pool = await testPool({ dataDir: path.join(dir, 'db') });
   await writeFile(path.join(dir, 'identity.md'), 'Cancel only through an authorized durable intent.');
   const attemptsDirectory = path.join(dir, 'attempts');
-  const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: async () => false, cancellationVerifier: async (decision, context) => decision.ref.startsWith('cancel:') && context.workRevision > 0, ...options });
+  const store = (options = {}) => createPilotStore({ pool, intervalMs: 1000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: async () => false, cancellationVerifier: async (decision, context) => decision.ref.startsWith('cancel:') && context.workRevision > 0, reconciliationVerifier: verifyTestReconciliation, ...options });
   const submit = (projectId, threadId = 'thread') => store().submit({ projectId, threadId, receiptId: `receipt-${randomUUID()}`, message: 'Cancel-safe input.' });
   const expireClaim = async id => {
     if (!/^[A-Za-z0-9._:-]+$/.test(id)) throw new Error('unsafe test identifier');
@@ -209,7 +210,7 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
         const { work_unit_id: id } = await submit(project);
         const before = await store().reconstruct({ work_unit_id: id });
         const { begun } = await cancelWithUncertainty(project, id, before.work_revision);
-        const reconciled = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: begun.execution.fence, resolution });
+        const reconciled = await store().reconcileFailure({ decision: testReconciliationDecision({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: begun.execution.fence, resolution }) });
         assert.equal(reconciled.state, 'cancelled');
         assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'cancelled');
         assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0].c, 0);
@@ -235,7 +236,7 @@ test('cancellation intent: durable receipt, check points, and cancelled settleme
         const recorded = await store().recordCancellation({ projectId: project, workUnitId: id, expectedRevision: before.work_revision, decision: { ref: `cancel:${randomUUID()}` } });
         assert.equal(recorded.state, 'cancelled');
         assert.equal((await pool.query('SELECT consumed_by_execution_id FROM vnext_cancellation_intents WHERE work_unit_id=$1 AND work_revision=$2', [id, before.work_revision])).rows[0].consumed_by_execution_id, null);
-        const reconciled = await store().reconcileFailure({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: begun.execution.fence, resolution });
+        const reconciled = await store().reconcileFailure({ decision: testReconciliationDecision({ projectId: project, workUnitId: id, executionId: begun.execution.execution_id, fence: begun.execution.fence, resolution }) });
         assert.equal(reconciled.state, 'cancelled');
         assert.equal((await store().reconstruct({ work_unit_id: id })).state, 'cancelled');
         assert.equal((await pool.query('SELECT count(*)::int AS c FROM vnext_project_reconciliation_blocks WHERE project_id=$1', [project])).rows[0].c, 0);

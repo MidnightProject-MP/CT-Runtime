@@ -73,5 +73,13 @@ export async function verifyAssignmentDecision(decision, context) {
   if (typeof authority.verifyAssignmentDecision!=='function') return false;
   return await authority.verifyAssignmentDecision(decision,context,g.value)===true;
 }
+export async function verifyReconciliation(decision, context) {
+  const g=await grant();
+  const modulePath=g.value.reconciliationModule;
+  if (!modulePath || !path.isAbsolute(modulePath)) return false;
+  const authority=await import(pathToFileURL(modulePath).href);
+  if (typeof authority.verifyReconciliation!=='function') return false;
+  return await authority.verifyReconciliation(decision,context,g.value)===true;
+}
 // This sample's opaque decisions live only in this authority process. A durable
 // independent authority may implement its own decision registry for later use.

@@ -12,6 +12,7 @@ import { deriveCoordinatorStatus } from '../lib/vnext/coordinator-status.mjs';
 import { testAcceptanceAuthority } from './vnext-test-acceptance.mjs';
 import { verifyTurnEvidenceIntegrity } from '../lib/objective-turn.mjs';
 import { claimWorkUnit, createExecution, startExecution, failExecution } from '../lib/vnext/kernel.mjs';
+import { testReconciliationDecision, verifyTestReconciliation } from './vnext-test-reconciliation.mjs';
 
 const next = objective_id => ({ objective_id, disposition: 'continue', summary: 'Checked one increment.', continuation: { mode: 'immediate', next_action: 'Check the next consequence.' } });
 const authorization = {
@@ -37,7 +38,7 @@ test('coordinator pass, status, restart recovery, overlap, pause, and cancellati
     return context.turn.summary === 'Coordinator outcome checked.';
   });
   const authority = { ...authorization, ...acceptance };
-  const store = (options = {}) => createPilotStore({ pool, intervalMs: 60000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: acceptance.verifyAcceptance, cancellationVerifier: async () => true, ...options });
+  const store = (options = {}) => createPilotStore({ pool, intervalMs: 60000, authorizationVerifier: authorization.verifyExecution, acceptanceVerifier: acceptance.verifyAcceptance, cancellationVerifier: async () => true, reconciliationVerifier: verifyTestReconciliation, ...options });
   const project = `coordinator-${randomUUID()}`;
   const run = (s, executor, extra = {}) => runCoordinatorPass({
     store: s, projectId: project, workspaceRoot: dir, identityFiles: [identityFile], executor, authority,
@@ -162,7 +163,10 @@ test('coordinator pass, status, restart recovery, overlap, pause, and cancellati
       assert.equal(pass.status_view.next_action.kind, 'reconcile');
       assert.equal(pass.status_view.objectives[0].uncertain_reason, 'external-effect-uncertain');
       const block = await store().coordinatorLedger(recoveryProject).then(ledger => ledger.block);
-      const reconciled = await store().reconcileFailure({ projectId: recoveryProject, workUnitId: block.work_unit_id, executionId: block.execution_id, fence: Number(block.fence), resolution: 'no_effect', decisionRef: 'operator:reconcile:test' });
+      const reconciled = await store().reconcileFailure({ decision: testReconciliationDecision({
+        projectId: recoveryProject, workUnitId: block.work_unit_id, executionId: block.execution_id,
+        fence: Number(block.fence), resolution: 'no_effect', ref: 'operator:reconcile:test',
+      }) });
       assert.equal(reconciled.state, 'actionable');
       const after = await store().coordinatorLedger(recoveryProject).then(ledger => deriveCoordinatorStatus(ledger));
       assert.equal(after.next_action.kind, 'dispatch');
