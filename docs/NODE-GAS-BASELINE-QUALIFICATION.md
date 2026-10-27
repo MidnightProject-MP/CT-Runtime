@@ -1,5 +1,7 @@
 # Node/GAS baseline qualification
 
+> **Historical evidence aggregate.** The selected vNext execution path is the GAS-hosted email loop. This document preserves the combined Node/GAS verification record; it does not make the Node path the selected launch and does not authorize deployment or activation. See [VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md) and [VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md).
+
 Evidence aggregate for the "qualify the combined Node/GAS baseline" work order. Branch
 `work/node-gas-baseline-integration` is a verification aggregate; it is not a proposal to merge the
 open stack (#71/#72/#75) and carries no deployment permission.

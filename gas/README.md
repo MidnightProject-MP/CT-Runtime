@@ -1,5 +1,10 @@
 # GAS-native CT-Runtime prototype
 
+> This README covers the legacy Sheets/Drive GAS binding and its operational
+> boundaries. The selected vNext GAS email path is `gas_vnext_email.js` plus
+> `deploy/gas-email/`; see [docs/VNEXT-GAS-EMAIL.md](../docs/VNEXT-GAS-EMAIL.md)
+> and [docs/VNEXT-GAS-PILOT-COMMISSIONING.md](../docs/VNEXT-GAS-PILOT-COMMISSIONING.md).
+
 > **Every execution body emits evidence. Observer consumes evidence.**
 
 Execution bodies persist bounded factual evidence to `observer/inbox` and do not run semantic Observer analysis. The single GAS Observer consumes that inbox asynchronously during `gasSafetyWake`, appending idempotent semantic observations and leaving backlog for later wakes. Execution Federation remains responsible for immediate coordination; Observer lag does not affect continuity.
@@ -33,17 +38,13 @@ Humans write a message in `Message / objective` (or a follow-up in `Your reply`)
 
 The sheet is polled/reconciled rather than relying on a user edit trigger. This preserves recovery when a notification or trigger is missed; Apps Script trigger executions also cannot stop to ask for authorization, so the deployment identity must authorize the required services before unattended operation. 
 
-## GitHub Actions / clasp
+## Deployment
 
-Canonical GAS writes happen only through GitHub Actions. `.github/workflows/gas-clasp-deploy.yml` runs on push to `main` or manual dispatch; it keeps Apps Script credentials out of Git, generates the local `.clasp.json` from a GitHub Actions repository variable, validates the manifest, shows the clasp file set, pushes the complete GAS project, and creates or updates a deployment. `.github/workflows/gas-feedback-repair.yml` is dispatch-only, never pushes source, and runs only the fenced row-4 repair. `gas/.clasp.json.example` documents the local shape and is intentionally not a live project configuration. No supported workflow or documented operator path performs a local `clasp push`; an accidental local push is a detectable policy violation and recovery event, not a supported path. Do not rely on a machine-local git hook as the control plane.
+Canonical GAS release writes happen only through the manually dispatched, hash-pinned `.github/workflows/gas-self-deploy.yml` workflow defined in [docs/GAS-DEPLOYMENT.md](../docs/GAS-DEPLOYMENT.md). A merge to `main` does not deploy. The earlier clasp deployment flow is retired; `.github/workflows/gas-clasp-deploy.yml` and `gas-clasp-push.yml` fail closed, and no supported operator path performs a local `clasp push`. `gas/.clasp.json.example` is documentation only and is not a live project configuration.
 
-Before using the workflow, configure:
+The release gate requires an exact reviewed `refs/tags/gas-release/*` tag, the full release commit, a canonical desired bundle hash, a freshly inspected predecessor hash, and the `GAS_APPROVED_RELEASE` tuple in the protected `gas-production` environment. The current repository state has no approved release tag or live activation. This legacy `gas/` README does not make the GAS vNext email runtime active; see [docs/VNEXT-GAS-EMAIL.md](../docs/VNEXT-GAS-EMAIL.md) and [docs/VNEXT-GAS-PILOT-COMMISSIONING.md](../docs/VNEXT-GAS-PILOT-COMMISSIONING.md).
 
-- repository variable `CT_GAS_SCRIPT_ID` — the Apps Script project ID;
-- repository secret `CLASPRC_JSON` — the complete authenticated `.clasprc.json` content for the deployment identity; it must contain the working `ct-runtime` credential as `tokens.default` (CI checks structural keys and type only and never logs credential values);
-- GitHub environment `gas-production` — the workflow targets this environment so its approval/protection rules can remain the release gate.
-
-Deployment authority, execution authority, and sheet ownership are different boundaries: verify each independently. Before repeating an external effect, inspect reality first: run `diagnoseFeedbackInbox`, confirm the returned Script ID and configured spreadsheet property, and only then run `configureFeedbackInbox` or `setupFeedbackSheet` when the observed state mismatches. GitHub Actions is a deployment mechanism here, not the GAS scheduler or runtime authority. Existing deployment IDs can be supplied at dispatch time; otherwise clasp creates a new deployment. Never commit `.clasp.json`, `.clasprc.json`, access tokens, Script Properties, or other credentials; CI rejects tracked credential or config artifacts.
+Deployment authority, execution authority, and sheet ownership are different boundaries: verify each independently. Before repeating a legacy feedback external effect, inspect reality first: run `diagnoseFeedbackInbox`, confirm the returned Script ID and configured spreadsheet property, and only then run `configureFeedbackInbox` or `setupFeedbackSheet` when the observed state mismatches. Never commit `.clasp.json`, `.clasprc.json`, access tokens, Script Properties, or other credentials.
 
 ## Operation
 

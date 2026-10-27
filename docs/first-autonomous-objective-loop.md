@@ -1,8 +1,13 @@
 # First Autonomous Objective Loop
 
+> **Historical milestone record.** This predates the selected GAS vNext path. It
+> does not define the current launch or runtime selection. See
+> [VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md) and
+> [VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md).
+
 ## Status and authority
 
-2026-09-08: **active milestone; first bounded local truthful-state guard implemented**.
+2026-09-08: **historical milestone; first bounded local truthful-state guard implemented**.
 This is not an autonomous objective success, a deployment, or a completed state migration.
 CT-Runtime owns execution mechanics; Celestan owns task judgment and stopping decisions;
 Observer owns reflection and semantic interpretation. The objective-turn contract does not
@@ -151,9 +156,9 @@ through the shared clasp gate: disposition facts only, zero writes, no content.
 
 ## Qualified host draft contract (not host proof)
 
-Northflank remains the production-route host but its live proof explicitly requires
-human authorization (token, project, image, secret groups), so the first proof targets
-this machine with no new auth or spending. `lib/objective-turn.mjs` now defines a pure
+Northflank was then the planned production-route host, but its live proof explicitly
+required human authorization (token, project, image, secret groups), so the first proof
+targeted this machine with no new auth or spending. `lib/objective-turn.mjs` now defines a pure
 turn contract with bounded identifiers/evidence, realpath-contained evidence integrity
 checks, and a minimal reply projection as a draft contract. These checks verify supplied
 facts; they do not persist turns, fence owners, schedule wakes, or authorize a done claim.
@@ -189,5 +194,5 @@ STATE proof records are not refreshed by these tests. Host qualification and ato
 fencing remain unproven. Before any future external effect or live
 blocker decision, inspect the newest workflow evidence and `diagnoseFeedbackInbox`
 (Script ID and configured spreadsheet properties); configure/setup only on an
-observed mismatch. Canonical GAS writes remain GitHub Actions-only. No local
-`clasp push` is an operator path.
+observed mismatch. In that historical flow, canonical GAS writes were
+GitHub Actions-only; no local `clasp push` was an operator path.

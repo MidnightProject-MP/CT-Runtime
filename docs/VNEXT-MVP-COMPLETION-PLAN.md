@@ -1,8 +1,14 @@
-# Celestan vNext MVP — Authoritative Completion Plan
+# Celestan vNext MVP — historical completion plan
+
+> **Historical plan, superseded 2026-10-27.** The selected vNext execution path is
+> the GAS-hosted email loop in [VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md), with
+> commissioning in [VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md).
+> This Node-oriented plan is retained as history and does not define the selected
+> launch.
 
 > 2026-09-27: The minimum-loop scope is defined in [VNEXT-MINIMUM-LOOP-PLAN.md](VNEXT-MINIMUM-LOOP-PLAN.md). The executable pilot and its activation limits are documented in [VNEXT-PILOT.md](VNEXT-PILOT.md). Earlier stage plans below are historical; they do not add launch requirements to the revised MVP.
 
-**Status:** authoritative implementation and qualification plan
+**Status:** historical implementation and qualification plan; superseded by the GAS selection
 
 **Purpose:** provide the repository-tracked sequence for completing and activating the Celestan vNext MVP.
 
@@ -512,7 +518,7 @@ The intended kernel remains lean: durable WUs, Executions, claims/fences, wakes,
 
 This preserves forward progress without pretending later evidence cannot overturn a premise.
 
-## Authoritative sequence
+## Historical sequence
 
 ```text
 Audit coverage

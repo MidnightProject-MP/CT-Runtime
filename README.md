@@ -1,8 +1,8 @@
 # CT-Runtime — capability-first
 
-> 2026-09-27: The minimum-loop scope is defined in [docs/VNEXT-MINIMUM-LOOP-PLAN.md](docs/VNEXT-MINIMUM-LOOP-PLAN.md). The executable pilot and its activation limits are documented in [docs/VNEXT-PILOT.md](docs/VNEXT-PILOT.md). Multi-project scheduling and its offline evidence are documented in [docs/VNEXT-MULTI-PROJECT-QUALIFICATION.md](docs/VNEXT-MULTI-PROJECT-QUALIFICATION.md). Earlier stage plans below are historical; they do not add launch requirements to the revised MVP.
+> 2026-10-27: The selected vNext execution path is the GAS-hosted email loop in [docs/VNEXT-GAS-EMAIL.md](docs/VNEXT-GAS-EMAIL.md), with commissioning in [docs/VNEXT-GAS-PILOT-COMMISSIONING.md](docs/VNEXT-GAS-PILOT-COMMISSIONING.md). The Node/PostgreSQL/OpenCode pilot in [docs/VNEXT-PILOT.md](docs/VNEXT-PILOT.md) is a separate experimental path. Multi-project scheduling and its offline evidence are documented in [docs/VNEXT-MULTI-PROJECT-QUALIFICATION.md](docs/VNEXT-MULTI-PROJECT-QUALIFICATION.md). Earlier stage plans below are historical; they do not add launch requirements to the revised MVP.
 
-CT-Runtime provides execution mechanics for Celestan behind **purpose-level capabilities**. Celestan requests `durable_state` (not Neon), `evidence_store` (not an object-storage provider), `knowledge_publishing` (not Confluence), `project_system` (not Jira) — bindings select the adapter. Production bindings default to `durable_state:postgres` (standard Postgres — Neon/Supabase/pg) + `evidence_store:s3` (S3-compatible — AWS S3/Backblaze B2/R2/MinIO); filesystem adapters remain for local/test. Celestan code is unchanged when Neon→Supabase or Jira→Linear.
+CT-Runtime provides execution mechanics for Celestan behind **purpose-level capabilities**. Celestan requests `durable_state` (not Neon), `evidence_store` (not an object-storage provider), `knowledge_publishing` (not Confluence), `project_system` (not Jira) — bindings select the adapter. The historical capability-first production profile defaults to `durable_state:postgres` (standard Postgres — Neon/Supabase/pg) + `evidence_store:s3` (S3-compatible — AWS S3/Backblaze B2/R2/MinIO); filesystem adapters remain for local/test. This profile is not the selected GAS path. Celestan code is unchanged when Neon→Supabase or Jira→Linear.
 
 ```js
 const durable = await request('durable_state', { project });
@@ -15,13 +15,13 @@ const pub = await request('knowledge_publishing', { project });
 await pub.publishChronicle({ period, markdown });
 ```
 
-See `capabilities/README.md`, `docs/capabilities.md`, `docs/northflank.md`, `bindings.example.json`, `lib/capabilities/`. Production defaults currently bind `disposable_compute:northflank_sandbox` and `scheduler:northflank`; production state still requires Neon-backed `durable_state` + Backblaze B2-backed `evidence_store`, and live Northflank proof remains pending authorization.
+See `capabilities/README.md`, `docs/capabilities.md`, `docs/northflank.md`, `bindings.example.json`, `lib/capabilities/`. The earlier capability-first profile (Northflank for disposable compute and scheduling, Neon for durable state, Backblaze B2 for evidence) remains in the repository as supporting and historical adapter work; it is not the selected vNext launch path.
 
-An optional GAS-native binding lives in `gas/`. Select it only with explicit `CT_RUNTIME_MODE=gas` or an override. It reconstructs from Sheets/Drive, uses Apps Script locks/triggers, OpenRouter free-only bounded turns, and GitHub APIs; it does not provide general compute or run OpenCode.
+The selected vNext execution path is the **GAS-hosted email loop** in `gas/gas_vnext_email.js` with `deploy/gas-email/`. GAS is the only execution host for that path: no Linux, Cloud Run, Oracle, shell, Node worker, or inbound webapp is required. For this path, Node is used for repository tests and bundle building only. See [docs/VNEXT-GAS-EMAIL.md](docs/VNEXT-GAS-EMAIL.md) and [docs/VNEXT-GAS-PILOT-COMMISSIONING.md](docs/VNEXT-GAS-PILOT-COMMISSIONING.md). The separate Sheets/Drive GAS prototype and the Node/PostgreSQL/OpenCode pilot remain available as historical or experimental paths; they are not the selected first launch.
 
-## Launch path and CLI
+## Node pilot CLI (experimental)
 
-The supported first-launch path is Node/PostgreSQL/OpenCode through the vNext pilot. Configure it as described in [docs/VNEXT-PILOT.md](docs/VNEXT-PILOT.md), then submit and drive work with:
+The Node/PostgreSQL/OpenCode pilot is a separate experimental implementation path, not the selected GAS launch. Configure it as described in [docs/VNEXT-PILOT.md](docs/VNEXT-PILOT.md), then submit and drive work with:
 
 ```sh
 node bin/vnext-pilot.mjs migrate --config /etc/celestan/pilot.json
@@ -72,7 +72,7 @@ Production model telemetry uses `PostgresObserverStore.appendModelTelemetryEnvel
 
 ## GAS self-deployment
 
-**Deployment milestone:** normal deployment path is `GitHub → HMAC HTTPS → GAS self-deploy → readback verification`. `clasp` is bootstrap/break-glass only and is not part of the normal release path.
+**Deployment milestone:** the only supported release path is `GitHub → HMAC HTTPS → GAS self-deploy → readback verification`, dispatched manually from an exact reviewed release tag. Local `clasp push` is not a supported bootstrap, break-glass, or recovery path; legacy clasp workflows are retired and fail closed. See [docs/GAS-DEPLOYMENT.md](docs/GAS-DEPLOYMENT.md).
 
 The authenticated self-deployment path uses the existing `doPost()` transport. The deployment plan reports the current immutable-version capacity because Apps Script permits at most 200 versions per script. Versioned deployments cannot delete old versions through the Versions API, so reaching that ceiling is an explicit release boundary requiring script-project rotation outside this slice. #27 does not implement rotation. The plan exposes `used`, `max`, `remaining`, and a `ready`/`low`/`exhausted` status so capacity is observable before mutation.
 

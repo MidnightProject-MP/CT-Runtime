@@ -1,5 +1,7 @@
 # Minimum durable loop: implementation and operation
 
+> **Node/PostgreSQL/OpenCode experimental path.** GAS is the selected vNext execution path; it is the only execution host for the selected email loop. This document describes the separate Node implementation and does not define the selected launch. See [VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md) and [VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md).
+
 This source delivery connects a PostgreSQL-backed human inbox to a bounded command execution and durable future eligibility. It includes current-main foundation code plus PR #63's A8/A9 fixes, a small Linux caller, and a disabled systemd timer. It does not deploy or activate anything. It does not claim the multi-day operational MVP has passed.
 The Milestone 2A candidate adds a recurring coordinator pass, durable pass records, a derived operator view, optional long-running loop, pause/resume, and explicit acceptance/cancellation/reconciliation commands. The next offline candidate adds purpose-bound execution, independent review, stewardship, diagnosis, and authorized assignment decisions on the same Execution/Work Unit lifecycle. It is not operationally qualified. The existing timer remains the only supplied deployment unit.
 The multi-project candidate adds explicit project configuration, fair cross-project ordering, capacity-aware deferral, aggregate status, and isolated per-project failures without weakening the existing project mutation exclusion.
@@ -101,7 +103,7 @@ node bin/vnext-pilot.mjs submit --config /etc/celestan/pilot.json \
 node bin/vnext-pilot.mjs status --config /etc/celestan/pilot.json
 ```
 
-Use the same receipt ID only to retry delivery of exactly the same message. Use the same thread and a new receipt ID for a follow-up. The CLI inbox is the selected human interface in this slice; existing GAS Feedback ingestion/projection remains separate and has not been silently rewired. If Sheets must be the pilot interface, its receipt-to-this-inbox and response projection require a separately verified adapter before activation.
+Use the same receipt ID only to retry delivery of exactly the same message. Use the same thread and a new receipt ID for a follow-up. The CLI inbox is the selected human interface for this experimental Node slice; existing GAS Feedback ingestion/projection remains separate and has not been silently rewired. If Sheets must be the pilot interface, its receipt-to-this-inbox and response projection require a separately verified adapter before activation.
 
 Inspect the durable coordinator view before and after each dispatch:
 
@@ -177,7 +179,7 @@ The document binds `ref`, `outcome`, `assignment_id`, `assignment_digest`, `repo
 
 ## Activate after qualification
 
-Establish the real schema/grants, worker availability, actual authority, exact release, and absence of competing legacy admission/in-flight effects. The two configuration booleans are operator assertions, not exclusion evidence. The old GAS deployment policy remains in force: GAS writes only through the canonical GitHub Actions path.
+Establish the real schema/grants, worker availability, actual authority, exact release, and absence of competing legacy admission/in-flight effects. The two configuration booleans are operator assertions, not exclusion evidence. GAS writes only through the manually dispatched, hash-pinned `gas-self-deploy.yml` path.
 
 After those facts are proven, enable the configured pilot and test one bounded invocation:
 

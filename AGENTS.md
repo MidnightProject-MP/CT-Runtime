@@ -2,6 +2,8 @@
 
 CT-Runtime owns execution mechanics only. Celestan owns judgment, task meaning, stopping decisions, and `requested_next_wake`; Observer owns reflection and semantic interpretation.
 
+The selected vNext execution path is the GAS-hosted email loop in `gas/gas_vnext_email.js` with `deploy/gas-email/`. GAS is the only execution host for that path. The Node/PostgreSQL/OpenCode pilot is a separate experimental path, not the selected first launch. See `docs/VNEXT-GAS-EMAIL.md` and `docs/VNEXT-GAS-PILOT-COMMISSIONING.md`.
+
 Keep runtime state outside the repository. Use explicit `--store`, `--project`, `--model`, `--agent`, and `--task` values. Never persist environment secret values or raw process output in manifests, events, telemetry, or Observer records.
 
 ## GAS deployment authority
