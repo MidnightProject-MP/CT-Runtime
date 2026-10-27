@@ -1,6 +1,10 @@
 # Delivery — 2026-09-27
 
-This is the full CT-Runtime source snapshot with the new minimum-loop pilot, not a patch-only archive. Start with `docs/VNEXT-PILOT.md`.
+> **Historical delivery note.** It predates the selected GAS vNext path. The Node
+> CLI and minimum-loop pilot described here are experimental, not the selected
+> launch. Start with [README.md](README.md) and [docs/VNEXT-GAS-EMAIL.md](docs/VNEXT-GAS-EMAIL.md).
+
+This is the historical full CT-Runtime source snapshot with the minimum-loop pilot, not a patch-only archive. It is retained for context; start with `README.md` for the current platform baseline.
 
 ## Baseline and changes
 
@@ -12,7 +16,7 @@ New implementation: durable pilot inbox and input watermark; atomic result/conti
 
 Core fixes made while connecting the path: do not turn uncertain settlement into an asserted failure; verify optional evidence on nonterminal turns; retain new input arriving during completion; disallow expired external-effect takeover on the pilot path.
 
-The selected human interface is the new CLI inbox/status pair. Existing GAS Feedback remains unchanged and is not connected to this new inbox by this delivery. Runtime state and credentials stay outside the repository.
+The Node pilot's human interface is the new CLI inbox/status pair. Existing GAS Feedback remains unchanged and is not connected to this new inbox by this delivery. Runtime state and credentials stay outside the repository.
 
 ## Verification
 

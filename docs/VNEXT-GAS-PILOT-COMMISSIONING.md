@@ -1,17 +1,19 @@
 # GAS pilot commissioning package
 
-Status: **evidence aggregate and proposed operating plan.** This document
-authorizes no merge, push, deployment, database apply, GAS configuration,
-trigger change, model call, or mail send. The candidate exists only in the local
-repository. Every provisioning and live step below requires separate explicit
-approval.
+Status: **historical evidence aggregate and proposed operating plan for the
+selected GAS vNext path.** The GAS stack was merged to `main` through #101; the
+runtime remains disabled and no live qualification is claimed. This document
+authorizes no deployment, database apply, GAS configuration, trigger change,
+model call, or mail send. Every provisioning and live step below requires
+separate explicit approval.
 
 ## Candidate identity
 
 | Item | Value |
 |---|---|
-| Branch | `work/gas-integrated-pilot-candidate` |
+| Historical candidate branch | `work/gas-integrated-pilot-candidate` |
 | Main incorporated | `d0725aba087709b321ab227b0a320afddead6c93` (#100) |
+| Merge to main | `8572550c90000f29496ec979ad54286a45b5fb09` (#101) |
 | GAS stack / Increment A tip | `80d15e177d73c7b068b79d4296d98ef4d3e7165f` |
 | Integration merge | `10fb00c1a0892212430de27a92a52a2036508000` (parents `80d15e1`, `d0725ab`) |
 | Lifecycle and `no_effect` commit | `bce25b0c2f0404cf501a2f390d8a8ba984e306fb` |
@@ -85,9 +87,9 @@ and `ORDER BY created_at` alone can return them in either order. The assertions
 now select rows by `kind` or `execution_id`. No production query or behavior was
 changed.
 
-No GitHub CI run exists for this candidate because it has not been pushed. The
-evidence above is local: Linux Node 22.14.0, PostgreSQL 16.15 in the WSL
-verification workspace, plus Windows Node 24.19.0 for the PGlite path.
+The evidence above is local: Linux Node 22.14.0, PostgreSQL 16.15 in the WSL
+verification workspace, plus Windows Node 24.19.0 for the PGlite path. The #101
+merge does not convert this local evidence into a live qualification.
 
 ## Proven and not proven
 
@@ -324,9 +326,11 @@ Blockers:
 - The actual acceptance caller and substantive review are not operational.
 - 010 is not live-applied; the provisioning and upgrade sequence above has not
   been executed on a pilot database.
-- This package establishes no release tag, approved-release variable, or source
-  deployment for the candidate.
-- No GitHub CI run exists for this candidate; the evidence is local only.
+- This package establishes no approved release tag, approved-release variable, or
+  current self-deploy release for the candidate. The earlier source-only
+  deployment is historical evidence, not current release qualification.
+- The evidence in this package is local and bounded. The #101 merge and any green
+  CI do not constitute live qualification.
 
 Go/no-go:
 
@@ -367,4 +371,4 @@ env POSTGRES_URL=<local-test-database-url> \
 node scripts/build-gas-bundle.mjs gas <bundle-output.json>
 ```
 
-The candidate is not pushed and no live operation has occurred.
+The GAS stack is merged; it is not deployed or activated, and no live operation has occurred.

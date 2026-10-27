@@ -1,6 +1,11 @@
 # Northflank Prototype Binding
 
-Northflank is the configured prototype provider for both `disposable_compute` and `scheduler`. The adapter uses the official Northflank Jobs API model (`https://api.northflank.com/v1`) through native `fetch`; the CLI/API are provider configuration surfaces, not CT-Runtime state stores.
+> **Historical capability-first prototype.** Northflank is not the selected vNext
+> execution path. The selected path is the GAS-hosted email loop; see
+> [VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md) and
+> [VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md).
+
+Northflank was the configured prototype provider for both `disposable_compute` and `scheduler`. The adapter uses the official Northflank Jobs API model (`https://api.northflank.com/v1`) through native `fetch`; the CLI/API are provider configuration surfaces, not CT-Runtime state stores.
 
 ## Required secure variables
 

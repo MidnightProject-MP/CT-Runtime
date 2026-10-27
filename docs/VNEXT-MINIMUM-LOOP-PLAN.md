@@ -2,6 +2,8 @@
 
 Updated: 2026-09-27. Status: revised implementation plan, not an implementation or deployment claim.
 
+**Current platform selection (2026-10-27):** the selected vNext execution path is the GAS-hosted email loop in `gas/gas_vnext_email.js` with `deploy/gas-email/`. GAS is the only execution host for that path. The Node/PostgreSQL/OpenCode pilot is a separate experimental path and is not the selected first launch. See [VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md) and [VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md).
+
 This revision supersedes the 2026-09-17 executive-loop plan's mandatory delegation, stage-per-wake discipline, universal software quality-cycle qualification, and architecture-first completion sequence. It incorporates the user's new direction: complexity must earn its keep through operating evidence. Existing project requirements and authority limits remain binding.
 
 The saved audit at `6fe20d7f80123f061916a5007e5d8845a952c39d` is historical evidence. Current repository, PR, deployment, schema, and authentication status were not reverified for this document update. Reconcile them before implementation; do not redo proven work or treat historical findings as current defects.
@@ -163,7 +165,7 @@ Retain the earlier plan's finding references without treating all subsystems as 
 | --- | --- |
 | F01, F13, F14 — identity, authority/history, atomic persistence | Verify the active path upholds these invariants; unresolved reachable defects block activation. |
 | F03, F04, F15, F16 — routing, status, readback, target binding | Qualify the exact selected entry/control path. Unused paths may be excluded rather than rebuilt. |
-| F05, F06–F09, F11–F12 — Feedback packaging, receipts, recovery, identity and projection | Qualify what the selected human interface uses. If Feedback is selected, these obligations remain; another interface is not an excuse to silently lose input. |
+| F05, F06–F09, F11–F12 — Feedback packaging, receipts, recovery, identity and projection | Qualify what the interface selected for that implementation uses. If Feedback is selected, these obligations remain; another interface is not an excuse to silently lose input. |
 | F02 — missing production caller | The real caller, scheduler, and multi-wake pilot are the central deliverable. |
 | F10 — legacy exclusion | No competing admission or unresolved overlapping effects at activation. |
 | F18 — upgraded schema uncertainty | Establish actual schema and grants before relying on durable-store guarantees. |

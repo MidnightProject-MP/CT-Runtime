@@ -5,9 +5,27 @@ transition-authority/lineage map, and the review of #76 / the local Phase 1
 follow-on. This document records both required outcomes and commit-bound progress;
 code, offline qualification, and operational proof remain distinct.
 
+## Platform baseline
+
+The selected vNext execution path is the **GAS-hosted email loop** in
+`gas/gas_vnext_email.js` with `deploy/gas-email/`. GAS is the only execution host
+for that path: no Linux, Cloud Run, Oracle, shell, Node worker, or inbound webapp
+is required. Node is used for repository tests and bundle building only. The GAS
+stack is merged through #101 (`8572550`); the runtime remains disabled, and no
+live Gmail, OpenRouter, Neon Data API, Google-JWT, Script Properties, trigger, or
+deployment qualification is claimed. See
+[VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md) and
+[VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md).
+
+The Node/PostgreSQL/OpenCode pilot and the older capability-first adapters
+reviewed below are separate historical or experimental paths. Their evidence
+does not select them for launch and does not close GAS operational gates.
+
 ## Current progress
 
-- **Merged baseline:** PR #107 merged at
+- **Merged baseline (checked 2026-10-26):** remote `main` is
+  `d10b0f999ac934889f82513f32e7720d1c016e8a`, the #110 roadmap/guidance merge;
+  its reported post-merge CI `40352929993` passed. PR #107 previously merged at
   `70b511184dde069191e7c82b649c6c96b4bddb42`; post-merge CI `40185638482`
   passed (`core` and `gas-data-api-role-handoff`). This follows #102 coordinator,
   #103 purpose-bound assignments, #104 multi-project isolation/fairness, #105 F4
@@ -21,7 +39,7 @@ code, offline qualification, and operational proof remain distinct.
   worker recovered in **315.3 ms**, including test-only lease-expiry fast-forward.
   See the detailed status under 3C and
   [the qualification report](VNEXT-UNATTENDED-TRIAL-QUALIFICATION.md).
-- **Merged — Milestone 3E, Node-first cleanup:** PR #108 merged at
+- **First increment merged — Milestone 3E, Node-path cleanup:** PR #108 merged at
   `242223579b9ae875894a6c8476e1b5db1359c310` (head
   `b26bcdbe40adf055f719c7d4353bf4bf284003e1`). It extracts shared validation,
   retires the five legacy autonomous CLI commands, and aligns help/runbook
@@ -32,14 +50,129 @@ code, offline qualification, and operational proof remain distinct.
   run `40350177481`. Two earlier failed `legacy-s3` check runs remain attached
   to the same head in GitHub's historical check rollup; the latest PR run and
   the post-merge run are green.
-- **First-launch scope:** Node/PostgreSQL/OpenCode with CLI input and local
-  artifacts. There is no running implementation to migrate from. GAS/email
-  remains separate; its retention or removal is undecided. Real decision-authority
-  integration, enforced worker permissions, and host qualification remain launch
-  obligations. Offline campaign success does not establish these.
+- **Open Node-path PRs (not the selected GAS launch):** #111 at `ac4904d`
+  documents both Node activation flags and 3D evidence criteria; current returned
+  checks are green. #112 at `5bb4ca6` adds the local Node first-launch harness and
+  report; current returned checks are green.
+  Both PRs remain open, not merged. #112's standalone WSL qualification was run
+  at `7910e44`, not its report-only final head; green CI is separate evidence
+  and does not execute that standalone systemd harness. #113 at `bd5aa81`
+  ("require verified reconciliation decisions") targets `main`; #114 at `41f792e`
+  ("make first-launch cleanup failures visible") targets #112's branch. Both are
+  open and CLEAN; #114 is stacked on #112.
+- **Node 3D local mechanics passed; operational qualification not pursued for
+  the selected platform:** a fresh database/restricted runtime role, direct
+  read-only write denial, worker environment credential exclusion, pause/resume
+  around a live worker, and one systemd user-timer invocation were reported on
+  clean WSL. Workers and authority were scripted. This remains Node-path
+  evidence; it does not qualify the GAS path.
+- **Selected first-launch scope:** GAS-hosted email loop with Gmail intake/reply,
+  Google-JWT Data API RPC, bounded model turn, and atomic result/outbox. The
+  GAS stack is merged but not live-applied, deployed, or activated. The runtime
+  is disabled; the isolated target, database bootstrap/upgrades, registration,
+  Data API, Script Properties, Gmail preparation, release tag, and first send
+  remain separate approval gates. The Node/PostgreSQL/OpenCode path is a
+  separate experimental implementation, not the selected launch.
 - **Open findings:** F2 release controls and F4's original wrong-marker trigger
-  remain open. F3 was fixed in #86; the table below now reflects that disposition.
-  No live migration, activation, deployment, or commissioning is claimed.
+  remain open and are GAS launch blockers. F3 was fixed in #86; the table below
+  reflects that disposition. R1/R2/R3 below are Node-path review findings, not
+  GAS launch gates. No live migration, activation, deployment, or commissioning
+  is claimed.
+
+## End-to-end review — 2026-10-26
+
+Scope: architecture and implementation-boundary review of the Node CLI,
+coordinator/pilot, purpose-bound planning, canonical handoff, outer-loop
+settlement, PostgreSQL reconciliation/acceptance/cancellation, worker launch and
+recovery, example authority, and #112's harness/fixtures. This is a Node-path
+review, not the selected GAS launch review. GAS was reviewed for recorded parity,
+release controls, and launch-scope dependencies, not requalified against live
+Gmail or Script Properties. This is not an exhaustive security audit or fresh
+execution of every integration suite.
+
+Source baseline: local `50ea188` (#111 at review time), with #112 files read directly from
+`5bb4ca6`; runtime code is unchanged from the merged baseline. No branches were
+merged to fabricate combined evidence. Fresh reviewer tests on Windows,
+Node 24.19.0 at `50ea188`: `handoff-contract`, `vnext-assignment-contract`, and
+`vnext-outer-loop`, 28 pass / 0 fail / 0 skip. Worktree was clean apart from the
+existing untracked ZIP before this documentation edit. These tests do not qualify
+Linux process groups or PostgreSQL concurrency. Existing exact-commit native
+evidence and freshly inspected remote CI remain tied to their original commits.
+
+### Milestone coverage and remaining work
+
+| Area | Implemented / evidenced | Remaining boundary |
+| --- | --- | --- |
+| 1A–B: authority and settlement foundation | Canonical normalization; separate completion/acceptance; atomic receipt, evidence, progress and continuation settlement; guarded stale/conflicting replay | Real authority provisioning and decision persistence; R1 reconciliation trust |
+| 1C: recoverable dispatch | Durable admission/launch identity, conservative ambiguity, retained-result ingestion; 3C actual coordinator kill with surviving worker | Natural expiry and crash/stop behavior on the selected host; timeout enforcement after coordinator death |
+| 1D: lifetime/resource authority | Process-group timeout while coordinator lives, cancellation/fence guards, durable global concurrency pool | Independent lifetime enforcement on coordinator loss; tool/cost budgets are not generally implemented; no per-project caps |
+| 2A: recurring coordinator | Bounded passes, durable eligibility, CLI loop and timer path, status, pause/resume | Recurring timer/reboot/long-duration operating proof; pause skips the pass including recovery, so it is not emergency worker termination |
+| 2B: assignment purposes | Execution/review/diagnosis/stewardship contracts, bound reports and verified decisions | Example authority deliberately returns no autonomous assignment decisions, has process-local acceptance decisions, and supplies no cancellation verifier; replace/connect it for operation |
+| 2C: continuation and interruption | Timestamp-free continuation, late-input/revision supersession, cancellation, bounded non-progress and reconciliation | Real provider failure and human reconsideration path; R1; no generalized external-condition subscription |
+| 2D–E: parallelism and status | Canonical project workspace bindings, project-local failure isolation, global pool, durable event-sequence fairness, ledger-derived assignment/acceptance status | Host-enforced filesystem/control-state isolation; bounded context/intake needs explicit operating limits, not silent truncation |
+| 3A–B: recovery and safeguards | Native invariant suites and 3C bounded interruption evidence; release artifacts and guards have separate recorded proofs | Not every recovery-matrix scenario is qualified on the target host; F2/F4 remain GAS release gates, while R1–R3 remain Node-path findings |
+| 3C: unattended trials | Scripted four-trial offline campaign complete with quietness/report-integrity checks | No real-model quality, external-effect, long-duration, or natural-lease qualification |
+| 3D: Node-path local mechanics | #111 Node runbook gates; #112 local mechanics evidence | Both PRs open; Node authority/service account/host/OpenCode isolation and recurring operation unqualified. Not the selected GAS launch |
+| 3E: retire duplication | #108 validator extraction and legacy autonomous CLI removal merged; #109 S3 fixture repaired | Retained legacy utilities, migration verification and shared consumers still need dependency-led removal. GAS is selected; Node/alternate-path retention is separate from GAS launch |
+
+### Review findings and closure evidence
+
+**R1 — high for the Node path, reconciliation authority is an operator trust boundary.**
+`bin/vnext-pilot.mjs` excludes `reconcile` from `needsAuthority` and passes the
+supplied document's identity/resolution/reference to `reconcileFailure`.
+`lib/vnext/neon-store.mjs:394–447` checks the durable block, failed attempt,
+reference reuse and exact replay, but invokes no decision verifier and allows
+an absent reference for direct callers. Thus identity-bound is not the same as
+independently authorized: a caller with this trusted CLI/database access can
+assert `no_effect` and reopen eligible work without Runtime checking the evidence
+or confirming that an unrecorded sender stopped. This is not a claim of remote
+unauthenticated access. Before operation, either enforce a decision verifier at
+the authoritative boundary or explicitly restrict/document this as a trusted
+operator-only capability with evidence/stop prerequisites. Verify unauthorized,
+stale/revoked, and exact-replay cases without weakening uncertainty preservation.
+
+**R2 — high for the Node path, direct write denial is not worker containment.**
+#112's `test/fixtures/vnext-read-only-exec.sh` enters a mapped-root user/mount
+namespace and makes one workspace bind mount read-only, then executes the worker
+without an explicit capability-drop or wider filesystem/control-state boundary.
+Its probe tests an ordinary write only; remount/unmount, writable aliases, access
+to runtime config/authority/attempt files, and process-control interference are
+not tested. `command-executor.mjs` filters worker environment names but inherits
+`HOME` and runs as the caller; environment filtering is not filesystem credential
+isolation. Keep the WSL result narrowly scoped. Qualify an enforced production
+boundary with negative tests for those bypass classes and separate worker/control
+credentials before exposing a real model to it. No bypass experiment was run in
+this review; the missing enforcement/tests are visible in source.
+
+**R3 — medium for the Node path, harness cleanup can fail without failing its report.**
+#112 `scripts/qualify-vnext-first-launch.mjs` suppresses errors from dropping its
+temporary database/role and removing state. `stopUnit` also ignores nonzero stop
+results. A `PASS` therefore does not itself prove successful cleanup; the reported
+post-run inspection is separate evidence for the recorded run. Make cleanup
+outcomes explicit, inspect absence/inactive state, and fail/report partial cleanup
+when required resources remain. Validate with a targeted cleanup-failure case.
+The runtime role also has broad table/sequence/function grants in the isolated
+database: its non-superuser attributes do not prove production least privilege.
+
+### Next work in dependency order
+
+1. Decide the disposition of the Node-only #111/#112/#113/#114 candidates. They
+   are not GAS launch gates; do not land them as evidence for the selected path.
+   If the Node path is retained, close R1/R2/R3 separately.
+2. Complete the GAS pilot target and provisioning order in
+   `VNEXT-GAS-PILOT-COMMISSIONING.md`: isolated database/Data API, dedicated
+   Script ID, test mailbox/sender, disabled registration, separate acceptance and
+   cancellation authorities, allowlisted Script Properties, and read-only
+   pre-activation inspection. Do not activate or send.
+3. Close F2 release controls and F4's original wrong-marker trigger. Create a
+   reviewed `refs/tags/gas-release/*` release with a freshly rebuilt bundle hash
+   and independently inspected predecessor hash.
+4. Deploy with `qualify_only=1`, review the result, then dispatch the hash-pinned
+   deployment and verify `HEAD == LIVE == desired`. GAS source deployment does
+   not establish Gmail consent or runtime qualification.
+5. Run one bounded human-reviewed first pilot with a separate acceptance caller.
+   Stop on any uncertain send; no `no_effect` recovery, no resend, and no manual
+   block clearing.
 
 ### Historical boundary progress
 
@@ -495,24 +628,61 @@ The reporting-only correction `b552de8` has focused failure-path evidence; the
 reported corrected campaign remains tied to `384558e`, not a new local campaign
 at the final head. This closes the delivered offline slice, not live qualification.
 
-**D. Qualified first launch and reversible stop.** No running implementation is
-being migrated. Verify the exact artifact, fresh schema, permissions, real
-decision authority, worker isolation, and timer/host → enable one coordinator →
-observe with a tested pause path. Stopping admission must preserve claims,
-receipts, and reconciliation access; repair or reset an isolated environment only
-after accounting for its outstanding effects. Legacy cutover is not a prerequisite
-for this fresh launch, although current code still requires the `legacyExcluded`
-operator assertion. Historical cutover instructions are not deployment authority.
+**D. Node-path local mechanics and reversible stop (not the selected GAS
+launch).** This section records the separate Node experiment. No running Node
+implementation is being migrated. Verify the exact artifact, fresh schema,
+permissions, real decision authority, worker isolation, and timer/host → enable
+one coordinator → observe with a tested pause path. Stopping admission must
+preserve claims, receipts, and reconciliation access; repair or reset an isolated
+environment only after accounting for its outstanding effects. Legacy cutover is
+not a prerequisite for this fresh launch, although current Node code still
+requires the `legacyExcluded` operator assertion. Historical cutover instructions
+are not deployment authority. GAS launch status is tracked separately in
+`VNEXT-GAS-PILOT-COMMISSIONING.md`.
 
-*Status: not operationally qualified.* The example authority is not a complete
-assignment-decision integration, and permission labels alone do not enforce
-read-only workers. Provision and qualify those concrete boundaries before launch.
+*Status: Node local mechanics passed; operational qualification remains open and
+is not the selected GAS gate.* The
+standalone WSL harness passed on exact commit `7910e44` (clean worktree, Node
+22.14.0, PostgreSQL 16.15), with a scripted authority and worker and zero model
+calls. It exercised a fresh migration ledger and restricted runtime role, a WSL
+read-only write probe, worker credential exclusion, pause while a worker remained
+live, resume, and one systemd user-timer invocation. This is not a
+`verify.mjs`-suite pass or evidence of the selected production path; details are
+recorded in PR #112. The disposable config kept both pilot flags false during
+preflight and set them true before its first bounded tick. At the remote heads
+observed before this roadmap update, PR #111 at `50ea188` and PR #112 at
+`5bb4ca6` were open and all returned checks were green; neither was merged.
+The current review's roadmap edits have no new remote CI evidence. The
+[candidate report](https://github.com/MidnightProject-MP/CT-Runtime/blob/5bb4ca6ce4fa1e48a7ad568a6538f8e8ecdbe417/docs/VNEXT-FIRST-LAUNCH-QUALIFICATION.md)
+records the local observations; R2/R3 above bound their isolation/cleanup claims.
+
+Before the selected target's first tick, observe that it has no competing legacy
+writers or in-flight effects. For this fresh launch, that target-specific
+exclusion check does not require a legacy cutover or migration exercise. The
+`legacyExcluded` boolean remains an operator assertion, not that evidence.
+
+Still required for operational qualification:
+
+- the real assignment-decision authority, not the deliberately incomplete
+  example or deterministic local authority;
+- the selected host and service account, with an OS- or sandbox-enforced worker
+  permission boundary; the WSL read-only probe does not qualify the target host;
+- the exact approved artifact and target fresh database with least-privilege
+  runtime roles, separate from production credentials;
+- a target-host timer invocation, recurring timer/reboot behavior, and the
+  configured timeout and restart behavior;
+- pause preventing new admission while a live worker finishes, plus recovery
+  without duplicate effects on the selected path. The local pause/resume check
+  passed, while the separate 3C crash-recovery evidence remains limited to its
+  scripted environment.
+
+F2 and F4 remain open independently.
 
 **E. Retire superseded orchestration.** Remove duplicate admission and
 scheduling decisions first, then obsolete adapters, triggers, commands, docs.
 Close #68/#69 after preserving unique required content.
 
-*Status: merged via [PR #108](https://github.com/MidnightProject-MP/CT-Runtime/pull/108)
+*Status: first cleanup increment merged via [PR #108](https://github.com/MidnightProject-MP/CT-Runtime/pull/108)
 at `2422235` (head `b26bcdb`).* Branch `work/node-first-cleanup` started from
 `70b5111` and contains:
 
@@ -541,17 +711,21 @@ PR and post-merge runs are green.
 
 Next: trace remaining legacy runtime consumers before deleting implementations.
 Retained migration, inspection, evidence, and Observer utilities still have
-consumers. GAS/email retention is a separate scope decision; no GAS removal or
-issue #68/#69 closure is claimed.
+consumers. GAS is the selected path; retention of the Node/alternate experimental
+paths is a separate scope decision. No GAS removal or issue #68/#69 closure is
+claimed.
 
 ## Tracked findings carried forward
 
 | # | Finding | Status |
 | --- | --- | --- |
 | F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. The suites pin the separate eligibility guarantee too: after a permitted recovery succeeds on the older three-input batch, the fourth input must become eligible **without another human message** — preventing repeated commissioning and eventually processing preserved input are distinct guarantees. |
-| F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — repository configuration. |
+| F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — rechecked through GitHub API 2026-10-26: empty protection rules, null deployment-branch policy; returned rulesets contain only the branch-targeted Copilot review rule. GAS release scope. |
 | F3 | A9 overlapping-acquisition race test used independently sampled claim clocks, allowing a different losing-claim refusal and missing its pinned regex. | Fixed on main in #86 at `164fbda`: deterministic shared-clock claim, preserving the single-winner invariant. This is distinct from the later legacy scheduler-test failure reported during cleanup verification. |
 | F4 | GAS SQL-worker stale-response cascade and original wrong-marker (`blocked` vs `uncertain`) failure. | Partial hardening merged in #105 at `d8dc44c`: FIFO handling and monotonic response matching. Original wrong-marker trigger remains unresolved; green reruns do not establish its cause or resolution. See proof-status evidence above. |
+| R1 | Node reconciliation checks identity/replay but not independent decision authorization or no-effect evidence. | Open — Node-path operating trust-boundary decision; verify authority or explicitly restrict the trusted operator capability if the Node path is retained. Not a GAS launch gate. |
+| R2 | WSL direct-write denial and worker environment filtering do not establish production containment. | Open — Node-path qualification: capabilities, filesystem/control-state access, credential access, and process isolation need negative tests on a Node target. Not the selected GAS path. |
+| R3 | Standalone Node first-launch harness can suppress cleanup failures while reporting PASS. | Open — medium-priority Node harness correction; explicit cleanup outcomes and negative coverage required. Does not affect GAS launch evidence. |
 
 ## Management rules
 

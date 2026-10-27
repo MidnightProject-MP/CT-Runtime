@@ -1,5 +1,11 @@
 # Capabilities — purposes, not vendors
 
+> **Experimental capability-first profile.** The selected vNext execution path is
+> the GAS-hosted email loop in `gas/gas_vnext_email.js` with `deploy/gas-email/`.
+> This capability-first adapter model is separate supporting/historical work, not
+> the selected first launch. See [docs/VNEXT-GAS-EMAIL.md](../docs/VNEXT-GAS-EMAIL.md)
+> and [docs/VNEXT-GAS-PILOT-COMMISSIONING.md](../docs/VNEXT-GAS-PILOT-COMMISSIONING.md).
+
 Celestan reasons over **purposes and contracts**, not products.
 
 ```
@@ -34,7 +40,7 @@ Change binding → no change to Celestan logic.
 
 Provider-specific details (endpoints, rate limits, free-tier quotas, IAM) remain inside the adapter.
 
-The GAS adapters are selected only by explicit `CT_RUNTIME_MODE=gas` or a project/explicit override. Production defaults remain unchanged. GAS deliberately has no `general_compute` implementation.
+The historical GAS Sheets/Drive adapters are selected only by explicit `CT_RUNTIME_MODE=gas` or a project/explicit override. These capability-first defaults are not the selected vNext email path. GAS deliberately has no `general_compute` implementation.
 Celestan code never says “write to Neon” — it says:
 
 ```js
@@ -74,7 +80,7 @@ await health('durable_state');
 
 ## Where persistence fits
 
-- **Disposable container** → `CT-Runtime` image only, with Northflank as the current prototype provider
+- **Disposable container** → `CT-Runtime` image only, with Northflank as the historical capability-first prototype provider; not the selected GAS path
 
 - **Model provider** → OpenRouter, strict free-only (`$0` spend limit), using `OPENROUTER_API_KEY`; first unattended model `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`. Provider/rate-limit failures are durably deferred as bounded `retry` wakes with the same requested model.
 - **`durable_state`** → `PostgresStore` adapter (standard `pg`, not Neon SDK)

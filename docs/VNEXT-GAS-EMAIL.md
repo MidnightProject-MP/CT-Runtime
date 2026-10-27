@@ -1,10 +1,10 @@
-# vNext GAS email loop — pending live qualification
+# vNext GAS email loop — selected path, pending live qualification
 
-This is an independent, disabled-by-default vertical slice. Source-only deployment
-and the explicitly authorized fresh Neon owner bootstrap are now recorded below;
-**the email runtime remains disabled; its registered grant is active for owner
-qualification**. PR #68's Node
-email pilot remains a separate merge gate; do not merge it to activate this path.
+This is the selected vNext execution path. It is a disabled-by-default vertical
+slice. Source-only deployment and the explicitly authorized fresh Neon owner
+bootstrap are recorded below; **the email runtime remains disabled; its registered
+grant is active for owner qualification**. PR #68's Node email pilot remains a
+separate merge gate; do not merge it to activate this path.
 Its Gmail MIME/provenance and deterministic send identity ideas are recycled here,
 not its Node worker, HTTP webapp bridge, migrations 010/011, or property fences.
 
@@ -18,7 +18,7 @@ GAS is the only execution host. There is no Linux, Cloud Run, Oracle, shell, Nod
 worker, inbound webapp, or public endpoint requirement. A public webapp returning
 403 does not prevent outbound time-trigger execution. Node is used for repository
 tests and bundle building only. The existing canonical GitHub Actions deployment
-authority is unchanged; never perform a local clasp push.
+authority uses the manually dispatched, hash-pinned `gas-self-deploy.yml` workflow; never perform a local clasp push.
 
 Celestan receives a source-pinned system capsule in `gas/gas_vnext_email.js` and
 the original objective, previous bounded result, and at most three new messages
@@ -640,7 +640,7 @@ comparison true except synthetic Message-ID, and confirmed receiving the reply.
 The audit explicitly records **operator-supplied evidence**, not autonomous token
 verification or a provider send receipt. No body or credentials enter the audit.
 
-After canonical Actions deployment and live/HEAD verification of the receipt fix,
+After deployment through the supported hash-pinned `gas-self-deploy.yml` path and live/HEAD verification of the receipt fix,
 capture the exact owner connection in memory as above, then:
 
 ```powershell
@@ -662,13 +662,20 @@ whose rewritten RFC ID would reproduce the incident.
 
 ## Provisioning and activation — explicit parent approval required
 
-### Source-only, still-disabled deployment from the reviewed branch
+### Historical source-only deployment from the reviewed branch
 
-The canonical `gas-clasp-deploy.yml` now has an explicit `source_only` boolean,
+> **Superseded release path.** The `gas-clasp-deploy.yml` commands below are
+> historical evidence from the earlier candidate. They are not a supported
+> release path. Current releases use the manually dispatched, hash-pinned
+> `gas-self-deploy.yml` workflow in [GAS-DEPLOYMENT.md](GAS-DEPLOYMENT.md). Do not
+> run the commands below.
+
+The earlier `gas-clasp-deploy.yml` had an explicit `source_only` boolean,
 default **false**, preserving the legacy operator path when omitted. For vNext
-source-only deployment it bypasses **all** legacy configure/setup/diagnose and
-Execution API calls. It neither configures Script Properties nor installs triggers
-nor calls Gmail. Do not use the default legacy path for this activation.
+source-only deployment it bypassed **all** legacy configure/setup/diagnose and
+Execution API calls. It neither configured Script Properties nor installed
+triggers nor called Gmail. It is retained here only as historical evidence, not
+as an activation procedure.
 
 First observe current reality without any source/configuration/deployment writes:
 
@@ -685,7 +692,7 @@ create a version, change a deployment, call the Execution API, or configure anyt
 It requires the exact existing deployment ID even in read-only mode. Require
 `head == live`, inspect the intended source commit, and retain that run's hashes.
 
-After approval, dispatch actual source deployment with **both observed hashes**:
+In that historical flow, after approval, source deployment used **both observed hashes**:
 
 ```sh
 gh workflow run gas-clasp-deploy.yml --ref work/vnext-gas-email-loop \
@@ -743,8 +750,8 @@ or qualify runtime execution. Nothing in source-only deployment enables email.
    `grant_ref`. Never paste identity tokens or API secrets into SQL, logs or docs.
    Verify wrong principal, audience, inactive registration, and other project
    requests are denied before activation.
-4. Through the canonical GitHub Actions deployment workflow only, deploy the
-   reviewed source after approval. The bundle adds `gas_vnext_email`; the only
+4. Through the supported hash-pinned `gas-self-deploy.yml` workflow only, deploy
+   the reviewed source after approval. The bundle adds `gas_vnext_email`; the only
    added OAuth scope is `gmail.modify` (includes read/label/send). Existing legacy
    scopes are retained so this additive change does not break unrelated modules.
    Enable Gmail API for the linked Cloud project as required, and explicitly

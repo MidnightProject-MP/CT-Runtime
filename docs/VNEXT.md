@@ -1,5 +1,7 @@
 # CT-Runtime vNext
 
+> 2026-10-27: The selected execution path is the GAS-hosted email loop in [VNEXT-GAS-EMAIL.md](VNEXT-GAS-EMAIL.md), with commissioning in [VNEXT-GAS-PILOT-COMMISSIONING.md](VNEXT-GAS-PILOT-COMMISSIONING.md). The Node/PostgreSQL/OpenCode material below is a separate experimental path and does not define the selected launch.
+
 > 2026-09-27: The minimum-loop scope is defined in [VNEXT-MINIMUM-LOOP-PLAN.md](VNEXT-MINIMUM-LOOP-PLAN.md). The executable pilot and its activation limits are documented in [VNEXT-PILOT.md](VNEXT-PILOT.md). Earlier stage plans below are historical; they do not add launch requirements to the revised MVP.
 
 The current Runtime is a research prototype, not a compatibility target.
