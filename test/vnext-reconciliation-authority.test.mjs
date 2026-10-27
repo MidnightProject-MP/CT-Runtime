@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMemoryStore } from '../lib/vnext/memory-store.mjs';
 import { createWorkUnit } from '../lib/vnext/kernel.mjs';
-import { testReconciliationDecision, verifyTestReconciliation } from './vnext-test-reconciliation.mjs';
+import { corruptTestReconciliationEvidence, removeTestReconciliationEvidence, setTestReconciliationEvidenceOutcome,
+  setTestReconciliationSenderStopped, testReconciliationDecision, verifyTestReconciliation } from './vnext-test-reconciliation.mjs';
 
 function blockedStore({ reconciliationVerifier = null } = {}) {
   const projectId = 'reconciliation-authority-project';
@@ -43,6 +44,24 @@ test('reconciliation requires evidence and stop confirmation bound to the exact 
   await assert.rejects(store.reconcileFailure({ decision: { ...decision, work_unit_id: `${workUnitId}-other` } }), /does not match/);
   assert.equal(store.snapshot().reconciliationBlocks.length, 1);
   assert.equal(store.snapshot().work[0].last_execution_id, executionId);
+});
+
+test('a boolean or reference cannot replace resolvable, intact outcome and stop evidence', async () => {
+  const missing = blockedStore({ reconciliationVerifier: verifyTestReconciliation });
+  removeTestReconciliationEvidence(missing.decision.evidence_ref);
+  await assert.rejects(missing.store.reconcileFailure({ decision: missing.decision }), /not authorized/);
+
+  const corrupted = blockedStore({ reconciliationVerifier: verifyTestReconciliation });
+  corruptTestReconciliationEvidence(corrupted.decision.evidence_ref);
+  await assert.rejects(corrupted.store.reconcileFailure({ decision: corrupted.decision }), /not authorized/);
+
+  const wrongOutcome = blockedStore({ reconciliationVerifier: verifyTestReconciliation });
+  setTestReconciliationEvidenceOutcome(wrongOutcome.decision.evidence_ref, 'effect_applied');
+  await assert.rejects(wrongOutcome.store.reconcileFailure({ decision: wrongOutcome.decision }), /not authorized/);
+
+  const liveSender = blockedStore({ reconciliationVerifier: verifyTestReconciliation });
+  setTestReconciliationSenderStopped(liveSender.executionId, false);
+  await assert.rejects(liveSender.store.reconcileFailure({ decision: liveSender.decision }), /not authorized/);
 });
 
 test('verified reconciliation records the evidence binding and exact replay', async () => {
