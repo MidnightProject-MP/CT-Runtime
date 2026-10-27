@@ -118,6 +118,8 @@ evidence and freshly inspected remote CI remain tied to their original commits.
 ### Review findings and closure evidence
 
 **R1 — high for the Node path, reconciliation authority is an operator trust boundary.**
+This finding remains open against merged `main`; [PR #113](https://github.com/MidnightProject-MP/CT-Runtime/pull/113)
+is an open candidate fix at `bd5aa81`.
 `bin/vnext-pilot.mjs` excludes `reconcile` from `needsAuthority` and passes the
 supplied document's identity/resolution/reference to `reconcileFailure`.
 `lib/vnext/neon-store.mjs:394–447` checks the durable block, failed attempt,
@@ -145,6 +147,8 @@ credentials before exposing a real model to it. No bypass experiment was run in
 this review; the missing enforcement/tests are visible in source.
 
 **R3 — medium for the Node path, harness cleanup can fail without failing its report.**
+This finding remains open against merged `main`; [PR #114](https://github.com/MidnightProject-MP/CT-Runtime/pull/114)
+is an open candidate fix at `41f792e`, stacked on #112.
 #112 `scripts/qualify-vnext-first-launch.mjs` suppresses errors from dropping its
 temporary database/role and removing state. `stopUnit` also ignores nonzero stop
 results. A `PASS` therefore does not itself prove successful cleanup; the reported
@@ -649,9 +653,10 @@ read-only write probe, worker credential exclusion, pause while a worker remaine
 live, resume, and one systemd user-timer invocation. This is not a
 `verify.mjs`-suite pass or evidence of the selected production path; details are
 recorded in PR #112. The disposable config kept both pilot flags false during
-preflight and set them true before its first bounded tick. At the remote heads
-observed before this roadmap update, PR #111 at `50ea188` and PR #112 at
-`5bb4ca6` were open and all returned checks were green; neither was merged.
+preflight and set them true before its first bounded tick. PR #111 was at the
+historical review-time head `50ea188`; its current head is `ac4904d`. PR #112 is
+at `5bb4ca6`. Both are open, their returned checks are green, and neither is
+merged.
 The current review's roadmap edits have no new remote CI evidence. The
 [candidate report](https://github.com/MidnightProject-MP/CT-Runtime/blob/5bb4ca6ce4fa1e48a7ad568a6538f8e8ecdbe417/docs/VNEXT-FIRST-LAUNCH-QUALIFICATION.md)
 records the local observations; R2/R3 above bound their isolation/cleanup claims.
