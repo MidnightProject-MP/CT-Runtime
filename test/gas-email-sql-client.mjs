@@ -1,9 +1,9 @@
 export function createSqlWorkerClient(worker,{signal,bytes,timeout=30000,startSequence=0}={}){
   const state=new Int32Array(signal),buffer=new Uint8Array(bytes);
   let sequence=startSequence;
+  function enqueue(message){const assigned=++sequence;worker.postMessage({...message,sequence:assigned});return assigned;}
   function request(message){
-    const expected=++sequence;
-    worker.postMessage({...message,sequence:expected});
+    const expected=enqueue(message);
     let observed=Atomics.load(state,0);
     while(observed<expected){
       if(Atomics.wait(state,0,observed,timeout)==='timed-out')throw new Error('email SQL worker response timeout');
@@ -16,6 +16,7 @@ export function createSqlWorkerClient(worker,{signal,bytes,timeout=30000,startSe
   }
   return {
     request,
+    enqueue,
     sql:(sql,args)=>request({type:'sql',sql,args}),
     rawRpc:(operation,input,extra={})=>request({type:'rpc',operation,input,...extra})
   };

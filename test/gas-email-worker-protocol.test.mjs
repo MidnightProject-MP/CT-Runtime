@@ -18,3 +18,24 @@ test('GAS SQL worker ignores a stale response and returns the matching request',
     await worker.terminate();
   }
 });
+
+test('stale blocked response cannot masquerade as the current uncertain result', {timeout:10000}, async ()=>{
+  const signal=new SharedArrayBuffer(8),bytes=new SharedArrayBuffer(4096);
+  const source=`
+    const {parentPort,workerData}=require('node:worker_threads');
+    const signal=new Int32Array(workerData.signal),bytes=new Uint8Array(workerData.bytes);
+    let queue=Promise.resolve();
+    parentPort.on('message',message=>{queue=queue.then(async()=>{
+      if(message.operation==='claim')await new Promise(resolve=>setTimeout(resolve,100));
+      const result=message.operation==='claim'?{status:'blocked'}:{status:'uncertain'};
+      const encoded=new TextEncoder().encode(JSON.stringify({result,sequence:message.sequence}));
+      bytes.set(encoded);Atomics.store(signal,1,encoded.length);Atomics.store(signal,0,message.sequence);Atomics.notify(signal,0);
+    });});
+  `;
+  const worker=new Worker(source,{eval:true,workerData:{signal,bytes}});
+  const client=createSqlWorkerClient(worker,{signal,bytes});
+  try{
+    client.enqueue({type:'rpc',operation:'claim'});
+    assert.deepEqual(client.rawRpc('delivery-peek'),{status:'uncertain'});
+  }finally{await worker.terminate();}
+});

@@ -208,6 +208,12 @@ test('GAS-hosted email vertical slice against transactional SQL', {timeout:12000
         if(mode==='to')headers.find(h=>h.name==='To').value='attacker@example.com';
         if(mode==='reference')headers.find(h=>h.name==='In-Reply-To').value='<other@example.com>';
         if(mode==='body')m.payload.body.data=Buffer.from('different').toString('base64url');
+        if(mode==='wrong-marker'){
+          // F4: leave a delayed blocked RPC response in flight before the
+          // reconciliation tick that must return uncertain for this marker.
+          assert.equal(rpc('claim').status,'blocked');
+          client.enqueue({type:'rpc',operation:'claim',input:{},testDelayMs:100});
+        }
         f.failIntake();const result=f.tick();const expected=mode==='recover'?'sent':mode==='duplicate'?'blocked':'uncertain';assert.equal(result.status,expected,`${mode}: ${JSON.stringify(result)}`);
         assert.equal(f.sends,1);assert.equal(sql('SELECT state FROM gas_email_outbox')[0].state,mode==='recover'?'sent':'admitted');
         assert.equal(rpc('claim').status,mode==='recover'?'idle':'blocked');
