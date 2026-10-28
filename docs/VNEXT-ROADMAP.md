@@ -681,7 +681,9 @@ Still required for operational qualification:
   passed, while the separate 3C crash-recovery evidence remains limited to its
   scripted environment.
 
-F2 and F4 remain open independently.
+F2 remains open independently. F4's original wrong-marker trigger is addressed
+by local candidate `f30b9c8`, but remains open on `main` until that candidate is
+reviewed and merged.
 
 **E. Retire superseded orchestration.** Remove duplicate admission and
 scheduling decisions first, then obsolete adapters, triggers, commands, docs.
@@ -727,7 +729,7 @@ claimed.
 | F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. The suites pin the separate eligibility guarantee too: after a permitted recovery succeeds on the older three-input batch, the fourth input must become eligible **without another human message** — preventing repeated commissioning and eventually processing preserved input are distinct guarantees. |
 | F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — rechecked through GitHub API 2026-10-26: empty protection rules, null deployment-branch policy; returned rulesets contain only the branch-targeted Copilot review rule. GAS release scope. |
 | F3 | A9 overlapping-acquisition race test used independently sampled claim clocks, allowing a different losing-claim refusal and missing its pinned regex. | Fixed on main in #86 at `164fbda`: deterministic shared-clock claim, preserving the single-winner invariant. This is distinct from the later legacy scheduler-test failure reported during cleanup verification. |
-| F4 | GAS SQL-worker stale-response cascade and original wrong-marker (`blocked` vs `uncertain`) failure. | Partial hardening merged in #105 at `d8dc44c`: FIFO handling and monotonic response matching. Original wrong-marker trigger remains unresolved; green reruns do not establish its cause or resolution. See proof-status evidence above. |
+| F4 | GAS SQL-worker stale-response cascade and original wrong-marker (`blocked` vs `uncertain`) failure. | Partial hardening merged in #105 at `d8dc44c`. Local test-only follow-up `f30b9c8` queues a delayed blocked RPC response ahead of the wrong-marker reconciliation tick and proves the tick returns `uncertain` without a second send. Exact WSL commit `f30b9c8` (Node 22.14.0, PostgreSQL 16.15): GAS integration 61/61, worker protocol 2/2, failure-watermark 8/8; 0 failures/skips. The finding remains open on merged `main` pending review and merge of this candidate. |
 | R1 | Node reconciliation checks identity/replay but not independent decision authorization or no-effect evidence. | Open — Node-path operating trust-boundary decision; verify authority or explicitly restrict the trusted operator capability if the Node path is retained. Not a GAS launch gate. |
 | R2 | WSL direct-write denial and worker environment filtering do not establish production containment. | Open — Node-path qualification: capabilities, filesystem/control-state access, credential access, and process isolation need negative tests on a Node target. Not the selected GAS path. |
 | R3 | Standalone Node first-launch harness can suppress cleanup failures while reporting PASS. | Open — medium-priority Node harness correction; explicit cleanup outcomes and negative coverage required. Does not affect GAS launch evidence. |
