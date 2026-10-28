@@ -64,6 +64,6 @@ Migration/cutover proof (2026-09-08, local, isolated): `gas/gas_migrate.js` (`ob
 
 Proposal: `docs/proposals/vnext-core-loop-consolidation.md` (status: proposed; audit required).
 
-**Next action:** Audit `docs/proposals/vnext-core-loop-consolidation.md` against current CT-Runtime implementation; identify the smallest evidence-backed improvements and create the first bounded Work Unit.
+**Next action:** Audit `docs/proposals/vnext-core-loop-consolidation.md` against the selected GAS-hosted email loop first; use Node/OpenCode, Execution Federation, GitHub Actions, and other hosts as comparative or reuse evidence, not required launch dependencies. Record evidence-backed dispositions and uncertainties. Create a bounded implementation Work Unit only if the audit establishes a justified change; otherwise record that no implementation is warranted.
 
 This is an investigation request, not authorization to implement all candidate improvements. Record each candidate as already satisfied, partially satisfied, missing, or unnecessary, with code/test/contract evidence and uncertainties. Identify overlap and removal/consolidation opportunities before recommending changes. No implementation, deployment, or live mutation is implied by this entry.
