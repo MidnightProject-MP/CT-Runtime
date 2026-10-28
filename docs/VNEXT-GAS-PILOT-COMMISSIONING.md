@@ -327,8 +327,20 @@ Blockers:
 - 010 is not live-applied; the provisioning and upgrade sequence above has not
   been executed on a pilot database.
 - This package establishes no approved release tag, approved-release variable, or
-  current self-deploy release for the candidate. The earlier source-only
-  deployment is historical evidence, not current release qualification.
+  current self-deploy release for the candidate. A source-only deployment from
+  `work/vnext-gas-email-loop` at `6839783` ran on 2026-10-12
+  ([workflow run 38307713234](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/38307713234));
+  source-only bundle push, pinned deployment update, and post-deployment
+  HEAD/version checks succeeded. This path performed no Script Properties,
+  trigger, or Gmail configuration; the legacy feedback-inbox and sheet steps
+  were skipped. This is historical source-deployment evidence, not current
+  canonical release qualification or current HEAD/LIVE verification.
+- The latest approved readback attempt at `0485092`
+  ([workflow run 40619431032](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/40619431032),
+  2026-10-28 UTC) returned HTTP 403 with HTML instead of a JSON qualification or
+  plan response. It returned no current HEAD/LIVE values. The signed POST may
+  reserve an anti-replay nonce, so this is not strictly read-only; no retry was
+  performed.
 - The evidence in this package is local and bounded. The #101 merge and any green
   CI do not constitute live qualification.
 
@@ -371,4 +383,11 @@ env POSTGRES_URL=<local-test-database-url> \
 node scripts/build-gas-bundle.mjs gas <bundle-output.json>
 ```
 
-The GAS stack is merged; it is not deployed or activated, and no live operation has occurred.
+The GAS stack is merged. The historical 2026-10-12 source-only deployment in
+[workflow run 38307713234](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/38307713234)
+successfully pushed the reviewed source-only bundle, updated the pinned
+deployment, and verified the deployed version against HEAD at that time. The
+workflow did not configure Script Properties, triggers, or Gmail, and it did not
+activate the runtime.
+Current canonical release qualification, current HEAD/LIVE equality, and current
+runtime readiness remain unverified; no activation or first live task is claimed.
