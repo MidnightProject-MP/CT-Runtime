@@ -59,3 +59,11 @@ Evidence: `npm test` reported **223 tests: 219 passed, 0 failed, 4 skipped** aft
 See [First Autonomous Objective Loop audit and remaining gates](docs/first-autonomous-objective-loop.md) for source findings, test scope, and migration/host limitations.
 
 Migration/cutover proof (2026-09-08, local, isolated): `gas/gas_migrate.js` (`objective-state-v1`) reconstructs one current record per entity with fork/dangling flags, classifies terminal legacy records as `needs-review` (never done), plans without inventing objectives, applies journal entries under stable ids so crash-window reruns do not duplicate, and enforces a single-writer cutover fence at the legacy recovery/dispatch/execution guards (inert while no cutover record exists). Proven by 7 isolated tests; full suite 230 tests: 226 passed, 0 failed, 4 pre-existing environment skips. No live state touched, no cutover active, no new-writer path yet; host proof remains the next gate. Still uncommitted.
+
+## Proposed vNext Core Loop Consolidation
+
+Proposal: `docs/proposals/vnext-core-loop-consolidation.md` (status: proposed; audit required).
+
+**Next action:** Audit `docs/proposals/vnext-core-loop-consolidation.md` against current CT-Runtime implementation; identify the smallest evidence-backed improvements and create the first bounded Work Unit.
+
+This is an investigation request, not authorization to implement all candidate improvements. Record each candidate as already satisfied, partially satisfied, missing, or unnecessary, with code/test/contract evidence and uncertainties. Identify overlap and removal/consolidation opportunities before recommending changes. No implementation, deployment, or live mutation is implied by this entry.
