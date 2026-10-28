@@ -68,16 +68,23 @@ does not select them for launch and does not close GAS operational gates.
   evidence; it does not qualify the GAS path.
 - **Selected first-launch scope:** GAS-hosted email loop with Gmail intake/reply,
   Google-JWT Data API RPC, bounded model turn, and atomic result/outbox. The
-  GAS stack is merged but not live-applied, deployed, or activated. The runtime
-  is disabled; the isolated target, database bootstrap/upgrades, registration,
-  Data API, Script Properties, Gmail preparation, release tag, and first send
-  remain separate approval gates. The Node/PostgreSQL/OpenCode path is a
-  separate experimental implementation, not the selected launch.
+  GAS stack is merged. A source-only deployment from
+  `work/vnext-gas-email-loop` at `6839783` was recorded on 2026-10-12 in
+  [workflow run 38307713234](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/38307713234);
+  source push, pinned deployment update, and post-deployment HEAD/version checks
+  succeeded. The old workflow skipped Script Properties, trigger, and Gmail
+  configuration. This is historical source-deployment evidence, not current
+  canonical release qualification. Current HEAD/LIVE equality and runtime
+  readiness are unverified; the last recorded owner report had the runtime
+  disabled. The isolated target, database bootstrap/upgrades, registration, Data
+  API, Script Properties, Gmail preparation, release tag, and first send remain
+  separate approval gates. The Node/PostgreSQL/OpenCode path is a separate
+  experimental implementation, not the selected launch.
 - **Open findings:** F2 release controls and F4's original wrong-marker trigger
   remain open and are GAS launch blockers. F3 was fixed in #86; the table below
   reflects that disposition. R1/R2/R3 below are Node-path review findings, not
-  GAS launch gates. No live migration, activation, deployment, or commissioning
-  is claimed.
+  GAS launch gates. No live migration, activation, or commissioning is claimed;
+  current canonical release qualification remains unverified.
 
 ## End-to-end review — 2026-10-26
 
