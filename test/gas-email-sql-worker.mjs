@@ -28,6 +28,7 @@ async function handle(message){
   let answer;
   try {
     if(message.type==='close'){await pool.end();parentPort.postMessage({closed:true});return;}
+    if(Number.isInteger(message.testDelayMs)&&message.testDelayMs>0)await new Promise(resolve=>setTimeout(resolve,Math.min(message.testDelayMs,1000)));
     if(message.type==='sql')answer=(await pool.query(message.sql,message.args)).rows;
     else {
       const client=await pool.connect();
