@@ -71,9 +71,10 @@ does not select them for launch and does not close GAS operational gates.
   GAS stack is merged. A source-only deployment from
   `work/vnext-gas-email-loop` at `6839783` was recorded on 2026-10-12 in
   [workflow run 38307713234](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/38307713234);
-  source push, pinned deployment update, and post-deployment HEAD/version checks
-  succeeded. The old workflow skipped Script Properties, trigger, and Gmail
-  configuration. This is historical source-deployment evidence, not current
+  source-only bundle push, pinned deployment update, and post-deployment
+  HEAD/version checks succeeded. This path performed no Script Properties,
+  trigger, or Gmail configuration; the legacy feedback-inbox and sheet steps
+  were skipped. This is historical source-deployment evidence, not current
   canonical release qualification. Current HEAD/LIVE equality and runtime
   readiness are unverified; the last recorded owner report had the runtime
   disabled. The latest approved readback attempt at `0485092`

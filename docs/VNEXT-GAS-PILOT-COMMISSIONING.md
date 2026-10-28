@@ -330,10 +330,11 @@ Blockers:
   current self-deploy release for the candidate. A source-only deployment from
   `work/vnext-gas-email-loop` at `6839783` ran on 2026-10-12
   ([workflow run 38307713234](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/38307713234));
-  source push, pinned deployment update, and post-deployment HEAD/version checks
-  succeeded. Its Script Properties, trigger, and Gmail configuration steps were
-  skipped. This is historical source-deployment evidence, not current canonical
-  release qualification or current HEAD/LIVE verification.
+  source-only bundle push, pinned deployment update, and post-deployment
+  HEAD/version checks succeeded. This path performed no Script Properties,
+  trigger, or Gmail configuration; the legacy feedback-inbox and sheet steps
+  were skipped. This is historical source-deployment evidence, not current
+  canonical release qualification or current HEAD/LIVE verification.
 - The latest approved readback attempt at `0485092`
   ([workflow run 40619431032](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/40619431032),
   2026-10-28 UTC) returned HTTP 403 with HTML instead of a JSON qualification or
@@ -384,8 +385,9 @@ node scripts/build-gas-bundle.mjs gas <bundle-output.json>
 
 The GAS stack is merged. The historical 2026-10-12 source-only deployment in
 [workflow run 38307713234](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/38307713234)
-successfully pushed source, updated the pinned deployment, and verified the
-deployed version against HEAD at that time. The workflow did not configure
-Script Properties, triggers, or Gmail, and it did not activate the runtime.
+successfully pushed the reviewed source-only bundle, updated the pinned
+deployment, and verified the deployed version against HEAD at that time. The
+workflow did not configure Script Properties, triggers, or Gmail, and it did not
+activate the runtime.
 Current canonical release qualification, current HEAD/LIVE equality, and current
 runtime readiness remain unverified; no activation or first live task is claimed.
