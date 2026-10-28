@@ -334,6 +334,12 @@ Blockers:
   succeeded. Its Script Properties, trigger, and Gmail configuration steps were
   skipped. This is historical source-deployment evidence, not current canonical
   release qualification or current HEAD/LIVE verification.
+- The latest approved readback attempt at `0485092`
+  ([workflow run 40619431032](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/40619431032),
+  2026-10-28 UTC) returned HTTP 403 with HTML instead of a JSON qualification or
+  plan response. It returned no current HEAD/LIVE values. The signed POST may
+  reserve an anti-replay nonce, so this is not strictly read-only; no retry was
+  performed.
 - The evidence in this package is local and bounded. The #101 merge and any green
   CI do not constitute live qualification.
 
