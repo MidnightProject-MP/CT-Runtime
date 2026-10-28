@@ -86,11 +86,11 @@ does not select them for launch and does not close GAS operational gates.
   Properties, Gmail preparation, release tag, and first send remain separate
   approval gates. The Node/PostgreSQL/OpenCode path is a separate experimental
   implementation, not the selected launch.
-- **Open findings:** F2 release controls and F4's original wrong-marker trigger
-  remain open and are GAS launch blockers. F3 was fixed in #86; the table below
-  reflects that disposition. R1/R2/R3 below are Node-path review findings, not
-  GAS launch gates. No live migration, activation, or commissioning is claimed;
-  current canonical release qualification remains unverified.
+- **Open findings:** F2 release controls remain open and are a GAS launch gate.
+  F4 was fixed in #117 and its post-merge CI passed; F3 was fixed in #86. The
+  table below reflects those dispositions. R1/R2/R3 below are Node-path review
+  findings, not GAS launch gates. No live migration, activation, or commissioning
+  is claimed; current canonical release qualification remains unverified.
 
 ## End-to-end review — 2026-10-26
 
@@ -123,7 +123,7 @@ evidence and freshly inspected remote CI remain tied to their original commits.
 | 2B: assignment purposes | Execution/review/diagnosis/stewardship contracts, bound reports and verified decisions | Example authority deliberately returns no autonomous assignment decisions, has process-local acceptance decisions, and supplies no cancellation verifier; replace/connect it for operation |
 | 2C: continuation and interruption | Timestamp-free continuation, late-input/revision supersession, cancellation, bounded non-progress and reconciliation | Real provider failure and human reconsideration path; R1; no generalized external-condition subscription |
 | 2D–E: parallelism and status | Canonical project workspace bindings, project-local failure isolation, global pool, durable event-sequence fairness, ledger-derived assignment/acceptance status | Host-enforced filesystem/control-state isolation; bounded context/intake needs explicit operating limits, not silent truncation |
-| 3A–B: recovery and safeguards | Native invariant suites and 3C bounded interruption evidence; release artifacts and guards have separate recorded proofs | Not every recovery-matrix scenario is qualified on the target host; F2/F4 remain GAS release gates, while R1–R3 remain Node-path findings |
+| 3A–B: recovery and safeguards | Native invariant suites and 3C bounded interruption evidence; release artifacts and guards have separate recorded proofs | Not every recovery-matrix scenario is qualified on the target host; F2 remains a GAS release gate and F4 is fixed, while R1–R3 remain Node-path findings |
 | 3C: unattended trials | Scripted four-trial offline campaign complete with quietness/report-integrity checks | No real-model quality, external-effect, long-duration, or natural-lease qualification |
 | 3D: Node-path local mechanics | #111 Node runbook gates; #112 local mechanics evidence | Both PRs open; Node authority/service account/host/OpenCode isolation and recurring operation unqualified. Not the selected GAS launch |
 | 3E: retire duplication | #108 validator extraction and legacy autonomous CLI removal merged; #109 S3 fixture repaired | Retained legacy utilities, migration verification and shared consumers still need dependency-led removal. GAS is selected; Node/alternate-path retention is separate from GAS launch |
@@ -181,9 +181,9 @@ database: its non-superuser attributes do not prove production least privilege.
    Script ID, test mailbox/sender, disabled registration, separate acceptance and
    cancellation authorities, allowlisted Script Properties, and read-only
    pre-activation inspection. Do not activate or send.
-3. Close F2 release controls and F4's original wrong-marker trigger. Create a
-   reviewed `refs/tags/gas-release/*` release with a freshly rebuilt bundle hash
-   and independently inspected predecessor hash.
+3. Close F2 release controls. F4 is fixed on `main` by #117. Create a reviewed
+   `refs/tags/gas-release/*` release with a freshly rebuilt bundle hash and
+   independently inspected predecessor hash.
 4. Deploy with `qualify_only=1`, review the result, then dispatch the hash-pinned
    deployment and verify `HEAD == LIVE == desired`. GAS source deployment does
    not establish Gmail consent or runtime qualification.
@@ -258,7 +258,7 @@ cutover is implied.
 | GAS canonical settlement — durable continuation proposals | `007_continuation_proposals.sql` in #81 @ `8f838c4`; forward-only within the checksum-ledger chain 002–007; merged to the email stack base at `95e2bd1` | GAS suites through the public RPC: proposal bound to the settling attempt (fence and captured input snapshot), cooldown-gated consideration, consumption exactly with authorized successor admission, exactly one successor under competing claims, waiting quiet, late-input supersession, delivery-first rejection staying pending, rollback and inert exact replay, and a 002–006→007 backfill admitting only authorized legacy continuations; the native CI stage executes the concurrent proposal admission proof (not skipped); focused 61 tests / 58 pass / 3 native-only skips / 0 fail | Merged to main via #101; not applied live; acceptance binding remains operationally unqualified; `no_effect` recovery is closed by decision (permanent stop) |
 | GAS canonical settlement — acceptance separation | `008_acceptance_decisions.sql` in #84 @ accepted head `e38e702`; forward-only within the checksum-ledger chain 002–008; merged to the email stack base at `c0e0d77` | GAS suites through the public RPC: acceptance binds the settled revision to the canonical digest over the exact settlement receipt, exact replay returns the recorded decision, divergent content fails before mutation, stale decisions fail closed against superseded input / newer attempts / unknown work, the terminal transition rolls back atomically, an unprovisioned instance cannot accept, new acceptance is refused during unresolved reconciliation blocks or active mutation with the read-only context aligned, and an accepted decision replays while exclusions hold; the native CI stage executes concurrent acceptance and authority rotation/revocation racing acceptance in both orderings (verified not skipped at the accepted head); reviewer-verified focused integration/upgrade/F1 suites 61 pass / 5 native-only skips / 0 fail | Merged to main via #101; not applied live; acceptance-authority provisioning, the actual accepting caller, and its substantive review remain operating-path qualification obligations |
 | F1 watermark / Milestone 1C dispatch | F1 forward fix merged and integration-tested (004 snapshot binding, 005 batch-boundary recovery); 1C implemented on main (#88 at `9e8413a`, recovery invariants hardened by #90 at `007792d`); #101 carries the integrated stack | F1 GAS suites green at merged heads; separate gates required | Not claimed — not applied live |
-| F4 — GAS SQL-worker stale-response hardening | PR #105 at `b6c1b11`, merged at `d8dc44c`: monotonic response-sequence matching, FIFO worker handling, shared client for both SQL-worker consumers, and observed-state/result diagnostics | Partial hardening for stale-response consumption; the original wrong-marker (`blocked` vs `uncertain`) trigger at `test/gas-email.integration.test.mjs:211` remains unresolved. The regression exercises a stale response but does not claim every old-client schedule fails or reproduce the original trigger. Timeline: GAS failures preceded `55aeae1`; Docker rate-limit failures followed that hardening and blocked CI; PR #104's first attempt then reproduced the GAS failure, so the earlier hardening did not eliminate it. Exact-commit targeted WSL suites: 70 tests, 64 pass / 6 expected skips / 0 fail; protocol 10/10 and integration 3/3 stability runs passed pre-commit. Exact-head CI runs `40004335202` / `40004404632` and post-merge run `40015030829` passed | No operational change. F4 remains open pending resolution of the original trigger. The later 3C offline campaign does not resolve F4 |
+| F4 — GAS SQL-worker stale-response hardening | PR #105 at `b6c1b11`, merged at `d8dc44c`: monotonic response-sequence matching, FIFO worker handling, shared client for both SQL-worker consumers, and observed-state/result diagnostics. PR #117 at `9329470`, merged at `b51698b`, adds the deterministic wrong-marker regression and delayed blocked-response fixture. | Negative control at exact WSL commit `f30b9c8` removed client-side sequence matching (retaining `enqueue` and the worker queue) and reproduced the original failure: `wrong-marker` returned `blocked` at `data-api-health` instead of `uncertain`. Restored sequence matching; exact `f30b9c8` suites passed: integration 61/61, worker protocol 2/2, failure watermark 8/8, zero failures/skips. Post-merge CI `40695197513` passed `core` and `gas-data-api-role-handoff`. | Fixed on `main`; no operational change. The integration regression is the decisive check; the synthetic protocol test is supplementary |
 
 The PR's exact-head CI checks are the native evidence record; local PGlite is not
 native PostgreSQL and local Windows runs do not prove Linux process groups.
@@ -694,9 +694,9 @@ Still required for operational qualification:
   passed, while the separate 3C crash-recovery evidence remains limited to its
   scripted environment.
 
-F2 remains open independently. F4's original wrong-marker trigger is addressed
-by local candidate `f30b9c8`, but remains open on `main` until that candidate is
-reviewed and merged.
+F2 remains open independently. F4 was fixed in #117 (`b51698b`) and its
+post-merge CI passed; no deployment, activation, or live-state qualification is
+claimed.
 
 **E. Retire superseded orchestration.** Remove duplicate admission and
 scheduling decisions first, then obsolete adapters, triggers, commands, docs.
@@ -742,7 +742,7 @@ claimed.
 | F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. The suites pin the separate eligibility guarantee too: after a permitted recovery succeeds on the older three-input batch, the fourth input must become eligible **without another human message** — preventing repeated commissioning and eventually processing preserved input are distinct guarantees. |
 | F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — rechecked through GitHub API 2026-10-26: empty protection rules, null deployment-branch policy; returned rulesets contain only the branch-targeted Copilot review rule. GAS release scope. |
 | F3 | A9 overlapping-acquisition race test used independently sampled claim clocks, allowing a different losing-claim refusal and missing its pinned regex. | Fixed on main in #86 at `164fbda`: deterministic shared-clock claim, preserving the single-winner invariant. This is distinct from the later legacy scheduler-test failure reported during cleanup verification. |
-| F4 | GAS SQL-worker stale-response cascade and original wrong-marker (`blocked` vs `uncertain`) failure. | Partial hardening merged in #105 at `d8dc44c`. Local test-only follow-up `f30b9c8` queues a delayed blocked RPC response ahead of the wrong-marker reconciliation tick and proves the tick returns `uncertain` without a second send. Exact WSL commit `f30b9c8` (Node 22.14.0, PostgreSQL 16.15): GAS integration 61/61, worker protocol 2/2, failure-watermark 8/8; 0 failures/skips. The finding remains open on merged `main` pending review and merge of this candidate. |
+| F4 | GAS SQL-worker stale-response cascade and original wrong-marker (`blocked` vs `uncertain`) failure. | Fixed on `main` in #117 at `b51698b` (head `9329470`). The deterministic regression queues a delayed blocked RPC response ahead of the wrong-marker reconciliation tick and proves the tick returns `uncertain` without a second send. Negative control at exact WSL commit `f30b9c8` removed client-side sequence matching and reproduced the original `blocked` vs `uncertain` failure; restoring the guard passed integration 61/61, worker protocol 2/2, and failure watermark 8/8 with zero failures/skips. Post-merge CI `40695197513` passed `core` and `gas-data-api-role-handoff`. Test/fixture hardening only; it does not qualify deployment, activation, or live state. The integration regression is the decisive check; the synthetic protocol test is supplementary. |
 | R1 | Node reconciliation checks identity/replay but not independent decision authorization or no-effect evidence. | Open — Node-path operating trust-boundary decision; verify authority or explicitly restrict the trusted operator capability if the Node path is retained. Not a GAS launch gate. |
 | R2 | WSL direct-write denial and worker environment filtering do not establish production containment. | Open — Node-path qualification: capabilities, filesystem/control-state access, credential access, and process isolation need negative tests on a Node target. Not the selected GAS path. |
 | R3 | Standalone Node first-launch harness can suppress cleanup failures while reporting PASS. | Open — medium-priority Node harness correction; explicit cleanup outcomes and negative coverage required. Does not affect GAS launch evidence. |
