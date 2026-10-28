@@ -25,7 +25,9 @@ Evaluate whether Work Units consistently preserve intent, constraints, acceptanc
 
 ### 2. Reliable execution handoffs
 
-Evaluate whether disposable executions can resume across GAS, GitHub Actions, OpenCode, and other execution bodies without losing authoritative context, work identity, or relevant evidence.
+Evaluate whether disposable executions can resume across execution boundaries without losing authoritative context, work identity, or relevant evidence.
+
+Audit the selected GAS-hosted email loop first. Treat Node/OpenCode, Execution Federation, GitHub Actions, and other execution hosts as comparative or reuse evidence, not required launch dependencies. Any proposed expansion beyond the selected GAS path must demonstrate a need in that path.
 
 **Reference:** Execution Federation, durable continuation, Codex workflows.
 
@@ -51,12 +53,12 @@ Evaluate whether Observer and Foundry can turn recurring execution failures, ine
 
 Before implementing anything:
 
-1. Inspect the current CT-Runtime code, tests, contracts, and project state.
+1. Inspect the current CT-Runtime code, tests, contracts, and project state, beginning with the selected GAS-hosted email loop.
 2. Map each improvement candidate to existing mechanisms.
 3. Classify each as already satisfied, partially satisfied, missing, or unnecessary.
 4. Identify overlapping mechanisms that could be consolidated or removed.
 5. Propose the smallest justified changes, ordered by expected impact and implementation cost.
-6. Record evidence, uncertainties, and the next bounded Work Unit.
+6. Record evidence and uncertainties. Create a bounded implementation Work Unit only if the audit establishes a justified change; otherwise, explicitly record that no implementation is warranted.
 
 Do not duplicate existing functionality or introduce new orchestration abstractions without demonstrated need.
 
@@ -79,6 +81,4 @@ Prefer consolidation, reuse, and simplification over new subsystems. Preserve th
 
 ## Completion condition
 
-This proposal is resolved when each candidate has an evidence-backed disposition, justified changes have been implemented and verified, and remaining limitations are explicitly recorded.
-
-A candidate may be rejected as unnecessary. Successful completion does not require implementing all five ideas.
+The audit is complete when each candidate has an evidence-backed disposition, uncertainties and remaining limitations are recorded, and the need (or lack of need) for implementation is explicit. If a justified change is identified, define it as a bounded Work Unit for separate implementation and verification; implementation is not presumed by the audit mandate. Successful completion does not require implementing all five ideas.
