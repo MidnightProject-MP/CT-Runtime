@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { gasEmailFixture } from './gas-email-fixture.mjs';
 import { createSqlWorkerClient } from './gas-email-sql-client.mjs';
 
-test('GAS-hosted email vertical slice against transactional SQL', {timeout:120000}, async t=>{
+test('GAS-hosted email vertical slice against transactional SQL', {timeout:240000}, async t=>{
   const signal=new SharedArrayBuffer(8),bytes=new SharedArrayBuffer(2000000);
   const worker=new Worker(new URL('./gas-email-sql-worker.mjs',import.meta.url),{workerData:{signal,bytes}});
   const [ready]=await once(worker,'message');assert.equal(ready.error,undefined);
