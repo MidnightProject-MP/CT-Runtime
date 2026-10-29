@@ -322,7 +322,10 @@ back migrations or delete state to recover. Preserve data and escalate.
 Blockers:
 
 - `no_effect` recovery is unavailable; uncertain send is a permanent stop.
-- No real Gmail, OpenRouter, Neon Data API, or Google-JWT qualification exists.
+- Current-candidate end-to-end Gmail, OpenRouter, Data API, and Google-JWT
+  qualification remains outstanding. Owner diagnostics on 2026-10-28 passed
+  Gmail profile/label and Neon health checks against historical V108 source;
+  those checks do not qualify the current candidate.
 - The actual acceptance caller and substantive review are not operational.
 - 010 is not live-applied; the provisioning and upgrade sequence above has not
   been executed on a pilot database.
@@ -334,13 +337,24 @@ Blockers:
   HEAD/version checks succeeded. This path performed no Script Properties,
   trigger, or Gmail configuration; the legacy feedback-inbox and sheet steps
   were skipped. This is historical source-deployment evidence, not current
-  canonical release qualification or current HEAD/LIVE verification.
-- The latest approved readback attempt at `0485092`
+  canonical release qualification.
+- The earlier approved readback attempt at `0485092`
   ([workflow run 40619431032](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/40619431032),
   2026-10-28 UTC) returned HTTP 403 with HTML instead of a JSON qualification or
-  plan response. It returned no current HEAD/LIVE values. The signed POST may
-  reserve an anti-replay nonce, so this is not strictly read-only; no retry was
-  performed.
+  plan response. After the owner reset the endpoint secret, the separately approved
+  [run 40736943649](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/40736943649)
+  at `49c1c8f` succeeded: HEAD = LIVE V108 =
+  `274b6e353ede472ead96dc9085ab07811402b54af57c5877130b68b177929af2`, exactly
+  the historical `6839783` artifact. The signed POST can reserve an anti-replay
+  nonce; it is not strictly read-only. The 403 is no longer the current blocker.
+- The owner discovered `CT_VNEXT_EMAIL_ENABLED=true` and one time-based
+  `vnextEmailTick` trigger, then paused the runtime. A second preparation
+  diagnostic confirmed the disabled flag and matching configuration. This
+  supersedes historical assumptions that it had remained disabled.
+- Release controls still need configuration, following the bootstrap-to-standing
+  authority policy in [GAS-DEPLOYMENT.md](GAS-DEPLOYMENT.md). There is no separate
+  independent human reviewer requirement. Repository audit access is a local
+  [implementation candidate](VNEXT-GAS-REPOSITORY-ACCESS.md), not live capability.
 - The evidence in this package is local and bounded. The #101 merge and any green
   CI do not constitute live qualification.
 

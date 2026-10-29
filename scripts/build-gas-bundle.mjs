@@ -19,6 +19,7 @@ const DEPLOYABLE_FILES = new Set([
   'gas_feedback_vnext_projection.js',
   'gas_feedback_vnext_transport.js',
   'gas_github.js',
+  'gas_repository_read.js',
   'gas_migrate.js',
   'gas_observer.js',
   'gas_state.js',

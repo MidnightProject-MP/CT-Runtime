@@ -25,6 +25,7 @@ const deployableFiles = [
   'gas_feedback_vnext_projection.js',
   'gas_feedback_vnext_transport.js',
   'gas_github.js',
+  'gas_repository_read.js',
   'gas_migrate.js',
   'gas_observer.js',
   'gas_state.js',
@@ -55,7 +56,7 @@ test('builds exactly the qualified production GAS deployment file set', async ()
     const bundle = JSON.parse(await readFile(output, 'utf8'));
     const names = bundle.files.map((file) => file.name).sort();
 
-    assert.equal(bundle.files.length, 24);
+    assert.equal(bundle.files.length, 25);
     assert.deepEqual(names, [...canonicalDeployableFiles].sort());
     assert.ok(names.includes('gas_feedback_vnext'));
     assert.ok(names.includes('gas_feedback_vnext_projection'));
