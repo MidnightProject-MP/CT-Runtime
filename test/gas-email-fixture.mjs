@@ -1,8 +1,10 @@
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-export function gasEmailFixture(rpc) {
+export function gasEmailFixture(rpc,options={}) {
+  const repository=options.repository===true,github=options.github??(()=>({httpStatus:404,body:'not found'})),githubRequests=[];
   const values={CT_VNEXT_EMAIL_ENABLED:'true',CT_VNEXT_EMAIL_INSTANCE:'gas-test',CT_VNEXT_EMAIL_DATA_API_URL:'https://test.neon.tech',CT_VNEXT_EMAIL_APPROVED_DATA_API_HOST:'test.neon.tech',CT_VNEXT_EMAIL_APPROVED_SCRIPT_ID:'test-script',CT_VNEXT_EMAIL_APPROVED_MAILBOX:'midnight.project.mp@gmail.com',CT_VNEXT_EMAIL_APPROVED_SENDER:'midnightprojectantigravity@gmail.com',CT_VNEXT_EMAIL_MODEL:'test/model',CT_VNEXT_EMAIL_LABEL:'Celestan',OPENROUTER_API_KEY:'test-openrouter-secret'};
+  if(repository&&options.githubToken!==null)values.GITHUB_TOKEN=options.githubToken??'github-test-secret';
   const messages=new Map();let sends=0,loseSend=false,searchVisible=true,loseCheckpoint=false,loseAdmission=false;
   let model=()=>({disposition:'done',summary:'Here is a useful draft.',artifact:'A bounded answer.'});
   let ticks=0,now=Date.now();const triggers=[];
@@ -14,18 +16,25 @@ export function gasEmailFixture(rpc) {
   const context=()=>vm.createContext({Date:class extends Date {static now(){return now;}},PropertiesService:{getScriptProperties:()=>({getProperty:k=>values[k]??null,getProperties:()=>({...values}),setProperty:forbidden,setProperties:forbidden,deleteProperty:forbidden})},SpreadsheetApp:new Proxy({},{get:forbidden}),
     ScriptApp:{getScriptId:()=> 'test-script',getIdentityToken:()=> 'test-google-jwt',getOAuthToken:()=> 'test-oauth',getProjectTriggers:()=>triggers,newTrigger:name=>({timeBased(){return this;},everyMinutes(){return this;},create(){triggers.push({getHandlerFunction:()=>name});}})},
     LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
-    Utilities:{Charset:{UTF_8:'UTF-8'},base64Encode:s=>Buffer.from(s).toString('base64'),base64EncodeWebSafe:s=>Buffer.from(s).toString('base64url'),base64DecodeWebSafe:s=>Buffer.from(s,'base64url'),newBlob:s=>({getDataAsString:()=>Buffer.from(s).toString('utf8')})},
+    Utilities:{Charset:{UTF_8:'UTF-8'},base64Encode:s=>Buffer.from(s).toString('base64'),base64EncodeWebSafe:s=>Buffer.from(s).toString('base64url'),base64Decode:s=>Buffer.from(s,'base64'),base64DecodeWebSafe:s=>Buffer.from(s,'base64url'),newBlob:s=>({getDataAsString:()=>Buffer.from(s).toString('utf8')})},
     UrlFetchApp:{fetch:(url,opts)=>{
-      const u=new URL(url);let result;
+      const u=new URL(url);let result,status=200;
       if(u.hostname==='test.neon.tech'){
         if(opts.headers.Authorization!=='Bearer test-google-jwt')throw new Error('missing jwt');
         const p=JSON.parse(opts.payload);result=rpc(p.p_operation,p.p_input);
         if(loseCheckpoint&&p.p_operation==='checkpoint'){loseCheckpoint=false;throw new Error('lost checkpoint response');}
         if(loseAdmission&&p.p_operation==='delivery'&&result.status==='send'){loseAdmission=false;throw new Error('lost admission response');}
+      }else if(u.hostname==='api.github.com'){
+        if(!repository)throw new Error('unexpected github request');
+        if(!values.GITHUB_TOKEN)throw new Error('missing github credential');
+        if(opts.method!=='get'||opts.followRedirects!==false)throw new Error('unsafe github request');
+        if(opts.headers.Authorization!=='Bearer '+values.GITHUB_TOKEN)throw new Error('github authorization mismatch');
+        githubRequests.push({url,options:opts});result=github(url,opts);
+        if(result&&result.httpStatus){status=result.httpStatus;result=result.body;}
       }else if(u.hostname==='openrouter.ai'){
         const request=JSON.parse(opts.payload);if(request.messages[0].role!=='system'||request.messages[1].role!=='user')throw new Error('invalid roles');
         assert.equal('response_format' in request,false,'use strict prompted JSON without unsupported provider parameter');
-        const turn=model(request);result={choices:[{message:{content:typeof turn==='string'?turn:JSON.stringify(turn)}}]};
+        const turn=model(request);result=turn&&turn.choices?turn:{choices:[{finish_reason:'stop',message:{content:typeof turn==='string'?turn:JSON.stringify(turn)}}]};
       }else{
         const route=u.pathname.split('/users/me/')[1];
         if(route==='profile')result={emailAddress:'midnight.project.mp@gmail.com'};
@@ -49,8 +58,8 @@ export function gasEmailFixture(rpc) {
         else {if(unavailable.has(route.split('/')[1]))throw new Error('message unavailable');result=messages.get(route.split('/')[1]);}
       }
       if(result===undefined)throw new Error('unexpected request');
-      return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(result)};
+      return {getResponseCode:()=>status,getContentText:()=>typeof result==='string'?result:JSON.stringify(result)};
     }}});
-  function cold(){const ctx=context();for(const f of ['gas_vnext_email.js'])vm.runInContext(readFileSync(new URL('../gas/'+f,import.meta.url),'utf8'),ctx);return ctx;}
-  return {values,messages,add,cold,unavailable,rawMessages,failIntake(value=true){listFailure=value;},truncateSearch(value=true){searchToken=value;},paginateIntakeOnce(){intakeTokenOnce=true;},tick(){ticks++;return cold().vnextEmailTick();},get sends(){return sends;},get ticks(){return ticks;},setModel(fn){model=fn;},advance(ms){now+=ms;},loseNextSend(){loseSend=true;},loseNextCheckpoint(){loseCheckpoint=true;},loseNextAdmission(){loseAdmission=true;},hideSearch(){searchVisible=false;},showSearch(){searchVisible=true;}};
+  function cold(){const ctx=context();for(const f of (repository?['gas_repository_read.js','gas_vnext_email.js']:['gas_vnext_email.js']))vm.runInContext(readFileSync(new URL('../gas/'+f,import.meta.url),'utf8'),ctx);return ctx;}
+  return {values,messages,add,cold,unavailable,rawMessages,githubRequests,failIntake(value=true){listFailure=value;},truncateSearch(value=true){searchToken=value;},paginateIntakeOnce(){intakeTokenOnce=true;},tick(){ticks++;return cold().vnextEmailTick();},get sends(){return sends;},get ticks(){return ticks;},setModel(fn){model=fn;},advance(ms){now+=ms;},loseNextSend(){loseSend=true;},loseNextCheckpoint(){loseCheckpoint=true;},loseNextAdmission(){loseAdmission=true;},hideSearch(){searchVisible=false;},showSearch(){searchVisible=true;}};
 }

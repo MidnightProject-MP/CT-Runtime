@@ -53,6 +53,22 @@ test('deployment client treats HTTP-200 business rejection as failure', async ()
   assert.match(source, /if \(value\.status === 'rejected'\) throw new Error/);
 });
 
+test('deployment client requires the configured deployment id to match the endpoint', async () => {
+  const source = await readFile(new URL('../scripts/deploy-gas.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const expectedDeploymentId = process\.env\.CT_GAS_DEPLOYMENT_ID/);
+  assert.match(source, /expectedDeploymentId && expectedDeploymentId !== deploymentId/);
+});
+
+test('deployment client supports read-only HEAD and LIVE inspection before mutation', async () => {
+  const source = await readFile(new URL('../scripts/deploy-gas.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const inspectOnly = process\.env\.CT_GAS_INSPECT_ONLY === '1'/);
+  assert.match(source, /if \(inspectOnly\) \{/);
+  assert.match(source, /status: 'inspected'/);
+  assert.match(source, /liveBundleHash: observed\.liveBundleHash/);
+  assert.match(source, /headBundleHash: observed\.headBundleHash/);
+  assert.ok(source.indexOf("operation: 'self-deploy-plan'") < source.indexOf("operation: 'self-deploy', expected_live_version"));
+});
+
 test('deployment verification independently requires both LIVE and HEAD readback', async () => {
   const source = await readFile(new URL('../scripts/deploy-gas.mjs', import.meta.url), 'utf8');
   const readback = await readFile(new URL('../lib/gas-deploy-readback.mjs', import.meta.url), 'utf8');
