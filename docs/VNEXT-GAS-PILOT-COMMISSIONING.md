@@ -24,6 +24,14 @@ separate explicit approval.
 This commissioning document is added in a docs-only commit after the verified
 head. It changes no code, test, migration, or deployment input.
 
+The current isolated-qualification code candidate is branch
+`feat/gas-isolated-qualification` at tested commit `0277f24`, based on main
+`d5758c5`. Its canonical Linux bundle is 26 files with hash
+`88e695eba90c8ea4371ab3c2e3d4afab33a9045811c678f4792d775f3acd6908`. Native GAS
+email tests passed 63/63 with zero skips, and deployment/release contract tests
+passed 37/37 in WSL Ubuntu 24.04 / Node 22.14.0 / PostgreSQL 16.15. This is local
+evidence only; no sandbox target has been provisioned or dispatched.
+
 The release bundle identity is the canonical Linux build above. The builder
 normalizes CRLF to LF, and `test/gas-bundle-builder.test.mjs` proves LF and CRLF
 sources yield the same hash. A Windows checkout is not a release identity.

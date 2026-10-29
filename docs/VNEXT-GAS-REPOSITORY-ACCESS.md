@@ -154,6 +154,15 @@ suite now proves two additional behaviors through real SQL state:
 Windows Node `v24.19.0` full `npm test` result: **634 tests, 574 pass, 58 skipped,
 2 failed**. Both failures are pre-existing `vnext-command-executor` tests that
 require Linux process groups; they are not repository-access failures. The GAS
-tests above pass. Native PostgreSQL evidence is recorded separately after running
-the exact candidate commit in the WSL workspace. None of this is live GitHub,
-OpenRouter, GAS, or Google-JWT qualification.
+tests above pass.
+
+The exact code commit `0277f24` was fetched into the WSL workspace and tested
+with Ubuntu 24.04, Node `22.14.0`, and PostgreSQL `16.15`. The native GAS email
+suite passed **63/63, 0 failed, 0 skipped**; the native-only concurrency tests
+executed. The deployment/release/target/bundle/load-order contract tests passed
+**37/37**. The canonical Linux bundle from that commit is 26 files with hash
+`88e695eba90c8ea4371ab3c2e3d4afab33a9045811c678f4792d775f3acd6908`. The
+qualification workflow, target binding, and deployment-client changes do not
+alter the GAS bundle, so this hash equals the repository-access bundle already
+recorded above. None of this is live GitHub, OpenRouter, GAS, or Google-JWT
+qualification.
