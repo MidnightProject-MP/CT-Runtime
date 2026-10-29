@@ -11,7 +11,7 @@ manually dispatch gas-self-deploy.yml at the exact release tag
         ↓
 read current LIVE predecessor
         ↓
-independent environment review of exact commit, desired hash and predecessor
+authorize exact commit, desired hash and predecessor under the current mandate
         ↓
 HMAC self-deploy exactly once
         ↓
@@ -28,7 +28,31 @@ bounded readback reconciliation
 HEAD == LIVE == desiredBundleHash
 ```
 
-A merge to `main` does not deploy. Only the manually dispatched, hash-pinned `gas-self-deploy.yml` release workflow is supported, subject to the reviewed release gate below. Independent environment approval is a prerequisite, not assumed by this document. Production deployment is serialized by the `gas-production-deploy` concurrency group with cancellation disabled.
+A merge to `main` does not deploy. Only the explicitly dispatched, hash-pinned `gas-self-deploy.yml` release workflow is supported, subject to the reviewed release gate below. `workflow_dispatch` means an explicit invocation, not necessarily a human button click. Production deployment is serialized by the `gas-production-deploy` concurrency group with cancellation disabled.
+
+## Release authority: bootstrap to autonomous operation
+
+The owner clarified on 2026-10-28 that this is Philippe and Celestan, with no
+separate independent human reviewer. Celestan is not a second human approver.
+During bootstrap, Philippe approves the exact release tuple; Celestan prepares,
+tests, dispatches, and verifies that approved release. An additional human account
+is not a commissioning requirement.
+
+The intended commissioned operating model delegates routine work and releases
+across CT repositories to Celestan under the owner's standing mandate. Per-release
+human approval is a bootstrap measure, not the final architecture. Transition
+requires demonstrated repository access, bounded execution, durable evidence,
+exact-artifact verification, and recovery behavior on the commissioned path.
+Record that transition and its scope before using standing authority for live
+release writes. Scope expansion, consequential ambiguity, and unresolved recovery
+are escalated to the owner; routine in-scope releases are not.
+
+Both phases retain protected release tags, restricted release credentials,
+`GAS_APPROVED_RELEASE` bound to the exact tuple, test evidence, and observed
+HEAD/LIVE convergence. In the autonomous phase Celestan may prepare that tuple
+under standing authority; it remains a deterministic artifact/predecessor check,
+not evidence of independent review. These policy changes do not by themselves
+commission the runtime or provision GitHub protections.
 
 ## Identity and invariants
 
@@ -119,13 +143,16 @@ whose actual `GITHUB_REF` differs from `release_ref`. The `gas-production` envir
 must approve this exact tuple in `GAS_APPROVED_RELEASE`:
 `<release_ref>:<commit>:<desired_hash>:<predecessor_hash>`. Missing/stale approval,
 wrong ref, wrong commit, wrong built hash, or a changed live predecessor fails
-closed. Environment protection/review and tag protection are operator prerequisites;
-this change does not configure cloud resources or repository environments. The
-available GitHub integration cannot read the `gas-production` environment's
-protection settings, and no `gas-release/*` tags are currently visible. Treat both
-controls as **unverified blockers** until a repository administrator confirms
-required independent reviewers on `gas-production` and a protected release-tag
-rule; the workflow/code changes are not a substitute for those controls.
+closed. Restrict environment deployment refs to protected `gas-release/*` tags
+and restrict release-tag creation/update to the authorized release principal.
+Review follows the bootstrap/standing-authority policy above, without inventing
+a second human approver. The 2026-10-28 GitHub API inspection found no environment
+protection rules or deployment-ref policy, no tag-targeted ruleset, and no release
+tags. `GAS_APPROVED_RELEASE` was absent at repository and environment scope.
+These are **open configuration gaps**, not configured controls; workflow/code
+checks do not replace them. A tag-only environment policy will also prevent the
+existing readback workflow from running from `main`; select a reviewed protected
+tag for future readback before imposing that policy.
 The shared production concurrency and signed compare-and-swap/readback remain.
 
 Pending: exact A sandbox signed-dispatch smoke, then final aggregate sandbox

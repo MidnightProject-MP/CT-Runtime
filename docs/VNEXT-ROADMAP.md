@@ -75,13 +75,19 @@ does not select them for launch and does not close GAS operational gates.
   HEAD/version checks succeeded. This path performed no Script Properties,
   trigger, or Gmail configuration; the legacy feedback-inbox and sheet steps
   were skipped. This is historical source-deployment evidence, not current
-  canonical release qualification. Current HEAD/LIVE equality and runtime
-  readiness are unverified; the last recorded owner report had the runtime
-  disabled. The latest approved readback attempt at `0485092`
+  canonical release qualification. The earlier readback attempt at `0485092`
   ([workflow run 40619431032](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/40619431032),
   2026-10-28 UTC) returned HTTP 403 with HTML instead of a qualification/plan
-  response, so it yielded no HEAD/LIVE values. The signed POST may reserve an
-  anti-replay nonce; it is not strictly read-only and was not retried. The
+  response. After the endpoint secret was reset, separately approved
+  [run 40736943649](https://github.com/MidnightProject-MP/CT-Runtime/actions/runs/40736943649)
+  at `49c1c8f` confirmed HEAD = LIVE V108 =
+  `274b6e353ede472ead96dc9085ab07811402b54af57c5877130b68b177929af2`, the
+  historical `6839783` bundle, not current main. The signed POST may reserve an
+  anti-replay nonce; it is not strictly read-only. The owner found the runtime
+  enabled, paused it, and confirmed the disabled flag with a preparation diagnostic.
+  Gmail profile/label and Neon health checks passed on that historical source.
+  See [repository-access candidate](VNEXT-GAS-REPOSITORY-ACCESS.md) for the
+  observed artifact mapping and the first audit capability implementation. The
   isolated target, database bootstrap/upgrades, registration, Data API, Script
   Properties, Gmail preparation, release tag, and first send remain separate
   approval gates. The Node/PostgreSQL/OpenCode path is a separate experimental
@@ -740,7 +746,7 @@ claimed.
 | # | Finding | Status |
 | --- | --- | --- |
 | F1 | `deploy/gas-email/schema.sql` failure/expiry records the **latest** input sequence rather than the failed attempt's **captured** sequence, so new input arriving after the snapshot is suppressed until more input arrives (and the follow-up batch boundary could recommission the identical snapshot indefinitely). | Fixed forward — snapshot binding (004) and batch-boundary recovery commissioning (005) merged and integration-tested; not applied live. The suites pin the separate eligibility guarantee too: after a permitted recovery succeeds on the older three-input batch, the fourth input must become eligible **without another human message** — preventing repeated commissioning and eventually processing preserved input are distinct guarantees. |
-| F2 | Release controls not operationally complete: `gas-production` has no protection rules or deployment-branch policy; no tag-targeted ruleset. Green CI does not establish the independent release approval #71 describes. | Open — rechecked through GitHub API 2026-10-26: empty protection rules, null deployment-branch policy; returned rulesets contain only the branch-targeted Copilot review rule. GAS release scope. |
+| F2 | Release controls not operationally complete: no deployment-ref policy, protected release tags, or environment-scoped exact-release tuple. Owner approval is the bootstrap policy; commissioned in-scope releases use Celestan's standing mandate, not a fictitious second human reviewer. | Open — rechecked through GitHub API 2026-10-28: empty protection rules, null deployment-branch policy; only the branch-targeted Copilot review ruleset; no release tags or repository/environment `GAS_APPROVED_RELEASE`. See GAS-DEPLOYMENT.md for the revised authority policy. GAS release scope. |
 | F3 | A9 overlapping-acquisition race test used independently sampled claim clocks, allowing a different losing-claim refusal and missing its pinned regex. | Fixed on main in #86 at `164fbda`: deterministic shared-clock claim, preserving the single-winner invariant. This is distinct from the later legacy scheduler-test failure reported during cleanup verification. |
 | F4 | GAS SQL-worker stale-response cascade and original wrong-marker (`blocked` vs `uncertain`) failure. | Fixed on `main` in #117 at `b51698b` (head `9329470`). The deterministic regression queues a delayed blocked RPC response ahead of the wrong-marker reconciliation tick and proves the tick returns `uncertain` without a second send. Negative control at exact WSL commit `f30b9c8` removed client-side sequence matching and reproduced the original `blocked` vs `uncertain` failure; restoring the guard passed integration 61/61, worker protocol 2/2, and failure watermark 8/8 with zero failures/skips. Post-merge CI `40695197513` passed `core` and `gas-data-api-role-handoff`. Test/fixture hardening only; it does not qualify deployment, activation, or live state. The integration regression is the decisive check; the synthetic protocol test is supplementary. |
 | R1 | Node reconciliation checks identity/replay but not independent decision authorization or no-effect evidence. | Open — Node-path operating trust-boundary decision; verify authority or explicitly restrict the trusted operator capability if the Node path is retained. Not a GAS launch gate. |

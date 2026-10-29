@@ -2,8 +2,9 @@
 
 This is the selected vNext execution path. It is a disabled-by-default vertical
 slice. Source-only deployment and the explicitly authorized fresh Neon owner
-bootstrap are recorded below; **the email runtime remains disabled; its registered
-grant is active for owner qualification**. PR #68's Node email pilot remains a
+bootstrap are recorded below. On 2026-10-28 the owner found the runtime enabled,
+paused it, and confirmed the disabled flag with a fresh preparation diagnostic;
+**paused is the latest observed state**, not proof it was always disabled. PR #68's Node email pilot remains a
 separate merge gate; do not merge it to activate this path.
 Its Gmail MIME/provenance and deterministic send identity ideas are recycled here,
 not its Node worker, HTTP webapp bridge, migrations 010/011, or property fences.
@@ -25,10 +26,16 @@ the original objective, previous bounded result, and at most three new messages
 as **untrusted user-role data**. The capsule and configured exact model must be
 reviewed before activation. The isolated executor reuses the existing OpenRouter
 chat-completions mechanics without invoking the legacy Sheets telemetry sink.
-No tools are advertised. It can draft, summarize, reason, answer, and ask a precise
-question. It cannot inspect repositories, browse, execute code, edit files, make
-GitHub changes, or deploy anything. A plain-text artifact is returned inline, not
-published as a file. Email attachments/HTML-only messages are not supported.
+The repository-access candidate adds the `repository_read` tool from
+`gas/gas_repository_read.js`: CT repository discovery, branch-to-commit resolution,
+and commit-pinned tree/file reads. It permits at most six sequential reads and
+seven model calls within the existing tick deadline, then requires the same final
+JSON contract. This is local candidate behavior, not deployed V108 behavior.
+See [repository access and commissioning](VNEXT-GAS-REPOSITORY-ACCESS.md) for scope,
+limits, credentials, evidence persistence, and remaining autonomy work.
+It cannot execute code, edit files, make GitHub changes, or deploy through this
+tool. A plain-text artifact is returned inline, not published as a file. Email
+attachments/HTML-only messages are not supported.
 
 The model returns `waiting`, `continue`, or `done`, summary (4,000 characters),
 question (1,000), and optional artifact (3,000). The four canonical JSON string
