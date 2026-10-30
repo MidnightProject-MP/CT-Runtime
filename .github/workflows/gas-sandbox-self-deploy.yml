@@ -1,0 +1,114 @@
+# Isolated GAS qualification target. Uses the same signed deployment capability
+# as production, but binds a distinct environment, tag namespace and GAS identity.
+
+name: GAS sandbox self-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: 'Full reviewed aggregate commit; must equal the dispatched workflow SHA'
+        required: true
+        type: string
+      release_ref:
+        description: 'Reviewed refs/tags/gas-sandbox-release/* tag; workflow must be dispatched on this exact tag'
+        required: true
+        type: string
+      desired_bundle_hash:
+        description: 'Reviewed canonical normalized bundle SHA-256'
+        required: true
+        type: string
+      expected_live_bundle_hash:
+        description: 'Fresh independently inspected sandbox live predecessor SHA-256; required for deployment'
+        required: false
+        default: ''
+        type: string
+      qualify_only:
+        description: 'Run qualification only; do not plan or deploy'
+        required: false
+        default: '0'
+        type: string
+      inspect_only:
+        description: 'Read LIVE and HEAD without mutation; skips authorization and deployment'
+        required: false
+        default: '0'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gas-sandbox-deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22.14.0'
+  CT_GAS_TARGET: 'sandbox'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: gas-sandbox
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate and test deployment contract
+        run: node --test test/gas-deploy-contract.test.mjs test/gas-deploy-state-machine.test.mjs test/gas-deploy-readback.test.mjs test/gas-target-qualification.test.mjs
+
+      - name: Build complete GAS bundle
+        run: |
+          node scripts/build-gas-bundle.mjs gas "$RUNNER_TEMP/gas-bundle.json"
+          echo "GAS_BUNDLE_HASH=$(node -e "const b=require('fs').readFileSync(process.env.RUNNER_TEMP+'/gas-bundle.json','utf8'); const x=JSON.parse(b); const c=require('node:crypto'); const n=[...x.files].sort((a,b)=>a.name.localeCompare(b.name)); console.log(c.createHash('sha256').update(JSON.stringify(n)).digest('hex'))")" >> "$GITHUB_ENV"
+
+      - name: Qualify isolated sandbox identity
+        env:
+          CT_GAS_SCRIPT_ID: ${{ vars.GAS_SANDBOX_SCRIPT_ID }}
+          CT_GAS_DEPLOYMENT_ID: ${{ vars.GAS_SANDBOX_DEPLOYMENT_ID }}
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.GAS_SANDBOX_ADMIN_WEB_APP_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.GAS_SANDBOX_DEPLOY_HMAC_SECRET }}
+        run: node scripts/qualify-gas-target.mjs
+
+      - name: Inspect sandbox LIVE and HEAD without mutation
+        if: ${{ inputs.inspect_only == '1' }}
+        env:
+          CT_GAS_SCRIPT_ID: ${{ vars.GAS_SANDBOX_SCRIPT_ID }}
+          CT_GAS_DEPLOYMENT_ID: ${{ vars.GAS_SANDBOX_DEPLOYMENT_ID }}
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.GAS_SANDBOX_ADMIN_WEB_APP_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.GAS_SANDBOX_DEPLOY_HMAC_SECRET }}
+          GAS_BUNDLE_PATH: ${{ runner.temp }}/gas-bundle.json
+          CT_GAS_INSPECT_ONLY: '1'
+        run: node scripts/deploy-gas.mjs
+
+      - name: Authorize exact reviewed sandbox release
+        if: ${{ inputs.inspect_only != '1' }}
+        env:
+          RELEASE_REF_PREFIX: refs/tags/gas-sandbox-release/
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_REF: ${{ inputs.release_ref }}
+          DESIRED_BUNDLE_HASH: ${{ inputs.desired_bundle_hash }}
+          EXPECTED_LIVE_BUNDLE_HASH: ${{ inputs.expected_live_bundle_hash }}
+          APPROVED_RELEASE: ${{ vars.GAS_SANDBOX_APPROVED_RELEASE }}
+        run: |
+          node scripts/authorize-gas-release.mjs
+          echo "CT_GAS_EXPECTED_LIVE_BUNDLE_HASH=$EXPECTED_LIVE_BUNDLE_HASH" >> "$GITHUB_ENV"
+
+      - name: Submit signed sandbox deployment and verify readback
+        if: ${{ inputs.inspect_only != '1' }}
+        env:
+          CT_GAS_SCRIPT_ID: ${{ vars.GAS_SANDBOX_SCRIPT_ID }}
+          CT_GAS_DEPLOYMENT_ID: ${{ vars.GAS_SANDBOX_DEPLOYMENT_ID }}
+          CT_GAS_ADMIN_WEB_APP_URL: ${{ secrets.GAS_SANDBOX_ADMIN_WEB_APP_URL }}
+          CT_GAS_DEPLOY_HMAC_SECRET: ${{ secrets.GAS_SANDBOX_DEPLOY_HMAC_SECRET }}
+          GAS_BUNDLE_PATH: ${{ runner.temp }}/gas-bundle.json
+          CT_GAS_QUALIFY_ONLY: ${{ inputs.qualify_only }}
+        run: node scripts/deploy-gas.mjs

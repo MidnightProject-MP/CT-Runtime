@@ -1,6 +1,8 @@
 # GAS repository access — first audit capability
 
-Status: local implementation candidate; not deployed or live-qualified.
+Status: repository access is merged on `main`; the isolated qualification route
+and its database-backed evidence are a local candidate, not deployed or
+live-qualified.
 
 ## Scope and inventory
 
@@ -107,11 +109,14 @@ The unmodified `49c1c8f` source builds a different 25-file artifact:
 
 `1839067c009d4bc2ffc47a1b9783051095b8b496be5bbe5c929500708b5a5467`
 
-Neither hash identifies this repository-access candidate. Its new artifact must
-be built and qualified separately. Source readback does not establish database
-migration state. Owner diagnostics confirmed a pause, matching preparation
-configuration, Gmail profile/label, Neon health, and one installed tick trigger.
-They did not qualify the current candidate or prove historical send activity.
+Neither hash identifies this repository-access candidate. `main` later advanced
+to `d5758c5` through #120, which merged repository access, but production was not
+redeployed; it remains paused on V108. The isolated qualification branch adds a
+separate sandbox target and artifact that must be built and qualified separately.
+Source readback does not establish database migration state. Owner diagnostics
+confirmed a pause, matching preparation configuration, Gmail profile/label, Neon
+health, and one installed tick trigger. They did not qualify the current candidate
+or prove historical send activity.
 
 ## Local verification — 2026-10-28
 
@@ -131,3 +136,33 @@ validation, time/tool bounds, and credential redaction (including JSON escapes).
 The local 26-file candidate bundle hashes to
 `88e695eba90c8ea4371ab3c2e3d4afab33a9045811c678f4792d775f3acd6908`.
 This is a working-tree artifact, not a committed or approved release tuple.
+
+## Database-backed evidence — 2026-10-29
+
+The isolated qualification branch `feat/gas-isolated-qualification` (based on
+`d5758c5`) extends the DB fixture to load `gas_repository_read.js` before the
+email runner and to serve a mocked GitHub API. The same GAS email integration
+suite now proves two additional behaviors through real SQL state:
+
+- “repository evidence survives a real checkpoint and cold continuation”:
+  a pinned file read is carried into the stored result, and a new cold execution
+  claims the continuation and receives the prior evidence reference.
+- “repository failures and malformed tool calls are honest across durable
+  outcomes”: missing credential, GitHub 403, an unsupported write tool, and
+  six-read budget exhaustion fail without inventing evidence or a checkpoint.
+
+Windows Node `v24.19.0` full `npm test` result: **634 tests, 574 pass, 58 skipped,
+2 failed**. Both failures are pre-existing `vnext-command-executor` tests that
+require Linux process groups; they are not repository-access failures. The GAS
+tests above pass.
+
+The exact code commit `0277f24` was fetched into the WSL workspace and tested
+with Ubuntu 24.04, Node `22.14.0`, and PostgreSQL `16.15`. The native GAS email
+suite passed **63/63, 0 failed, 0 skipped**; the native-only concurrency tests
+executed. The deployment/release/target/bundle/load-order contract tests passed
+**37/37**. The canonical Linux bundle from that commit is 26 files with hash
+`88e695eba90c8ea4371ab3c2e3d4afab33a9045811c678f4792d775f3acd6908`. The
+qualification workflow, target binding, and deployment-client changes do not
+alter the GAS bundle, so this hash equals the repository-access bundle already
+recorded above. None of this is live GitHub, OpenRouter, GAS, or Google-JWT
+qualification.

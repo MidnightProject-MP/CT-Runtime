@@ -93,12 +93,50 @@ Break-glass work must preserve the same final invariant: `HEAD == LIVE == desire
 The deployment control plane is intentionally small. The primary surfaces are:
 
 - `.github/workflows/gas-self-deploy.yml`
+- `.github/workflows/gas-sandbox-self-deploy.yml`
 - `scripts/deploy-gas.mjs`
+- `scripts/qualify-gas-target.mjs`
+- `lib/gas-targets.mjs`
 - `gas/gas_deploy.js`
-- deployment contract/state/readback tests
+- deployment contract/state/readback/target tests
 
 Before modifying deployment control-plane code, read this document and run the deployment contract tests. Changes must preserve the invariants above, especially single-mutation behavior, recovery/idempotency, bounded readback, GAS-native identity, and production concurrency serialization.
 
+
+## Isolated sandbox qualification target
+
+Sandbox qualification uses the same signed deployment capability and exact-artifact
+readback as production, but must never reuse production identity or credentials.
+`.github/workflows/gas-sandbox-self-deploy.yml` is manually dispatched from a
+`refs/tags/gas-sandbox-release/*` tag and uses the `gas-sandbox` environment,
+`gas-sandbox-deploy` concurrency, and the `gas-sandbox-release/*` authorization
+prefix. It binds:
+
+- `GAS_SANDBOX_SCRIPT_ID` (environment variable)
+- `GAS_SANDBOX_DEPLOYMENT_ID` (environment variable)
+- `GAS_SANDBOX_ADMIN_WEB_APP_URL` (environment secret)
+- `GAS_SANDBOX_DEPLOY_HMAC_SECRET` (environment secret)
+- `GAS_SANDBOX_APPROVED_RELEASE` (environment variable, exact tuple)
+
+`scripts/qualify-gas-target.mjs` runs before authorization and deployment. It
+requires the sandbox target marker, a manual dispatch on the sandbox tag
+namespace, a full commit, the explicit deployment ID, an endpoint whose embedded
+deployment ID matches, the HMAC secret presence, and a target that is not the
+production Script ID or production deployment ID. `scripts/deploy-gas.mjs` also
+checks the explicit deployment ID before signing any request. The workflow does
+not receive `CLASPRC_JSON` or production environment secrets.
+
+Dispatch the sandbox workflow with `inspect_only=1` to read the current LIVE
+version, LIVE bundle hash, HEAD bundle hash and version capacity without
+authorization or deployment. This signs a read-only `self-deploy-plan` request
+and reserves a nonce, but performs no HEAD or deployment mutation. Use the
+observed predecessor for the later exact release tuple.
+
+Bootstrap authorization still applies: the owner approves the exact sandbox
+release tuple. Do not provision or dispatch this target until the owner supplies
+the isolated GAS, database, mailbox and credential identities. Source deployment
+alone does not configure Script Properties, triggers, Gmail consent, or database
+migrations.
 
 ## GAS entry-point qualification boundary
 

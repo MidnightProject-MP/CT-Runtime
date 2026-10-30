@@ -13,10 +13,13 @@ if (computed !== process.env.GAS_BUNDLE_HASH) throw new Error('bundle hash misma
 const scriptId = process.env.CT_GAS_SCRIPT_ID;
 const endpoint = process.env.CT_GAS_ADMIN_WEB_APP_URL;
 const deploymentId = deploymentIdFromWebAppUrl(endpoint);
+const expectedDeploymentId = process.env.CT_GAS_DEPLOYMENT_ID;
+if (expectedDeploymentId && expectedDeploymentId !== deploymentId) throw new Error('deployment id mismatch');
 const secret = process.env.CT_GAS_DEPLOY_HMAC_SECRET;
 const commit = process.env.GITHUB_SHA;
+const inspectOnly = process.env.CT_GAS_INSPECT_ONLY === '1';
 const expectedLiveBundleHash = process.env.CT_GAS_EXPECTED_LIVE_BUNDLE_HASH;
-if (!/^[0-9a-f]{64}$/.test(expectedLiveBundleHash || '')) throw new Error('Explicit reviewed live predecessor required');
+if (!inspectOnly && !/^[0-9a-f]{64}$/.test(expectedLiveBundleHash || '')) throw new Error('Explicit reviewed live predecessor required');
 for (const [name, value] of Object.entries({ scriptId, endpoint, secret, commit })) if (!value) throw new Error(`${name} is required`);
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('GITHUB_SHA must be a full commit SHA');
 const requestId = `ct-runtime-${commit}`;
@@ -53,6 +56,21 @@ async function post(body) {
 const base = { deployment_request_id: requestId, script_id: scriptId, deployment_id: deploymentId, commit_sha: commit, github_bundle_hash: computed };
 const qualification = await post({ ...base, operation: 'self-deploy-qualify', files });
 console.log(JSON.stringify({ qualification }, null, 2));
+if (inspectOnly) {
+  const observed = await post({ ...base, operation: 'self-deploy-plan' });
+  console.log(JSON.stringify({
+    status: 'inspected',
+    requestId,
+    deploymentId,
+    commit,
+    qualification,
+    liveVersion: observed.liveVersion,
+    liveBundleHash: observed.liveBundleHash,
+    headBundleHash: observed.headBundleHash,
+    versionCapacity: observed.versionCapacity
+  }, null, 2));
+  process.exit(0);
+}
 if (process.env.CT_GAS_QUALIFY_ONLY === '1') process.exit(0);
 if (qualification.status !== 'qualified') throw new Error('self-deploy qualification failed');
 const expectedGasBundleHash = qualification.desiredBundleHash;

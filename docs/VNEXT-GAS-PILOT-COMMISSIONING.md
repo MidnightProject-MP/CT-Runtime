@@ -24,6 +24,14 @@ separate explicit approval.
 This commissioning document is added in a docs-only commit after the verified
 head. It changes no code, test, migration, or deployment input.
 
+The current isolated-qualification code candidate is branch
+`feat/gas-isolated-qualification` at tested commit `0277f24`, based on main
+`d5758c5`. Its canonical Linux bundle is 26 files with hash
+`88e695eba90c8ea4371ab3c2e3d4afab33a9045811c678f4792d775f3acd6908`. Native GAS
+email tests passed 63/63 with zero skips, and deployment/release contract tests
+passed 37/37 in WSL Ubuntu 24.04 / Node 22.14.0 / PostgreSQL 16.15. This is local
+evidence only; no sandbox target has been provisioned or dispatched.
+
 The release bundle identity is the canonical Linux build above. The builder
 normalizes CRLF to LF, and `test/gas-bundle-builder.test.mjs` proves LF and CRLF
 sources yield the same hash. A Windows checkout is not a release identity.
@@ -224,15 +232,19 @@ This order is a proposal. Do not skip a gate because an earlier gate passed.
    secret; it is not a Script Property and must not be set. Keep the runtime
    disabled.
 
-8. **Deploy reviewed source through the canonical workflow only.** The manual
-   `gas-self-deploy.yml` workflow requires an exact reviewed
-   `refs/tags/gas-release/*` tag, a full release commit equal to the dispatched
-   workflow SHA, a reviewed desired bundle hash, a freshly and independently
-   inspected live predecessor hash, and the `GAS_APPROVED_RELEASE` variable. Run
-   `qualify_only=1` first. Only after reviewing that result, dispatch the
-   deployment with `qualify_only=0` and both hashes. Verify HEAD equals LIVE and
-   the deployed version equals the desired hash. Never perform a local
-   `clasp push`; legacy clasp workflows fail closed.
+8. **Deploy reviewed source through the canonical workflow only.** For isolated
+   qualification, use the manual `gas-sandbox-self-deploy.yml` workflow with the
+   `gas-sandbox` environment, a `refs/tags/gas-sandbox-release/*` tag, explicit
+   sandbox Script/deployment identities, and `GAS_SANDBOX_APPROVED_RELEASE`.
+   Run `inspect_only=1` first to read the sandbox LIVE/HEAD identities without
+   mutation, then run `qualify_only=1`; only after reviewing both results dispatch
+   the deployment with both exact bundle hashes. Production uses the manual
+   `gas-self-deploy.yml` workflow with an exact reviewed `refs/tags/gas-release/*`
+   tag, a full release commit equal to the dispatched workflow SHA, a reviewed
+   desired bundle hash, a freshly and independently inspected live predecessor
+   hash, and the `GAS_APPROVED_RELEASE` variable. Verify HEAD equals LIVE and the
+   deployed version equals the desired hash. Never perform a local `clasp push`;
+   legacy clasp workflows fail closed.
 
    The verified-head bundle hash above is evidence for this candidate, not a
    standing deployment authorization. Rebuild and re-review the bundle from the
@@ -355,6 +367,11 @@ Blockers:
   authority policy in [GAS-DEPLOYMENT.md](GAS-DEPLOYMENT.md). There is no separate
   independent human reviewer requirement. Repository audit access is a local
   [implementation candidate](VNEXT-GAS-REPOSITORY-ACCESS.md), not live capability.
+- The isolated qualification route has no provisioned `gas-sandbox` environment,
+  sandbox Script/deployment identities, test mailbox, isolated database, GitHub
+  read credential, or selected tool-call model. The sandbox workflow and target
+  binding are code candidates; `inspect_only=1` has not been run against a real
+  sandbox target.
 - The evidence in this package is local and bounded. The #101 merge and any green
   CI do not constitute live qualification.
 

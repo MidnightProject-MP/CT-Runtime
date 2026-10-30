@@ -4,9 +4,10 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { bundleHash, normalizeFiles, deploymentIdFromWebAppUrl } from '../lib/gas-deploy-contract.mjs';
+import { PRODUCTION_SCRIPT_ID, PRODUCTION_DEPLOYMENT_ID } from '../lib/gas-targets.mjs';
 
-export const SCRIPT_ID='1Uzv-r4UW-y9XLuO-f3QEvrwzInGu1JarmqecVtwarJor6Z5qpmUD2dri';
-export const DEPLOYMENT_ID='AKfycbwyFPC55MvhCfPUmBlfm7eRp-uHr5tpZ2H9suobETGXod_hLLVDQtC9DelC7ee_WSNawg';
+export const SCRIPT_ID=PRODUCTION_SCRIPT_ID;
+export const DEPLOYMENT_ID=PRODUCTION_DEPLOYMENT_ID;
 export function binding(env,readOnly=false) {
   const deployment=deploymentIdFromWebAppUrl(env.CT_GAS_ADMIN_WEB_APP_URL);
   if(env.CT_GAS_SCRIPT_ID!==SCRIPT_ID||deployment!==DEPLOYMENT_ID||env.DEPLOYMENT_ID!==deployment)throw new Error('source-only identity mismatch');
