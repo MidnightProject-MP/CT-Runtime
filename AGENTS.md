@@ -10,6 +10,8 @@ Keep runtime state outside the repository. Use explicit `--store`, `--project`, 
 
 Canonical GAS release writes happen only through manually dispatched, hash-pinned GitHub Actions (`gas-self-deploy.yml`). Main pushes do not deploy. Legacy clasp push/deploy workflows are retired and fail closed. No supported workflow or documented operator path performs a local `clasp push`. Before repeating an external effect, inspect reality first via `diagnoseFeedbackInbox` (Script ID plus configured spreadsheet property) and only then configure or set up on observed mismatch.
 
+The isolated sandbox uses `gas-sandbox-self-deploy.yml`. Its initial empty-project bootstrap is the narrowly scoped `gas-sandbox-bootstrap.yml`: exact tag/commit/hash/owner approval, a durable one-use request reservation, Google OAuth API installation only into the newly created non-production project, and readback. It cannot update an existing project or retry an uncertain write. HMAC self-deployment takes over after owner consent and sandbox Script Property setup. No local source upload is permitted.
+
 Before every GitHub write verify `gh api user` is `MidnightProject-MP`. Do not change git identity/configuration, force-push, or amend user commits.
 
 ## Reviewer freshness

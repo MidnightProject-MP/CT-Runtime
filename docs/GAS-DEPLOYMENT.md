@@ -94,6 +94,8 @@ The deployment control plane is intentionally small. The primary surfaces are:
 
 - `.github/workflows/gas-self-deploy.yml`
 - `.github/workflows/gas-sandbox-self-deploy.yml`
+- `.github/workflows/gas-sandbox-bootstrap.yml` (initial isolated installation only)
+- `scripts/bootstrap-gas-sandbox.mjs`
 - `scripts/deploy-gas.mjs`
 - `scripts/qualify-gas-target.mjs`
 - `lib/gas-targets.mjs`
@@ -104,6 +106,111 @@ Before modifying deployment control-plane code, read this document and run the d
 
 
 ## Isolated sandbox qualification target
+
+### Initial handler bootstrap
+
+The signed self-deployment endpoint cannot install itself into an empty project.
+Read-only inventory found only the known production script in the available local
+Google login, and only `gas-production` in GitHub. This is evidence about those
+credentials, not a claim that no sandbox exists under another account.
+
+On 2026-10-30, following owner approval to reuse the Google owner account,
+`gas-sandbox` was created. `GAS_SANDBOX_OWNER_EMAIL` was read back as
+`midnight.project.mp@gmail.com`, matching `clasp show-authorized-user`.
+The matching existing OAuth credential was transferred directly into the encrypted
+environment secret `GAS_SANDBOX_GOOGLE_OAUTH_JSON`, without displaying its value.
+Only the secret's presence was read back. This does not establish that OAuth
+refresh or API scope checks have passed in Actions. The environment has no release
+protections configured yet. No sandbox project was created and no bootstrap run
+was dispatched. This authorization covers sandbox ownership and non-email
+qualification; it does not authorize testing against the owner's real mailbox.
+
+The initial installation candidate is `.github/workflows/gas-sandbox-bootstrap.yml`,
+using the same `gas-sandbox` environment and `gas-sandbox-deploy` concurrency group.
+It runs from an exact reviewed `gas-sandbox-release/*` tag. Source is installed via
+the Google Apps Script REST API, never local upload or a legacy clasp workflow.
+The runtime bundle is unchanged by this bootstrap implementation.
+
+Prerequisites in the `gas-sandbox` GitHub environment:
+
+- Variable `GAS_SANDBOX_OWNER_EMAIL`: lowercase email of the intended sandbox
+  Google owner. Drive's authenticated user readback must match before any write.
+- Secret `GAS_SANDBOX_GOOGLE_OAUTH_JSON`: owner-authorized Google user OAuth
+  refresh credentials in the existing clasp JSON shape (`tokens.default` and
+  optionally `oauth2ClientSettings`). This is a credential format, not a clasp
+  upload route. Authorize the intended sandbox account; do not silently copy
+  production credentials. Required permissions cover Drive project discovery,
+  Apps Script project creation/content, and deployments. Apps Script API access
+  must be enabled for that account/client.
+- Variable `GAS_SANDBOX_BOOTSTRAP_APPROVED`, for `mode=create` only:
+  `<release_ref>:<commit>:<bundle_hash>:<request_id>:<owner_email>`.
+
+Begin with `mode=inspect`. It reads the authenticated Google identity and searches
+for `CT-Runtime GAS Sandbox`; if present, it reports HEAD and version/deployment
+hashes. It does not reserve a request or write Google project state. Multiple
+matching projects or an incomplete inventory stop the operation. Renamed projects
+are not discoverable by this title query; retain the recorded Script ID and use
+targeted readback before considering another bootstrap.
+
+After exact owner approval, `mode=create`:
+
+1. Rechecks owner, tag, commit, built hash, approval, first run attempt, and absence
+   of the named sandbox.
+2. Creates `refs/tags/gas-sandbox-bootstrap-used/<request_id>` at the reviewed
+   commit as a durable one-use reservation. Existing, lost, or ambiguous reservation
+   outcomes prevent all Google writes. Protect these reservation tags against
+   deletion/update; never delete one to rerun a bootstrap.
+3. Creates a new standalone project, refuses any production identity, and verifies
+   that it contains only its base manifest or no files before source installation.
+4. Uploads the exact bundle once, reads HEAD, creates one version, reads that
+   version, creates one web deployment, and reads the deployment and HEAD again.
+5. Reports only validated project/deployment identifiers, version, URL, source
+   hashes and stages. No OAuth or HMAC value is written into source or evidence.
+
+Every write is attempted once. The workflow refuses `mode=create` on a rerun.
+If an outcome is uncertain, preserve the reservation and use `mode=inspect` in a
+new explicitly dispatched run. Do not change the request ID merely to bypass the
+reservation. Partial bootstrap recovery needs a separately reviewed action against
+the observed Script ID; this implementation deliberately does not overwrite an
+existing project or automatically delete one.
+
+### Owner handoff after source installation
+
+`installed-owner-setup-required` means source readback passed, not that HMAC or
+the email loop is qualified. Google project/content APIs do not set Script
+Properties or grant the user's execution consent. In the **new sandbox only**:
+
+1. Record the reported Script ID and deployment ID in `GAS_SANDBOX_SCRIPT_ID`
+   and `GAS_SANDBOX_DEPLOYMENT_ID`; store the reported URL in the environment
+   secret `GAS_SANDBOX_ADMIN_WEB_APP_URL`.
+2. Generate a separate HMAC secret through the owner's secure secret tooling.
+   Set it directly as sandbox Script Property `CT_GAS_DEPLOY_HMAC_SECRET` and
+   environment secret `GAS_SANDBOX_DEPLOY_HMAC_SECRET`; never paste it into source,
+   logs, a workflow input, or a chat. Set Script Property `CT_GAS_DEPLOYMENT_ID`
+   to the reported deployment ID, and `CT_VNEXT_EMAIL_ENABLED=false`.
+3. Complete execution consent using the sandbox owner account. The existing
+   `inventoryVnextEmailProperties` function is a read-only owner entry point for
+   this step; it lists property names, not values. Do not run the email tick or
+   activation functions. Verify the new project's trigger list is empty.
+4. Use the sandbox self-deploy workflow's `inspect_only=1` to verify the real
+   signed handler. This reserves an HMAC nonce but does not change source.
+
+No database, test mailbox queue, model credential, or GitHub read credential is
+provisioned by source bootstrap. Those remain the next isolated runtime steps.
+Remove the one-time OAuth secret from the environment once bootstrap/recovery is
+complete; normal releases use the sandbox HMAC capability. Keep metadata and the
+one-use reservation for continuity.
+
+Local bootstrap verification on `feat/gas-sandbox-bootstrap`, a dirty worktree
+based on PR #121 head `d6b7fcd`, passed **45 tests, 0 failures, 0 skips** on
+Windows Node `24.19.0`: `gas-sandbox-bootstrap`, `gas-target-qualification`,
+`gas-release-gate`, `gas-deploy-contract`, `gas-deploy-state-machine`, and
+`gas-deploy-readback`. The new HTTP fixtures cover wrong owner, production
+identity, nonempty target, consumed reservation, lost responses at each write,
+partial inventory, and mismatched final readback. These are local contract tests,
+not evidence that a sandbox has been created or that real Google OAuth works.
+
+### Subsequent sandbox releases
 
 Sandbox qualification uses the same signed deployment capability and exact-artifact
 readback as production, but must never reuse production identity or credentials.
@@ -169,7 +276,8 @@ production Script Properties.
 
 Merging control-plane A or runtime B does **not** deploy anything. Main push
 deployment is removed. Only manual `gas-self-deploy.yml` is a supported release
-writer; legacy clasp deploy/push are explicitly disabled, including fallback
+writer for production; the isolated sandbox workflows above are the scoped
+bootstrap/release paths. Legacy clasp deploy/push are explicitly disabled, including fallback
 source-only writes. Do not re-enable them to work around an HTTP 403.
 
 Create a `refs/tags/gas-release/*` tag pointing to the full reviewed aggregate
