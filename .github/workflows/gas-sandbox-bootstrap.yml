@@ -1,0 +1,66 @@
+name: GAS sandbox bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Inspect existing sandbox projects, or create once with exact approval'
+        type: choice
+        options: [inspect, create]
+        default: inspect
+        required: true
+      release_commit:
+        description: 'Full reviewed commit; must equal workflow SHA'
+        type: string
+        required: true
+      release_ref:
+        description: 'Exact refs/tags/gas-sandbox-release/* workflow tag'
+        type: string
+        required: true
+      desired_bundle_hash:
+        description: 'Reviewed canonical bundle SHA-256'
+        type: string
+        required: true
+      bootstrap_request_id:
+        description: 'Unique owner-approved ID; never reuse or delete its reservation'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gas-sandbox-deploy
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: gas-sandbox
+    permissions:
+      contents: write # create-only request reservation; no source commits
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - name: Verify bootstrap and deployment contracts
+        run: node --test test/gas-sandbox-bootstrap.test.mjs test/gas-target-qualification.test.mjs test/gas-release-gate.test.mjs test/gas-deploy-contract.test.mjs test/gas-deploy-state-machine.test.mjs test/gas-deploy-readback.test.mjs
+      - name: Build exact artifact
+        run: node scripts/build-gas-bundle.mjs gas "$RUNNER_TEMP/gas-bootstrap-bundle.json"
+      - name: Inspect or bootstrap isolated target once
+        env:
+          BOOTSTRAP_MODE: ${{ inputs.mode }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_REF: ${{ inputs.release_ref }}
+          DESIRED_BUNDLE_HASH: ${{ inputs.desired_bundle_hash }}
+          BOOTSTRAP_REQUEST_ID: ${{ inputs.bootstrap_request_id }}
+          BOOTSTRAP_APPROVED: ${{ vars.GAS_SANDBOX_BOOTSTRAP_APPROVED }}
+          GAS_SANDBOX_OWNER_EMAIL: ${{ vars.GAS_SANDBOX_OWNER_EMAIL }}
+          GAS_SANDBOX_GOOGLE_OAUTH_JSON: ${{ secrets.GAS_SANDBOX_GOOGLE_OAUTH_JSON }}
+          GH_TOKEN: ${{ github.token }}
+          GAS_BUNDLE_PATH: ${{ runner.temp }}/gas-bootstrap-bundle.json
+        run: node scripts/bootstrap-gas-sandbox.mjs
